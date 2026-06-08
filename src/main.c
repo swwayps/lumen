@@ -1,0 +1,53 @@
+/* Lumen spike entrypoint: boot Lua, expose ./lua/ modules, run the injector. */
+#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+/* Statically-linked C modules: declare their openers. LuaSocket's core
+ * (luaopen_socket_core) registers tcp/udp/select + sleep/gettime directly into
+ * the module table, so we expose it as the "socket" module — the injector only
+ * uses socket.tcp() and socket.sleep(), both present in the core table. */
+int luaopen_socket_core(lua_State *L);
+int luaopen_cjson(lua_State *L);
+
+int main(int argc, char **argv) {
+    lua_State *L = luaL_newstate();
+    luaL_openlibs(L);
+
+    /* Preload the C modules so require("socket")/require("cjson") resolve
+     * without any .so files on disk. */
+    luaL_requiref(L, "socket", luaopen_socket_core, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "cjson", luaopen_cjson, 0);
+    lua_pop(L, 1);
+
+    /* Make the bundled lua/ directory importable. For the spike we resolve it
+     * relative to the working dir or an env override. */
+    const char *luadir = getenv("LUMEN_LUA_DIR");
+    if (!luadir) luadir = "lua";
+    char setpath[1024];
+    snprintf(setpath, sizeof(setpath),
+             "package.path = '%s/?.lua;' .. package.path", luadir);
+    if (luaL_dostring(L, setpath) != LUA_OK) {
+        fprintf(stderr, "lumen: failed to set package.path: %s\n",
+                lua_tostring(L, -1));
+        return 1;
+    }
+
+    /* Run the injector. Message overridable via argv[1] for the spike. */
+    const char *msg = (argc > 1) ? argv[1] : "Lumen attached";
+    lua_pushstring(L, msg);
+    lua_setglobal(L, "LUMEN_MESSAGE");
+
+    const char *boot =
+        "local injector = require('injector') "
+        "injector.run({ message = LUMEN_MESSAGE })";
+    if (luaL_dostring(L, boot) != LUA_OK) {
+        fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+        return 1;
+    }
+    lua_close(L);
+    return 0;
+}

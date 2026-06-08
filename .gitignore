@@ -3,3 +3,4 @@
 *.so
 session.json
 *.log
+vendor/_src/

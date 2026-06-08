@@ -1,0 +1,10 @@
+Vendored dependencies (pinned, compiled statically into bin/lumen):
+
+luasocket  3.1.0       https://github.com/lunarmodules/luasocket  (tag v3.1.0)
+  -> vendor/luasocket/  (Linux usocket backend; 13 C files forming socket.core)
+lua-cjson  2.1.0.10    https://github.com/openresty/lua-cjson     (tag 2.1.0.10)
+  -> vendor/lua-cjson/  (lua_cjson.c + strbuf.c + fpconv.c; system strtod/snprintf,
+     so dtoa.c/g_fmt.c are NOT needed)
+
+The raw upstream tarballs/extracted trees live under vendor/_src/ which is
+gitignored; only the curated source files above are committed.
