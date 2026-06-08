@@ -18,6 +18,21 @@ else
 LUA_LIBS   := $(LUA_A) -ldl
 endif
 
+# Static libcurl + OpenSSL from the container's /opt/static (built in the
+# Dockerfile). Falls back to dynamic -lcurl for host builds that lack it
+# (host builds are for unit tests only; the shipped binary is the container one).
+STATIC_PREFIX ?= /opt/static
+CURL_A := $(firstword $(wildcard $(STATIC_PREFIX)/lib/libcurl.a))
+ifeq ($(CURL_A),)
+CURL_CFLAGS := $(shell pkg-config --cflags libcurl 2>/dev/null)
+CURL_LIBS   := $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl)
+else
+SSL_LIBDIR := $(firstword $(wildcard $(STATIC_PREFIX)/lib64) $(STATIC_PREFIX)/lib)
+CURL_CFLAGS := -I$(STATIC_PREFIX)/include
+CURL_LIBS   := $(STATIC_PREFIX)/lib/libcurl.a $(SSL_LIBDIR)/libssl.a \
+               $(SSL_LIBDIR)/libcrypto.a -lpthread
+endif
+
 # Vendored C modules (pinned: LuaSocket 3.1.0, lua-cjson 2.1.0.10).
 #   vendor/luasocket/*.c -> socket.core (Linux usocket backend)
 #   vendor/lua-cjson/*.c -> cjson (system strtod/snprintf fpconv; no dtoa/g_fmt)
@@ -32,14 +47,15 @@ CJSON_SRC  := vendor/lua-cjson/lua_cjson.c vendor/lua-cjson/strbuf.c \
               vendor/lua-cjson/fpconv.c
 LFS_SRC    := vendor/luafilesystem/lfs.c
 
-SRC        := src/main.c $(SOCKET_SRC) $(CJSON_SRC) $(LFS_SRC)
+SRC        := src/main.c src/http_binding.c $(SOCKET_SRC) $(CJSON_SRC) $(LFS_SRC)
 
 CFLAGS     := -O2 -DLUASOCKET_DEBUG -DNDEBUG \
-              -Ivendor/luasocket -Ivendor/lua-cjson -Ivendor/luafilesystem $(LUA_CFLAGS)
+              -Ivendor/luasocket -Ivendor/lua-cjson -Ivendor/luafilesystem \
+              $(CURL_CFLAGS) $(LUA_CFLAGS)
 
 bin/lumen: $(SRC)
 	mkdir -p bin
-	$(CC) $(CFLAGS) $(SRC) -o bin/lumen $(LUA_LIBS) -lm
+	$(CC) $(CFLAGS) $(SRC) -o bin/lumen $(LUA_LIBS) $(CURL_LIBS) -lm
 	@echo "built bin/lumen"
 
 clean:

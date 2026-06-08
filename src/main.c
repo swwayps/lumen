@@ -13,6 +13,7 @@
 int luaopen_socket_core(lua_State *L);
 int luaopen_cjson(lua_State *L);
 int luaopen_lfs(lua_State *L);
+int luaopen_lumen_http(lua_State *L);
 
 int main(int argc, char **argv) {
     lua_State *L = luaL_newstate();
@@ -25,6 +26,8 @@ int main(int argc, char **argv) {
     luaL_requiref(L, "cjson", luaopen_cjson, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lumen_http", luaopen_lumen_http, 0);
     lua_pop(L, 1);
 
     /* Make the bundled lua/ directory importable. For the spike we resolve it
@@ -44,6 +47,21 @@ int main(int argc, char **argv) {
      * binary's C modules (lfs/cjson/socket) available. */
     if (argc > 2 && strcmp(argv[1], "--test") == 0) {
         if (luaL_dofile(L, argv[2]) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
+    }
+
+    /* HTTP smoke test: `lumen --http-test <url>` does http.get and prints status+body. */
+    if (argc > 2 && strcmp(argv[1], "--http-test") == 0) {
+        lua_pushstring(L, argv[2]);
+        lua_setglobal(L, "LUMEN_HTTP_URL");
+        const char *t =
+            "local http=require('http'); local r,e=http.get(LUMEN_HTTP_URL); "
+            "if r then print(r.status, r.body) else print('ERR', e) end";
+        if (luaL_dostring(L, t) != LUA_OK) {
             fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
             return 1;
         }
