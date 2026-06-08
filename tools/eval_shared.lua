@@ -8,6 +8,7 @@ local httpresp = require("httpresp")
 
 local HOST, PORT = "127.0.0.1", 8080
 local EXPR = os.getenv("LUMEN_EVAL_EXPR") or "1+1"
+local WANT = os.getenv("LUMEN_EVAL_TARGET") or "SharedJSContext"
 
 local function http_get(path)
   local c = socket.tcp(); c:settimeout(5)
@@ -37,7 +38,12 @@ local function http_get(path)
 end
 
 local body = assert(http_get("/json"), "no /json")
-local target = assert(cdp.find_shared_js_context(json.decode(body)), "no SharedJSContext")
+local targets = json.decode(body)
+local target
+for _, t in ipairs(targets) do
+  if t.title == WANT and t.webSocketDebuggerUrl then target = t; break end
+end
+assert(target, "target not found: " .. WANT)
 local path = target.webSocketDebuggerUrl:match("^ws://[^/]+(/.*)$")
 local c = socket.tcp(); c:settimeout(5)
 assert(c:connect(HOST, PORT))
