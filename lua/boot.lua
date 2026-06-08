@@ -62,8 +62,8 @@ local function read_asset(rel)
   return utils.read_file(plugin_dir .. "/public/" .. base)
 end
 
--- build_assets(port, token) -> { polyfill=, css={...}, js={...} }
-local function build_assets(port, token)
+-- build_assets() -> { polyfill=, css={...}, js={...} }  (binding transport; no port/token)
+local function build_assets()
   local css, js = {}, {}
   for _, p in ipairs(millennium.queued_css()) do
     local c = read_asset(p); if c then css[#css + 1] = c end
@@ -71,7 +71,7 @@ local function build_assets(port, token)
   for _, p in ipairs(millennium.queued_js()) do
     local j = read_asset(p); if j then js[#js + 1] = j end
   end
-  return { polyfill = polyfill.build(port, token), css = css, js = js }
+  return { polyfill = polyfill.build(), css = css, js = js }
 end
 
 local loop = require("loop")
@@ -79,4 +79,8 @@ loop.run({
   session_path = state_dir .. "/session.json",
   registry = registry,
   build_assets = build_assets,
+  -- LuaTools lives in the store web view; match it by URL (its title changes
+  -- per store page). SharedJSContext kept for logic/router.
+  targets = { "SharedJSContext" },
+  target_urls = { "store.steampowered.com" },
 })

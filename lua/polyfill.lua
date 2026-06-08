@@ -1,26 +1,50 @@
 -- Builds the Millennium.callServerMethod polyfill injected ahead of luatools.js.
--- It maps callServerMethod(plugin, fn, args) -> fetch to the loopback RPC host,
--- resolving to the JSON string the frontend expects (it does its own JSON.parse).
+-- Transport: CDP Runtime.addBinding. The page calls window.__lumenSend(jsonReq);
+-- the Lumen injector (the CDP client) receives Runtime.bindingCalled, runs the
+-- backend fn IN-PROCESS, and calls window.__lumenResolve(id, resultJson) back.
+-- This is immune to the page's CSP (the store page's connect-src forbids a
+-- loopback fetch), because CDP is not subject to page CSP.
 local polyfill = {}
 
--- build(port, token) -> JS source string
--- NOTE: always (re)assigns callServerMethod so a restarted Lumen (new port/token)
--- refreshes the binding. SharedJSContext persists across Lumen restarts, so a
--- guard like `if (!callServerMethod)` would pin a stale port. We instead keep the
--- LATEST port/token on window and have the function read them at call time.
-function polyfill.build(port, token)
+-- The binding name CDP exposes on window (must match injector's addBinding).
+polyfill.BINDING = "__lumenSend"
+
+-- build() -> JS source string. No port/token needed (binding transport).
+function polyfill.build()
   return ([[
 (function () {
-  window.Millennium = window.Millennium || {};
-  window.__lumenRpc = { port: %d, token: "%s" };
-  window.Millennium.callServerMethod = function (plugin, fn, args) {
-    var rpc = window.__lumenRpc;
-    return fetch("http://127.0.0.1:" + rpc.port + "/rpc", {
-      method: "POST",
-      body: JSON.stringify({ token: rpc.token, fn: fn, args: args || {} })
-    }).then(function (r) { return r.text(); });
+  window.__lumenPending = window.__lumenPending || {};
+  window.__lumenSeq = window.__lumenSeq || 0;
+  // Called by the injector (via Runtime.evaluate) to settle a pending promise.
+  window.__lumenResolve = function (id, result) {
+    var cb = window.__lumenPending[id];
+    if (cb) { delete window.__lumenPending[id]; cb(result); }
   };
-})()]]):format(port, token)
+  window.Millennium = window.Millennium || {};
+  window.Millennium.callServerMethod = function (plugin, fn, args) {
+    return new Promise(function (resolve, reject) {
+      if (typeof window.%s !== "function") {
+        reject(new Error("lumen binding unavailable"));
+        return;
+      }
+      var id = String(++window.__lumenSeq);
+      window.__lumenPending[id] = resolve;
+      try {
+        window.%s(JSON.stringify({ id: id, fn: fn, args: args || {} }));
+      } catch (e) {
+        delete window.__lumenPending[id];
+        reject(e);
+      }
+    });
+  };
+})()]]):format(polyfill.BINDING, polyfill.BINDING)
+end
+
+-- resolve_js(id, result_json_string) -> JS that settles the page-side promise.
+-- Both args are encoded as JS string literals via the json shim by the caller.
+function polyfill.resolve_js(id_literal, result_literal)
+  return "window.__lumenResolve && window.__lumenResolve(" ..
+         id_literal .. "," .. result_literal .. ")"
 end
 
 return polyfill

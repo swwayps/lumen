@@ -1,17 +1,23 @@
--- Impure injector loop. Connects to Steam's CEF endpoint, attaches to
--- SharedJSContext, injects the spike toast, and re-injects on context
--- recreation. Depends on LuaSocket (bundled in the shipped binary).
+-- Multi-target CDP injector. For each wanted CEF target (the store web view
+-- where LuaTools lives, plus SharedJSContext for logic), it: handshakes the CDP
+-- websocket, enables Runtime/Page, adds the __lumenSend binding, and injects the
+-- polyfill + frontend assets. It dispatches Runtime.bindingCalled events against
+-- the backend registry IN-PROCESS and resolves the page promise via
+-- Runtime.evaluate. Re-injects idempotently on context recreation; re-attaches
+-- on socket close. Cooperative (fds()/tick()) so it shares the loop with others.
 local socket = require("socket")
 local json = require("json")
 local wsframe = require("wsframe")
 local cdp = require("cdp")
 local inject = require("inject")
 local httpresp = require("httpresp")
+local polyfill = require("polyfill")
 
 local injector = {}
 
 local CEF_HOST = "127.0.0.1"
 local CEF_PORT = 8080
+local BINDING = polyfill.BINDING
 
 local function log(msg)
   io.stderr:write(os.date("!%H:%M:%S ") .. "[lumen] " .. msg .. "\n")
@@ -21,18 +27,13 @@ end
 io.stderr:setvbuf("no")
 io.stdout:setvbuf("no")
 
--- Blocking HTTP GET over a fresh TCP socket. CEF uses keep-alive (no
--- "Connection: close"), so we must read headers, parse Content-Length, and
--- read exactly that many body bytes rather than read-until-close (which hangs).
+-- ── HTTP GET against the CEF endpoint (keep-alive aware) ───────────────────
 local function http_get(path)
   local c = socket.tcp()
   c:settimeout(5)
   if not c:connect(CEF_HOST, CEF_PORT) then c:close(); return nil end
-  c:send("GET " .. path .. " HTTP/1.1\r\nHost: " .. CEF_HOST ..
-         "\r\nAccept: */*\r\n\r\n")
-  -- Read until headers are complete.
-  local buf = ""
-  local header_block, body
+  c:send("GET " .. path .. " HTTP/1.1\r\nHost: " .. CEF_HOST .. "\r\nAccept: */*\r\n\r\n")
+  local buf, header_block, body = "", nil, nil
   while true do
     local chunk, err, partial = c:receive(256)
     local got = chunk or partial
@@ -42,12 +43,10 @@ local function http_get(path)
     if err and err ~= "timeout" then c:close(); return nil end
     if (not got or #got == 0) and err == "timeout" then c:close(); return nil end
   end
-  -- Read the rest of the body up to Content-Length.
   local clen = httpresp.content_length(header_block)
   if clen then
     while #body < clen do
-      local need = clen - #body
-      local chunk, err, partial = c:receive(need)
+      local chunk, err, partial = c:receive(clen - #body)
       local got = chunk or partial
       if got and #got > 0 then body = body .. got end
       if err and err ~= "timeout" then break end
@@ -58,20 +57,14 @@ local function http_get(path)
   return body
 end
 
--- Parse ws://host:port/path -> path
 local function ws_path(url) return (url:match("^ws://[^/]+(/.*)$")) end
 
--- Perform the RFC6455 client handshake on an open TCP socket.
 local function ws_handshake(c, path)
-  -- A fixed key is acceptable for a loopback CEF endpoint that doesn't validate
-  -- the Sec-WebSocket-Accept response strictly; CEF accepts the upgrade.
-  local key = "dGhlIHNhbXBsZSBub25jZQ=="
   c:send("GET " .. path .. " HTTP/1.1\r\n" ..
          "Host: " .. CEF_HOST .. ":" .. CEF_PORT .. "\r\n" ..
          "Upgrade: websocket\r\nConnection: Upgrade\r\n" ..
-         "Sec-WebSocket-Key: " .. key .. "\r\n" ..
+         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ..
          "Sec-WebSocket-Version: 13\r\n\r\n")
-  -- Read until end of handshake headers.
   local resp = ""
   c:settimeout(5)
   while not resp:find("\r\n\r\n", 1, true) do
@@ -82,216 +75,215 @@ local function ws_handshake(c, path)
   return resp:find("101", 1, true) ~= nil
 end
 
--- Connect to SharedJSContext and return an open, handshaken socket + cdp session.
-local function attach()
+-- List targets, returning all that match `wanted` (set of titles) OR whose URL
+-- contains one of `wanted_url` substrings (store pages change title per page, so
+-- match the store by URL). Returns the target list.
+local function list_wanted_targets(wanted, wanted_url)
   local body = http_get("/json")
   if not body then return nil, "no /json (port 8080 closed?)" end
   local ok, targets = pcall(json.decode, body)
   if not ok or type(targets) ~= "table" then return nil, "bad /json" end
-  local target = cdp.find_shared_js_context(targets)
-  if not target then return nil, "SharedJSContext not present yet" end
-  local path = ws_path(target.webSocketDebuggerUrl)
-  if not path then return nil, "bad ws url" end
-  local c = socket.tcp()
-  c:settimeout(5)
-  if not c:connect(CEF_HOST, CEF_PORT) then return nil, "ws connect failed" end
-  local upgraded = ws_handshake(c, path)
-  if not upgraded then c:close(); return nil, "ws upgrade failed" end
-  c:settimeout(0.2)  -- non-blocking-ish reads for the event loop
-  return c, cdp.new_session()
+  local out = {}
+  for _, t in ipairs(targets) do
+    if t.webSocketDebuggerUrl then
+      local match = t.title and wanted[t.title]
+      if not match and t.url and wanted_url then
+        for _, frag in ipairs(wanted_url) do
+          if t.url:find(frag, 1, true) then match = true; break end
+        end
+      end
+      if match then out[#out + 1] = t end
+    end
+  end
+  return out
 end
 
--- Send a CDP command (text frame).
 local function send_cmd(c, session, method, params)
   c:send(wsframe.encode_text(session:build_command(method, params)))
 end
 
--- Inject the toast payload. Idempotent thanks to the sentinel inside the JS.
-local function do_inject(c, session, msg)
-  send_cmd(c, session, "Runtime.evaluate",
-    { expression = inject.toast_payload(msg), returnByValue = true })
-  log("inject sent")
+-- ── Per-target connection object ───────────────────────────────────────────
+local Conn = {}
+Conn.__index = Conn
+
+local function conn_new(target, assets, registry)
+  return setmetatable({
+    title = target.title,
+    ws_url = target.webSocketDebuggerUrl,
+    assets = assets,
+    registry = registry,
+    sock = nil,
+    session = nil,
+    buf = "",
+  }, Conn)
 end
 
--- Inject the real asset bundle: polyfill first, then each CSS as a guarded
--- <style>, then each JS file's contents. Each Runtime.evaluate is idempotent.
-local function inject_assets(c, session, assets)
-  if not assets then return end
-  if assets.polyfill then
-    send_cmd(c, session, "Runtime.evaluate",
-      { expression = assets.polyfill, returnByValue = true })
-  end
-  for i, css in ipairs(assets.css or {}) do
-    local id = "lumen-css-" .. i
-    local wrapper = "(function(){if(document.getElementById(" ..
-      json.encode(id) .. "))return;var s=document.createElement('style');s.id=" ..
-      json.encode(id) .. ";s.textContent=" .. json.encode(css) ..
-      ";(document.head||document.documentElement).appendChild(s);})()"
-    send_cmd(c, session, "Runtime.evaluate", { expression = wrapper, returnByValue = true })
-  end
-  for _, js in ipairs(assets.js or {}) do
-    send_cmd(c, session, "Runtime.evaluate", { expression = js, returnByValue = true })
-  end
-  log("assets injected (polyfill + " .. #(assets.css or {}) .. " css + " ..
-      #(assets.js or {}) .. " js)")
+function Conn:connect()
+  local path = ws_path(self.ws_url)
+  if not path then return false end
+  local c = socket.tcp(); c:settimeout(5)
+  if not c:connect(CEF_HOST, CEF_PORT) then return false end
+  if not ws_handshake(c, path) then c:close(); return false end
+  c:settimeout(0)
+  self.sock = c
+  self.session = cdp.new_session()
+  self.buf = ""
+  send_cmd(c, self.session, "Runtime.enable")
+  send_cmd(c, self.session, "Page.enable")
+  send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
+  self:inject()
+  log("attached + bound: " .. self.title)
+  return true
 end
 
--- ---------------------------------------------------------------------------
--- Cooperative API (used by the unified loop in Phase 2+). The injector becomes
--- a state object the loop drives with fd() + tick(), instead of owning its own
--- blocking while-loop. Behaviour is preserved from injector.run: attach with
--- backoff, enable domains, inject once, re-inject on recreation, re-attach on
--- socket close.
--- ---------------------------------------------------------------------------
+function Conn:inject()
+  local c, s, a = self.sock, self.session, self.assets
+  if a and a.polyfill then
+    send_cmd(c, s, "Runtime.evaluate", { expression = a.polyfill, returnByValue = true })
+  end
+  if a then
+    for i, css in ipairs(a.css or {}) do
+      local id = "lumen-css-" .. i
+      local w = "(function(){if(document.getElementById(" .. json.encode(id) ..
+        "))return;var s=document.createElement('style');s.id=" .. json.encode(id) ..
+        ";s.textContent=" .. json.encode(css) ..
+        ";(document.head||document.documentElement).appendChild(s);})()"
+      send_cmd(c, s, "Runtime.evaluate", { expression = w, returnByValue = true })
+    end
+    for _, js in ipairs(a.js or {}) do
+      send_cmd(c, s, "Runtime.evaluate", { expression = js, returnByValue = true })
+    end
+  else
+    send_cmd(c, s, "Runtime.evaluate",
+      { expression = inject.toast_payload("Lumen attached"), returnByValue = true })
+  end
+end
 
+-- Handle a Runtime.bindingCalled: run the backend fn and resolve the page promise.
+function Conn:_on_binding(payload_str)
+  local ok, req = pcall(json.decode, payload_str)
+  if not ok or type(req) ~= "table" then return end
+  local id = req.id
+  local result
+  local fn = self.registry and self.registry[req.fn]
+  if type(fn) == "function" then
+    local ok_call, res = pcall(fn, req.args or {})
+    if ok_call then
+      result = (type(res) == "string") and res or json.encode(res)
+    else
+      result = '{"success":false,"error":' .. json.encode(tostring(res)) .. '}'
+    end
+  else
+    result = '{"success":false,"error":"unknown method: ' .. tostring(req.fn) .. '"}'
+  end
+  -- Resolve the page-side promise. id + result passed as JS string literals.
+  local expr = polyfill.resolve_js(json.encode(tostring(id)), json.encode(result))
+  send_cmd(self.sock, self.session, "Runtime.evaluate", { expression = expr })
+end
+
+-- Drain available frames; handle bindingCalled + re-inject on recreation.
+-- Returns false if the socket closed (caller drops the conn).
+function Conn:drain()
+  local c = self.sock
+  local data, err, partial = c:receive("*a")
+  local got = data or partial
+  if got and #got > 0 then self.buf = self.buf .. got end
+  if err == "closed" then return false end
+  while true do
+    local frame, opcode, rest, complete = wsframe.decode_frame(self.buf)
+    if not complete then break end
+    self.buf = rest
+    if opcode == 0x8 then return false
+    elseif opcode == 0x1 then
+      local m = cdp.parse_message(frame)
+      if m.kind == "event" then
+        if m.method == "Runtime.bindingCalled" and m.params and m.params.name == BINDING then
+          self:_on_binding(m.params.payload)
+        elseif m.method == "Runtime.executionContextCreated" or
+               m.method == "Page.frameNavigated" or
+               m.method == "Runtime.executionContextsCleared" then
+          log("recreation (" .. self.title .. "): " .. m.method .. " -> re-bind+inject")
+          send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
+          self:inject()
+        end
+      end
+    end
+  end
+  return true
+end
+
+function Conn:close()
+  if self.sock then pcall(function() self.sock:close() end) end
+  self.sock = nil
+end
+
+-- ── Multi-target manager (cooperative new/fds/tick) ────────────────────────
 local State = {}
 State.__index = State
 
+-- new{ targets={set of titles}, assets=, registry=, message= }
 function injector.new(opts)
   opts = opts or {}
+  local wanted = {}
+  if opts.targets then
+    for _, t in ipairs(opts.targets) do wanted[t] = true end
+  else
+    wanted["SharedJSContext"] = true
+  end
   return setmetatable({
-    msg = opts.message or "Lumen attached",
-    assets = opts.assets,   -- { polyfill=, css={}, js={} } or nil (spike toast)
-    sock = nil,           -- CDP socket when attached
-    session = nil,
-    buf = "",
+    wanted = wanted,
+    wanted_url = opts.target_urls,
+    assets = opts.assets,
+    registry = opts.registry,
+    conns = {},          -- ws_url -> Conn
     backoff = 1,
-    next_attempt = 0,     -- os.clock-based gate for backoff
+    next_attempt = 0,
   }, State)
 end
 
--- fd() -> the CDP socket for select(), or nil when not attached.
-function State:fd()
-  return self.sock
-end
-
--- Inject either the real asset bundle (Phase 3) or the spike toast (no assets).
-function State:_inject()
-  if self.assets then
-    inject_assets(self.sock, self.session, self.assets)
-  else
-    do_inject(self.sock, self.session, self.msg)
+-- fds() -> array of currently-open CDP sockets for select().
+function State:fds()
+  local out = {}
+  for _, conn in pairs(self.conns) do
+    if conn.sock then out[#out + 1] = conn.sock end
   end
+  return out
 end
 
--- Try to attach (honouring the backoff gate). Sets self.sock on success.
-function State:_try_attach()
+-- Discover wanted targets and connect to any not yet connected (backoff-gated).
+function State:_discover()
   local now = os.time()
   if now < self.next_attempt then return end
-  local c, session = attach()
-  if not c then
-    log("attach: " .. tostring(session) .. " (retry in " .. self.backoff .. "s)")
+  local targets, err = list_wanted_targets(self.wanted, self.wanted_url)
+  if not targets then
     self.next_attempt = now + self.backoff
     self.backoff = math.min(self.backoff * 2, 15)
     return
   end
   self.backoff = 1
   self.next_attempt = 0
-  self.sock = c
-  self.session = session
-  self.buf = ""
-  log("attached to SharedJSContext")
-  send_cmd(c, session, "Runtime.enable")
-  send_cmd(c, session, "Page.enable")
-  self:_inject()
-end
-
--- Drain whatever frames are currently available on the CDP socket; re-inject on
--- context recreation. Non-blocking: returns promptly.
-function State:_drain()
-  local c = self.sock
-  c:settimeout(0)
-  local data, err, partial = c:receive("*a")
-  local got = data or partial
-  if got and #got > 0 then self.buf = self.buf .. got end
-  if err == "closed" then
-    c:close(); self.sock = nil; self.session = nil; self.buf = ""
-    log("socket closed; will re-attach")
-    return
-  end
-  while true do
-    local payload, opcode, rest, complete = wsframe.decode_frame(self.buf)
-    if not complete then break end
-    self.buf = rest
-    if opcode == 0x8 then
-      c:close(); self.sock = nil; self.session = nil; self.buf = ""
-      log("socket closed; will re-attach")
-      return
-    elseif opcode == 0x1 then
-      local m = cdp.parse_message(payload)
-      if m.kind == "event" and
-         (m.method == "Runtime.executionContextCreated" or
-          m.method == "Page.frameNavigated" or
-          m.method == "Runtime.executionContextsCleared") then
-        log("recreation event: " .. m.method .. " -> re-inject")
-        self:_inject()
-      end
+  local seen = {}
+  for _, t in ipairs(targets) do
+    seen[t.webSocketDebuggerUrl] = true
+    if not self.conns[t.webSocketDebuggerUrl] then
+      local conn = conn_new(t, self.assets, self.registry)
+      if conn:connect() then self.conns[t.webSocketDebuggerUrl] = conn end
     end
   end
 end
 
--- tick(): one cooperative unit of work. Attach if down (backoff-gated), else
--- drain available frames. Returns promptly; the loop calls it each iteration.
+-- tick(): connect to new targets, drain existing ones, drop closed ones.
 function State:tick()
-  if not self.sock then
-    self:_try_attach()
-  else
-    self:_drain()
-  end
-end
-
--- Main loop: attach with backoff, enable domains, inject once, then watch for
--- context recreation events and re-inject. Reconnect if the socket drops.
--- (Kept for the standalone spike modes; the unified loop uses new/fd/tick.)
-function injector.run(opts)
-  opts = opts or {}
-  local msg = opts.message or "Lumen attached"
-  local backoff = 1
-  while true do
-    local c, session = attach()
-    if not c then
-      log("attach: " .. tostring(session) .. " (retry in " .. backoff .. "s)")
-      socket.sleep(backoff)
-      backoff = math.min(backoff * 2, 15)
-    else
-      backoff = 1
-      log("attached to SharedJSContext")
-      send_cmd(c, session, "Runtime.enable")
-      send_cmd(c, session, "Page.enable")
-      do_inject(c, session, msg)
-      -- Read loop: parse frames, re-inject on recreation events.
-      local buf = ""
-      local alive = true
-      while alive do
-        local data, err, partial = c:receive("*a")
-        local got = data or partial
-        if got and #got > 0 then buf = buf .. got end
-        if err == "closed" then alive = false; break end
-        -- Drain complete frames.
-        while true do
-          local payload, opcode, rest, complete = wsframe.decode_frame(buf)
-          if not complete then break end
-          buf = rest
-          if opcode == 0x8 then alive = false; break       -- close
-          elseif opcode == 0x1 then
-            local m = cdp.parse_message(payload)
-            if m.kind == "event" and
-               (m.method == "Runtime.executionContextCreated" or
-                m.method == "Page.frameNavigated" or
-                m.method == "Runtime.executionContextsCleared") then
-              log("recreation event: " .. m.method .. " -> re-inject")
-              -- The sentinel lives on the (new) window, so re-eval is safe.
-              do_inject(c, session, msg)
-            end
-          end
-        end
-        if alive and (not got or #got == 0) then socket.sleep(0.2) end
+  self:_discover()
+  for url, conn in pairs(self.conns) do
+    if conn.sock then
+      local alive = conn:drain()
+      if not alive then
+        log("closed: " .. conn.title .. " (will re-attach)")
+        conn:close()
+        self.conns[url] = nil
       end
-      c:close()
-      log("socket closed; will re-attach")
     end
-    -- If port 8080 has gone for good (Steam closed), attach() will keep
-    -- failing; the wrapper/parent decides lifetime. For the spike we loop.
   end
 end
 
