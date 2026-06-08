@@ -113,6 +113,29 @@ local function do_inject(c, session, msg)
   log("inject sent")
 end
 
+-- Inject the real asset bundle: polyfill first, then each CSS as a guarded
+-- <style>, then each JS file's contents. Each Runtime.evaluate is idempotent.
+local function inject_assets(c, session, assets)
+  if not assets then return end
+  if assets.polyfill then
+    send_cmd(c, session, "Runtime.evaluate",
+      { expression = assets.polyfill, returnByValue = true })
+  end
+  for i, css in ipairs(assets.css or {}) do
+    local id = "lumen-css-" .. i
+    local wrapper = "(function(){if(document.getElementById(" ..
+      json.encode(id) .. "))return;var s=document.createElement('style');s.id=" ..
+      json.encode(id) .. ";s.textContent=" .. json.encode(css) ..
+      ";(document.head||document.documentElement).appendChild(s);})()"
+    send_cmd(c, session, "Runtime.evaluate", { expression = wrapper, returnByValue = true })
+  end
+  for _, js in ipairs(assets.js or {}) do
+    send_cmd(c, session, "Runtime.evaluate", { expression = js, returnByValue = true })
+  end
+  log("assets injected (polyfill + " .. #(assets.css or {}) .. " css + " ..
+      #(assets.js or {}) .. " js)")
+end
+
 -- ---------------------------------------------------------------------------
 -- Cooperative API (used by the unified loop in Phase 2+). The injector becomes
 -- a state object the loop drives with fd() + tick(), instead of owning its own
@@ -128,6 +151,7 @@ function injector.new(opts)
   opts = opts or {}
   return setmetatable({
     msg = opts.message or "Lumen attached",
+    assets = opts.assets,   -- { polyfill=, css={}, js={} } or nil (spike toast)
     sock = nil,           -- CDP socket when attached
     session = nil,
     buf = "",
@@ -139,6 +163,15 @@ end
 -- fd() -> the CDP socket for select(), or nil when not attached.
 function State:fd()
   return self.sock
+end
+
+-- Inject either the real asset bundle (Phase 3) or the spike toast (no assets).
+function State:_inject()
+  if self.assets then
+    inject_assets(self.sock, self.session, self.assets)
+  else
+    do_inject(self.sock, self.session, self.msg)
+  end
 end
 
 -- Try to attach (honouring the backoff gate). Sets self.sock on success.
@@ -160,7 +193,7 @@ function State:_try_attach()
   log("attached to SharedJSContext")
   send_cmd(c, session, "Runtime.enable")
   send_cmd(c, session, "Page.enable")
-  do_inject(c, session, self.msg)
+  self:_inject()
 end
 
 -- Drain whatever frames are currently available on the CDP socket; re-inject on
@@ -191,7 +224,7 @@ function State:_drain()
           m.method == "Page.frameNavigated" or
           m.method == "Runtime.executionContextsCleared") then
         log("recreation event: " .. m.method .. " -> re-inject")
-        do_inject(c, self.session, self.msg)
+        self:_inject()
       end
     end
   end

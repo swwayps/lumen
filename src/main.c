@@ -106,6 +106,19 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    /* Live eval: `lumen --eval "<expr>"` evaluates JS in SharedJSContext. */
+    if (argc > 2 && strcmp(argv[1], "--eval") == 0) {
+        setenv("LUMEN_EVAL_EXPR", argv[2], 1);
+        char epath[1024];
+        snprintf(epath, sizeof(epath), "%s/../tools/eval_shared.lua", luadir);
+        if (luaL_dofile(L, epath) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
+    }
+
     /* Default mode: load the LuaTools backend behind the shims and run the
      * unified RPC + injector loop (lua/boot.lua). */
     char bootpath[1024];

@@ -7,13 +7,14 @@ local injector = require("injector")
 
 local loop = {}
 
--- run{ session_path=, registry=, inject_opts= }
+-- run{ session_path=, registry=, build_assets= }
 function loop.run(opts)
   local srv, port, token = session.start(opts.session_path)
   srv:settimeout(0)
   io.stderr:write("[lumen] rpc on 127.0.0.1:" .. port .. "\n"); io.stderr:flush()
 
-  local inj = injector.new(opts.inject_opts or {})
+  local assets = opts.build_assets and opts.build_assets(port, token) or nil
+  local inj = injector.new({ assets = assets })
 
   while true do
     local fds = { srv }
