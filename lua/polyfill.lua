@@ -4,19 +4,22 @@
 local polyfill = {}
 
 -- build(port, token) -> JS source string
+-- NOTE: always (re)assigns callServerMethod so a restarted Lumen (new port/token)
+-- refreshes the binding. SharedJSContext persists across Lumen restarts, so a
+-- guard like `if (!callServerMethod)` would pin a stale port. We instead keep the
+-- LATEST port/token on window and have the function read them at call time.
 function polyfill.build(port, token)
   return ([[
 (function () {
   window.Millennium = window.Millennium || {};
-  if (!window.Millennium.callServerMethod) {
-    window.Millennium.callServerMethod = function (plugin, fn, args) {
-      return fetch("http://127.0.0.1:%d/rpc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: "%s", fn: fn, args: args || {} })
-      }).then(function (r) { return r.text(); });
-    };
-  }
+  window.__lumenRpc = { port: %d, token: "%s" };
+  window.Millennium.callServerMethod = function (plugin, fn, args) {
+    var rpc = window.__lumenRpc;
+    return fetch("http://127.0.0.1:" + rpc.port + "/rpc", {
+      method: "POST",
+      body: JSON.stringify({ token: rpc.token, fn: fn, args: args || {} })
+    }).then(function (r) { return r.text(); });
+  };
 })()]]):format(port, token)
 end
 

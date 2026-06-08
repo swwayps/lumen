@@ -23,6 +23,19 @@ function rpcserver.handle_client(client, token, registry)
     if (not got or #got == 0) and err == "timeout" then break end
   end
   if not header_block then client:close(); return end
+
+  -- CORS preflight: the page origin (https://steamloopback.host) differs from
+  -- 127.0.0.1, so any non-simple request preflights with OPTIONS. Answer it.
+  if header_block:match("^OPTIONS ") then
+    client:send("HTTP/1.1 204 No Content\r\n" ..
+                "Access-Control-Allow-Origin: *\r\n" ..
+                "Access-Control-Allow-Methods: POST, OPTIONS\r\n" ..
+                "Access-Control-Allow-Headers: Content-Type\r\n" ..
+                "Content-Length: 0\r\nConnection: close\r\n\r\n")
+    client:close()
+    return
+  end
+
   local clen = httpresp.content_length(header_block) or 0
   while #body < clen do
     local chunk, err, partial = client:receive(clen - #body)

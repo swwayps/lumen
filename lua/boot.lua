@@ -8,9 +8,15 @@ local home = os.getenv("HOME") or "."
 local state_dir = home .. "/.local/share/Lumen"
 os.execute("mkdir -p '" .. state_dir .. "'")
 
--- Loading main.lua defines the global RPC functions (InitApis, etc.) and, via
--- on_load/inject_webkit_files, enqueues the frontend assets in the millennium shim.
-dofile(backend .. "/main.lua")
+-- Loading main.lua defines the global RPC functions (InitApis, etc.) and returns
+-- a lifecycle table { on_load, on_unload, on_frontend_loaded }. Millennium called
+-- on_load after requiring the plugin; we do the same so inject_webkit_files()
+-- enqueues the frontend assets and the boot-time InitApis runs.
+local lifecycle = dofile(backend .. "/main.lua")
+if type(lifecycle) == "table" and type(lifecycle.on_load) == "function" then
+  local ok, err = pcall(lifecycle.on_load)
+  if not ok then io.stderr:write("[lumen] on_load error: " .. tostring(err) .. "\n") end
+end
 
 -- Dispatch registry: the 35 endpoints the frontend calls via callServerMethod.
 local ALLOWLIST = {
