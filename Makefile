@@ -30,11 +30,12 @@ SOCKET_SRC := vendor/luasocket/luasocket.c vendor/luasocket/timeout.c \
               vendor/luasocket/udp.c
 CJSON_SRC  := vendor/lua-cjson/lua_cjson.c vendor/lua-cjson/strbuf.c \
               vendor/lua-cjson/fpconv.c
+LFS_SRC    := vendor/luafilesystem/lfs.c
 
-SRC        := src/main.c $(SOCKET_SRC) $(CJSON_SRC)
+SRC        := src/main.c $(SOCKET_SRC) $(CJSON_SRC) $(LFS_SRC)
 
 CFLAGS     := -O2 -DLUASOCKET_DEBUG -DNDEBUG \
-              -Ivendor/luasocket -Ivendor/lua-cjson $(LUA_CFLAGS)
+              -Ivendor/luasocket -Ivendor/lua-cjson -Ivendor/luafilesystem $(LUA_CFLAGS)
 
 bin/lumen: $(SRC)
 	mkdir -p bin

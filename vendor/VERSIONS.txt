@@ -8,3 +8,6 @@ lua-cjson  2.1.0.10    https://github.com/openresty/lua-cjson     (tag 2.1.0.10)
 
 The raw upstream tarballs/extracted trees live under vendor/_src/ which is
 gitignored; only the curated source files above are committed.
+
+luafilesystem 1.8.0  https://github.com/lunarmodules/luafilesystem  (tag v1_8_0)
+  -> vendor/luafilesystem/  (lfs.c + lfs.h; provides require("lfs"))

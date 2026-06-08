@@ -12,6 +12,7 @@
  * uses socket.tcp() and socket.sleep(), both present in the core table. */
 int luaopen_socket_core(lua_State *L);
 int luaopen_cjson(lua_State *L);
+int luaopen_lfs(lua_State *L);
 
 int main(int argc, char **argv) {
     lua_State *L = luaL_newstate();
@@ -22,6 +23,8 @@ int main(int argc, char **argv) {
     luaL_requiref(L, "socket", luaopen_socket_core, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "cjson", luaopen_cjson, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lfs", luaopen_lfs, 0);
     lua_pop(L, 1);
 
     /* Make the bundled lua/ directory importable. For the spike we resolve it
@@ -35,6 +38,17 @@ int main(int argc, char **argv) {
         fprintf(stderr, "lumen: failed to set package.path: %s\n",
                 lua_tostring(L, -1));
         return 1;
+    }
+
+    /* Generic test runner: `lumen --test <path>` dofiles a test script with the
+     * binary's C modules (lfs/cjson/socket) available. */
+    if (argc > 2 && strcmp(argv[1], "--test") == 0) {
+        if (luaL_dofile(L, argv[2]) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
     }
 
     /* Spike verification mode: `lumen --verify` runs tools/verify_injected.lua
