@@ -2,7 +2,29 @@
 -- tiny pure encoder/decoder sufficient for CDP messages and host tests.
 local ok, cjson = pcall(require, "cjson")
 if ok then
-  return { encode = cjson.encode, decode = cjson.decode }
+  -- cjson decodes ALL JSON numbers as Lua floats (lua_pushnumber), so an appid
+  -- like 285900 becomes 285900.0 and tostring() yields "285900.0" -> broken URLs.
+  -- Millennium's bridge delivered integers, so the backend assumes integers.
+  -- Restore that contract: recursively convert integer-valued floats to ints.
+  local mtype = math.type
+  local function normalize(v)
+    local t = type(v)
+    if t == "number" then
+      if mtype(v) == "float" and v == math.floor(v) and
+         v >= -9.2e18 and v <= 9.2e18 then
+        return math.tointeger(v) or v
+      end
+      return v
+    elseif t == "table" then
+      for k, val in pairs(v) do v[k] = normalize(val) end
+      return v
+    end
+    return v
+  end
+  return {
+    encode = cjson.encode,
+    decode = function(s) return normalize(cjson.decode(s)) end,
+  }
 end
 
 -- Minimal pure fallback (objects, arrays, strings, numbers, bool, null).
