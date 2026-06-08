@@ -6,10 +6,24 @@ function fs.exists(path)
   return lfs.attributes(path, "mode") ~= nil
 end
 
-function fs.join(a, b)
-  if a == "" then return b end
-  if a:sub(-1) == "/" then return a .. b end
-  return a .. "/" .. b
+-- join(a, b, ...) -> variadic path join (Millennium's fs.join is variadic;
+-- callers use up to 3 segments, e.g. fs.join(base, "config", "stplug-in")).
+function fs.join(...)
+  local parts = { ... }
+  local out = parts[1] or ""
+  for i = 2, #parts do
+    local seg = parts[i]
+    if seg ~= nil and seg ~= "" then
+      if out == "" then
+        out = seg
+      elseif out:sub(-1) == "/" then
+        out = out .. seg
+      else
+        out = out .. "/" .. seg
+      end
+    end
+  end
+  return out
 end
 
 function fs.parent_path(path)
