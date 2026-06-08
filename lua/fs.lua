@@ -45,27 +45,37 @@ function fs.create_directories(path)
   return true
 end
 
+-- list(path) -> array of { name=, path=, is_directory= } (Millennium contract).
 function fs.list(path)
   local out = {}
   for entry in lfs.dir(path) do
-    if entry ~= "." and entry ~= ".." then out[#out + 1] = entry end
+    if entry ~= "." and entry ~= ".." then
+      local full = path .. "/" .. entry
+      out[#out + 1] = {
+        name = entry,
+        path = full,
+        is_directory = (lfs.attributes(full, "mode") == "directory"),
+      }
+    end
   end
   return out
 end
 
+-- list_recursive(path) -> array of { name=, path=, is_directory= } for every
+-- entry in the tree. `name` is the basename; `path` is the full path.
 function fs.list_recursive(path)
   local out = {}
-  local function walk(dir, prefix)
+  local function walk(dir)
     for entry in lfs.dir(dir) do
       if entry ~= "." and entry ~= ".." then
         local full = dir .. "/" .. entry
-        local rel = prefix == "" and entry or (prefix .. "/" .. entry)
-        out[#out + 1] = rel
-        if lfs.attributes(full, "mode") == "directory" then walk(full, rel) end
+        local is_dir = (lfs.attributes(full, "mode") == "directory")
+        out[#out + 1] = { name = entry, path = full, is_directory = is_dir }
+        if is_dir then walk(full) end
       end
     end
   end
-  walk(path, "")
+  walk(path)
   return out
 end
 

@@ -18,8 +18,13 @@ ok(fs.absolute("."):sub(1, 1) == "/", "absolute is rooted")
 local f = io.open(tmp .. "/a/file.txt", "w"); f:write("hi"); f:close()
 local listed = fs.list(tmp .. "/a")
 local found = false
-for _, e in ipairs(listed) do if e == "file.txt" then found = true end end
-ok(found, "list finds file")
+for _, e in ipairs(listed) do if e.name == "file.txt" and e.path:find("file.txt") then found = true end end
+ok(found, "list finds file with name+path")
+
+local rec = fs.list_recursive(tmp)
+local found_b = false
+for _, e in ipairs(rec) do if e.name == "b" and e.is_directory then found_b = true end end
+ok(found_b, "list_recursive finds dir b with is_directory")
 
 fs.remove(tmp .. "/a/file.txt")
 ok(not fs.exists(tmp .. "/a/file.txt"), "remove file")
