@@ -106,15 +106,11 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* Run the injector. Message overridable via argv[1] for the spike. */
-    const char *msg = (argc > 1) ? argv[1] : "Lumen attached";
-    lua_pushstring(L, msg);
-    lua_setglobal(L, "LUMEN_MESSAGE");
-
-    const char *boot =
-        "local injector = require('injector') "
-        "injector.run({ message = LUMEN_MESSAGE })";
-    if (luaL_dostring(L, boot) != LUA_OK) {
+    /* Default mode: load the LuaTools backend behind the shims and run the
+     * unified RPC + injector loop (lua/boot.lua). */
+    char bootpath[1024];
+    snprintf(bootpath, sizeof(bootpath), "%s/boot.lua", luadir);
+    if (luaL_dofile(L, bootpath) != LUA_OK) {
         fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
         return 1;
     }

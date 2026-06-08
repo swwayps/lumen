@@ -113,8 +113,103 @@ local function do_inject(c, session, msg)
   log("inject sent")
 end
 
+-- ---------------------------------------------------------------------------
+-- Cooperative API (used by the unified loop in Phase 2+). The injector becomes
+-- a state object the loop drives with fd() + tick(), instead of owning its own
+-- blocking while-loop. Behaviour is preserved from injector.run: attach with
+-- backoff, enable domains, inject once, re-inject on recreation, re-attach on
+-- socket close.
+-- ---------------------------------------------------------------------------
+
+local State = {}
+State.__index = State
+
+function injector.new(opts)
+  opts = opts or {}
+  return setmetatable({
+    msg = opts.message or "Lumen attached",
+    sock = nil,           -- CDP socket when attached
+    session = nil,
+    buf = "",
+    backoff = 1,
+    next_attempt = 0,     -- os.clock-based gate for backoff
+  }, State)
+end
+
+-- fd() -> the CDP socket for select(), or nil when not attached.
+function State:fd()
+  return self.sock
+end
+
+-- Try to attach (honouring the backoff gate). Sets self.sock on success.
+function State:_try_attach()
+  local now = os.time()
+  if now < self.next_attempt then return end
+  local c, session = attach()
+  if not c then
+    log("attach: " .. tostring(session) .. " (retry in " .. self.backoff .. "s)")
+    self.next_attempt = now + self.backoff
+    self.backoff = math.min(self.backoff * 2, 15)
+    return
+  end
+  self.backoff = 1
+  self.next_attempt = 0
+  self.sock = c
+  self.session = session
+  self.buf = ""
+  log("attached to SharedJSContext")
+  send_cmd(c, session, "Runtime.enable")
+  send_cmd(c, session, "Page.enable")
+  do_inject(c, session, self.msg)
+end
+
+-- Drain whatever frames are currently available on the CDP socket; re-inject on
+-- context recreation. Non-blocking: returns promptly.
+function State:_drain()
+  local c = self.sock
+  c:settimeout(0)
+  local data, err, partial = c:receive("*a")
+  local got = data or partial
+  if got and #got > 0 then self.buf = self.buf .. got end
+  if err == "closed" then
+    c:close(); self.sock = nil; self.session = nil; self.buf = ""
+    log("socket closed; will re-attach")
+    return
+  end
+  while true do
+    local payload, opcode, rest, complete = wsframe.decode_frame(self.buf)
+    if not complete then break end
+    self.buf = rest
+    if opcode == 0x8 then
+      c:close(); self.sock = nil; self.session = nil; self.buf = ""
+      log("socket closed; will re-attach")
+      return
+    elseif opcode == 0x1 then
+      local m = cdp.parse_message(payload)
+      if m.kind == "event" and
+         (m.method == "Runtime.executionContextCreated" or
+          m.method == "Page.frameNavigated" or
+          m.method == "Runtime.executionContextsCleared") then
+        log("recreation event: " .. m.method .. " -> re-inject")
+        do_inject(c, self.session, self.msg)
+      end
+    end
+  end
+end
+
+-- tick(): one cooperative unit of work. Attach if down (backoff-gated), else
+-- drain available frames. Returns promptly; the loop calls it each iteration.
+function State:tick()
+  if not self.sock then
+    self:_try_attach()
+  else
+    self:_drain()
+  end
+end
+
 -- Main loop: attach with backoff, enable domains, inject once, then watch for
 -- context recreation events and re-inject. Reconnect if the socket drops.
+-- (Kept for the standalone spike modes; the unified loop uses new/fd/tick.)
 function injector.run(opts)
   opts = opts or {}
   local msg = opts.message or "Lumen attached"

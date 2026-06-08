@@ -18,8 +18,13 @@ local function random_token()
 end
 
 -- start(path) -> server_sock, port, token  (binds 127.0.0.1:0 -> ephemeral port)
+-- Uses the low-level socket.core API directly (socket.bind helper lives in
+-- socket.lua, which we don't bundle; the C core exposes tcp4/bind/listen).
 function session.start(path)
-  local srv = assert(socket.bind("127.0.0.1", 0))
+  local srv = assert(socket.tcp4())
+  srv:setoption("reuseaddr", true)
+  assert(srv:bind("127.0.0.1", 0))
+  assert(srv:listen(16))
   local _, port = srv:getsockname()
   local token = random_token()
   local f = assert(io.open(path, "w"))
