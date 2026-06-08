@@ -6,6 +6,7 @@ local json = require("json")
 local wsframe = require("wsframe")
 local cdp = require("cdp")
 local inject = require("inject")
+local httpresp = require("httpresp")
 
 local injector = {}
 
@@ -17,24 +18,43 @@ local function log(msg)
   io.stderr:flush()
 end
 
--- Minimal blocking HTTP GET over a fresh TCP socket. Returns body string or nil.
+io.stderr:setvbuf("no")
+io.stdout:setvbuf("no")
+
+-- Blocking HTTP GET over a fresh TCP socket. CEF uses keep-alive (no
+-- "Connection: close"), so we must read headers, parse Content-Length, and
+-- read exactly that many body bytes rather than read-until-close (which hangs).
 local function http_get(path)
   local c = socket.tcp()
   c:settimeout(5)
   if not c:connect(CEF_HOST, CEF_PORT) then c:close(); return nil end
   c:send("GET " .. path .. " HTTP/1.1\r\nHost: " .. CEF_HOST ..
-         "\r\nConnection: close\r\n\r\n")
-  local chunks = {}
+         "\r\nAccept: */*\r\n\r\n")
+  -- Read until headers are complete.
+  local buf = ""
+  local header_block, body
   while true do
-    local data, err, partial = c:receive("*a")
-    if data then chunks[#chunks + 1] = data end
-    if partial and #partial > 0 then chunks[#chunks + 1] = partial end
-    if err == "closed" or data then break end
-    if err and err ~= "timeout" then break end
+    local chunk, err, partial = c:receive(256)
+    local got = chunk or partial
+    if got and #got > 0 then buf = buf .. got end
+    header_block, body = httpresp.headers_complete(buf)
+    if header_block then break end
+    if err and err ~= "timeout" then c:close(); return nil end
+    if (not got or #got == 0) and err == "timeout" then c:close(); return nil end
+  end
+  -- Read the rest of the body up to Content-Length.
+  local clen = httpresp.content_length(header_block)
+  if clen then
+    while #body < clen do
+      local need = clen - #body
+      local chunk, err, partial = c:receive(need)
+      local got = chunk or partial
+      if got and #got > 0 then body = body .. got end
+      if err and err ~= "timeout" then break end
+      if (not got or #got == 0) and err == "timeout" then break end
+    end
   end
   c:close()
-  local raw = table.concat(chunks)
-  local body = raw:match("\r\n\r\n(.*)$")
   return body
 end
 

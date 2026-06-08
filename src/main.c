@@ -4,6 +4,7 @@
 #include <lualib.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Statically-linked C modules: declare their openers. LuaSocket's core
  * (luaopen_socket_core) registers tcp/udp/select + sleep/gettime directly into
@@ -34,6 +35,43 @@ int main(int argc, char **argv) {
         fprintf(stderr, "lumen: failed to set package.path: %s\n",
                 lua_tostring(L, -1));
         return 1;
+    }
+
+    /* Spike verification mode: `lumen --verify` runs tools/verify_injected.lua
+     * (reads window.__lumenInjected from SharedJSContext) instead of the loop. */
+    if (argc > 1 && strcmp(argv[1], "--verify") == 0) {
+        char vpath[1024];
+        snprintf(vpath, sizeof(vpath), "%s/../tools/verify_injected.lua", luadir);
+        if (luaL_dofile(L, vpath) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
+    }
+
+    /* Spike DOM probe: `lumen --probe` runs tools/probe_dom.lua. */
+    if (argc > 1 && strcmp(argv[1], "--probe") == 0) {
+        char ppath[1024];
+        snprintf(ppath, sizeof(ppath), "%s/../tools/probe_dom.lua", luadir);
+        if (luaL_dofile(L, ppath) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
+    }
+
+    /* Spike visible toast: `lumen --toast` runs tools/toast_window.lua. */
+    if (argc > 1 && strcmp(argv[1], "--toast") == 0) {
+        char tpath[1024];
+        snprintf(tpath, sizeof(tpath), "%s/../tools/toast_window.lua", luadir);
+        if (luaL_dofile(L, tpath) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
     }
 
     /* Run the injector. Message overridable via argv[1] for the spike. */
