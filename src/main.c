@@ -119,6 +119,19 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    /* Spike: `lumen --inject-store` injects polyfill+luatools.js into a named
+     * target (default the store web view). */
+    if (argc > 1 && strcmp(argv[1], "--inject-store") == 0) {
+        char ipath[1024];
+        snprintf(ipath, sizeof(ipath), "%s/../tools/inject_store.lua", luadir);
+        if (luaL_dofile(L, ipath) != LUA_OK) {
+            fprintf(stderr, "lumen: %s\n", lua_tostring(L, -1));
+            return 1;
+        }
+        lua_close(L);
+        return 0;
+    }
+
     /* Default mode: load the LuaTools backend behind the shims and run the
      * unified RPC + injector loop (lua/boot.lua). */
     char bootpath[1024];
