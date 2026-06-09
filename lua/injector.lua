@@ -98,6 +98,28 @@ local function list_wanted_targets(wanted, wanted_url)
   return out
 end
 
+-- Is Steam's main UI up (past login + first paint)? SharedJSContext exists even
+-- at the "Sign in" screen, so attaching to ANY target before the main shell is
+-- up interferes with the client coming up (stalls boot / blanks render). We
+-- treat the UI as ready once the shell menu targets exist — the Supernav /
+-- Root Menu / library / store windows only appear after login + first paint.
+local READY_MARKERS = {
+  "Supernav", "Root Menu", "store.steampowered.com",
+}
+local function ui_is_ready()
+  local body = http_get("/json")
+  if not body then return false end
+  local ok, targets = pcall(json.decode, body)
+  if not ok or type(targets) ~= "table" then return false end
+  for _, t in ipairs(targets) do
+    local hay = (t.title or "") .. " " .. (t.url or "")
+    for _, mark in ipairs(READY_MARKERS) do
+      if hay:find(mark, 1, true) then return true end
+    end
+  end
+  return false
+end
+
 local function send_cmd(c, session, method, params)
   c:send(wsframe.encode_text(session:build_command(method, params)))
 end
@@ -271,6 +293,7 @@ function injector.new(opts)
     conns = {},          -- ws_url -> Conn
     backoff = 1,
     next_attempt = 0,
+    ui_ready = false,    -- latched once Steam's main UI is up (post-login/paint)
   }, State)
 end
 
@@ -287,6 +310,18 @@ end
 function State:_discover()
   local now = os.time()
   if now < self.next_attempt then return end
+  -- Hold off ALL attaching until Steam's main UI is up. Attaching to
+  -- SharedJSContext during the login/init phase stalls the client boot
+  -- (Phase 4 finding). Latch once ready so later navigations aren't gated.
+  if not self.ui_ready then
+    if ui_is_ready() then
+      self.ui_ready = true
+      log("Steam UI ready -> attaching")
+    else
+      self.next_attempt = now + 2   -- poll readiness every 2s, no backoff
+      return
+    end
+  end
   local targets, err = list_wanted_targets(self.wanted, self.wanted_url)
   if not targets then
     self.next_attempt = now + self.backoff
