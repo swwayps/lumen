@@ -115,7 +115,16 @@ local function conn_new(target, assets, registry)
     sock = nil,
     session = nil,
     buf = "",
+    injected = false,       -- has the first injection happened?
+    ready_probe_id = nil,   -- cdp id of the document.readyState probe
   }, Conn)
+end
+
+-- Ask the page for its readyState; we inject once it reports "complete".
+function Conn:_probe_ready()
+  self.ready_probe_id = self.session._id + 1
+  send_cmd(self.sock, self.session, "Runtime.evaluate",
+    { expression = "document.readyState", returnByValue = true })
 end
 
 function Conn:connect()
@@ -128,12 +137,24 @@ function Conn:connect()
   self.sock = c
   self.session = cdp.new_session()
   self.buf = ""
+  self.injected = false
   send_cmd(c, self.session, "Runtime.enable")
   send_cmd(c, self.session, "Page.enable")
   send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
-  self:inject()
+  -- Do NOT inject yet: injecting while the UI is still initializing blanks the
+  -- Steam render (Phase 4 finding). Gate the first injection on readiness —
+  -- probe document.readyState now (covers the already-loaded case) and also
+  -- inject on Page.loadEventFired (covers the still-loading case).
+  self:_probe_ready()
   log("attached + bound: " .. self.title)
   return true
+end
+
+-- Inject once, guarded so readyState + loadEventFired don't double-inject.
+function Conn:_inject_once()
+  if self.injected then return end
+  self.injected = true
+  self:inject()
 end
 
 function Conn:inject()
@@ -193,15 +214,30 @@ function Conn:drain()
     if opcode == 0x8 then return false
     elseif opcode == 0x1 then
       local m = cdp.parse_message(frame)
-      if m.kind == "event" then
+      if m.kind == "result" and self.ready_probe_id and m.id == self.ready_probe_id then
+        -- Reply to our document.readyState probe.
+        self.ready_probe_id = nil
+        local val = m.result and m.result.result and m.result.result.value
+        if val == "complete" then
+          self:_inject_once()
+        end
+        -- If "loading"/"interactive", wait for Page.loadEventFired below.
+      elseif m.kind == "event" then
         if m.method == "Runtime.bindingCalled" and m.params and m.params.name == BINDING then
           self:_on_binding(m.params.payload)
+        elseif m.method == "Page.loadEventFired" or m.method == "Page.domContentEventFired" then
+          -- Page finished loading: safe to inject now.
+          self:_inject_once()
         elseif m.method == "Runtime.executionContextCreated" or
                m.method == "Page.frameNavigated" or
                m.method == "Runtime.executionContextsCleared" then
-          log("recreation (" .. self.title .. "): " .. m.method .. " -> re-bind+inject")
+          -- Context recreated (navigation / webhelper restart). Re-bind and
+          -- re-inject, but gate again on readiness so we never inject into a
+          -- still-initializing context (the boot black-screen cause).
+          log("recreation (" .. self.title .. "): " .. m.method .. " -> re-bind + re-inject (gated)")
           send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
-          self:inject()
+          self.injected = false
+          self:_probe_ready()
         end
       end
     end
