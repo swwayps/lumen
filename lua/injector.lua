@@ -12,6 +12,7 @@ local cdp = require("cdp")
 local inject = require("inject")
 local httpresp = require("httpresp")
 local polyfill = require("polyfill")
+local rpc = require("rpc")
 
 local injector = {}
 
@@ -167,7 +168,8 @@ function Conn:_on_binding(payload_str)
   local result
   local fn = self.registry and self.registry[req.fn]
   if type(fn) == "function" then
-    local ok_call, res = pcall(fn, req.args or {})
+    -- Millennium-style dispatch: args object -> alphabetical positional args.
+    local ok_call, res = rpc.dispatch(fn, req.args or {})
     if ok_call then
       result = (type(res) == "string") and res or json.encode(res)
     else
