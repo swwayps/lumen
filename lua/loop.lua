@@ -1,19 +1,13 @@
--- Unified single-process event loop: drives the RPC server accept + the CDP
--- injector cooperatively via socket.select, idle when nothing happens.
+-- Single-process event loop driving the multi-target CDP injector. The
+-- frontend talks to the backend via Runtime.addBinding (handled inside the
+-- injector), so there is NO loopback HTTP server / port / token anymore.
 local socket = require("socket")
-local session = require("session")
-local rpcserver = require("rpcserver")
 local injector = require("injector")
 
 local loop = {}
 
--- run{ session_path=, registry=, build_assets=, targets= }
+-- run{ registry=, build_assets=, targets=, target_urls= }
 function loop.run(opts)
-  local srv, port, token = session.start(opts.session_path)
-  srv:settimeout(0)
-  io.stderr:write("[lumen] rpc on 127.0.0.1:" .. port .. " (debug/non-CDP only)\n")
-  io.stderr:flush()
-
   local assets = opts.build_assets and opts.build_assets() or nil
   local inj = injector.new({
     targets = opts.targets,
@@ -21,24 +15,12 @@ function loop.run(opts)
     assets = assets,
     registry = opts.registry,
   })
-
   while true do
-    local fds = { srv }
-    for _, s in ipairs(inj:fds()) do fds[#fds + 1] = s end
-    -- 1s tick so the injector can discover/attach even with no socket events.
-    local readable = socket.select(fds, nil, 1)
-    for _, s in ipairs(readable) do
-      if s == srv then
-        local client = srv:accept()
-        if client then
-          local ok, err = pcall(rpcserver.handle_client, client, token, opts.registry)
-          if not ok then
-            io.stderr:write("[lumen] rpc handler error: " .. tostring(err) .. "\n")
-            io.stderr:flush()
-            pcall(function() client:close() end)
-          end
-        end
-      end
+    local fds = inj:fds()
+    if #fds > 0 then
+      socket.select(fds, nil, 1)
+    else
+      socket.sleep(1)   -- nothing attached yet; idle before re-discovering
     end
     inj:tick()
   end

@@ -9,7 +9,6 @@ local socket = require("socket")
 local json = require("json")
 local wsframe = require("wsframe")
 local cdp = require("cdp")
-local inject = require("inject")
 local httpresp = require("httpresp")
 local polyfill = require("polyfill")
 local rpc = require("rpc")
@@ -139,24 +138,20 @@ end
 
 function Conn:inject()
   local c, s, a = self.sock, self.session, self.assets
-  if a and a.polyfill then
+  if not a then return end
+  if a.polyfill then
     send_cmd(c, s, "Runtime.evaluate", { expression = a.polyfill, returnByValue = true })
   end
-  if a then
-    for i, css in ipairs(a.css or {}) do
-      local id = "lumen-css-" .. i
-      local w = "(function(){if(document.getElementById(" .. json.encode(id) ..
-        "))return;var s=document.createElement('style');s.id=" .. json.encode(id) ..
-        ";s.textContent=" .. json.encode(css) ..
-        ";(document.head||document.documentElement).appendChild(s);})()"
-      send_cmd(c, s, "Runtime.evaluate", { expression = w, returnByValue = true })
-    end
-    for _, js in ipairs(a.js or {}) do
-      send_cmd(c, s, "Runtime.evaluate", { expression = js, returnByValue = true })
-    end
-  else
-    send_cmd(c, s, "Runtime.evaluate",
-      { expression = inject.toast_payload("Lumen attached"), returnByValue = true })
+  for i, css in ipairs(a.css or {}) do
+    local id = "lumen-css-" .. i
+    local w = "(function(){if(document.getElementById(" .. json.encode(id) ..
+      "))return;var s=document.createElement('style');s.id=" .. json.encode(id) ..
+      ";s.textContent=" .. json.encode(css) ..
+      ";(document.head||document.documentElement).appendChild(s);})()"
+    send_cmd(c, s, "Runtime.evaluate", { expression = w, returnByValue = true })
+  end
+  for _, js in ipairs(a.js or {}) do
+    send_cmd(c, s, "Runtime.evaluate", { expression = js, returnByValue = true })
   end
 end
 
