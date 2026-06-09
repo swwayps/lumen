@@ -73,8 +73,13 @@ local loop = require("loop")
 loop.run({
   registry = registry,
   build_assets = build_assets,
-  -- LuaTools lives in the store web view; match it by URL (its title changes
-  -- per store page). SharedJSContext kept for logic/router.
-  targets = { "SharedJSContext" },
-  target_urls = { "store.steampowered.com" },
+  -- The LuaTools frontend is a WebKit/web-view script (Millennium loaded it via
+  -- add_browser_js into the store/community web views only). It must NOT be
+  -- injected into SharedJSContext (the main client shell): doing so breaks the
+  -- native top menubar (Steam/View/Friends/Games/Help), because luatools.js
+  -- monkey-patches history.pushState, observes document.body, and runs periodic
+  -- DOM scans the React shell never expects. So: no title targets; match the
+  -- web views by URL. Titles change per store page, hence URL matching.
+  targets = {},
+  target_urls = { "store.steampowered.com", "steamcommunity.com" },
 })

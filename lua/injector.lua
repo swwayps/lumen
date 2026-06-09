@@ -77,25 +77,14 @@ end
 
 -- List targets, returning all that match `wanted` (set of titles) OR whose URL
 -- contains one of `wanted_url` substrings (store pages change title per page, so
--- match the store by URL). Returns the target list.
+-- match the store by URL). Returns the target list. Delegates the (pure) match
+-- to cdp.select_targets so the selection rule is unit-tested (tools/test_inject).
 local function list_wanted_targets(wanted, wanted_url)
   local body = http_get("/json")
   if not body then return nil, "no /json (port 8080 closed?)" end
   local ok, targets = pcall(json.decode, body)
   if not ok or type(targets) ~= "table" then return nil, "bad /json" end
-  local out = {}
-  for _, t in ipairs(targets) do
-    if t.webSocketDebuggerUrl then
-      local match = t.title and wanted[t.title]
-      if not match and t.url and wanted_url then
-        for _, frag in ipairs(wanted_url) do
-          if t.url:find(frag, 1, true) then match = true; break end
-        end
-      end
-      if match then out[#out + 1] = t end
-    end
-  end
-  return out
+  return cdp.select_targets(targets, wanted, wanted_url)
 end
 
 -- Is Steam's main UI up (past login + first paint)? SharedJSContext exists even
