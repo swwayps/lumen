@@ -4,8 +4,6 @@ A lightweight, millennium-less bridge for slsteam-moon: a single static Lua
 binary that injects the LuaTools frontend through Steam's CEF remote-debugging
 endpoint (CDP) and hosts the Lua backend over a loopback RPC.
 
-Design: `../.kiro/research/lumen-design.md`. Status: Phase 1 (injector spike).
-
 ## Build (portable, any x86_64 distro, glibc >= 2.34)
     scripts/_build-portable.sh    # outputs bin/lumen
 
