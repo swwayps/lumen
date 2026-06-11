@@ -25,10 +25,19 @@ function millennium.steam_path()
     home .. "/.local/share/Steam",
     home .. "/.steam/debian-installation",
   }
+  -- Only accept a candidate that is a REAL, bootstrapped Steam root. Steam's
+  -- launcher drops steam.sh at the data-dir root on first run; its presence
+  -- means the dir is a genuine install and not an empty/phantom path. We must
+  -- NOT return a non-existent path here: callers (e.g. copy_webkit_files) will
+  -- mkdir under whatever we return, and creating ~/.steam/steam as a real
+  -- directory blocks Valve's bootstrap (it needs to put a SYMLINK there),
+  -- breaking Steam with "Couldn't set up Steam data".
   for _, p in ipairs(candidates) do
-    if fs.exists(p) then return p end
+    if fs.exists(fs.join(p, "steam.sh")) then return p end
   end
-  return candidates[1]
+  -- No bootstrapped Steam found. Return empty so callers skip rather than
+  -- materializing a phantom directory.
+  return ""
 end
 
 return millennium
