@@ -21,6 +21,9 @@ trap 'rm -rf "$STAGE"' EXIT
 cp bin/lumen "$STAGE/lumen"
 mkdir -p "$STAGE/lua"
 cp lua/*.lua "$STAGE/lua/"
+# Frontend asset(s) injected into the shell (e.g. lumen_menu.js) ship alongside
+# the .lua modules and are read at boot from LUMEN_LUA_DIR.
+cp lua/*.js "$STAGE/lua/" 2>/dev/null || true
 ( cd "$STAGE" && zip -qr "$OLDPWD/$OUT" lumen lua )
 echo "wrote $OUT"
 unzip -l "$OUT" | tail -n +2 | head

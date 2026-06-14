@@ -53,4 +53,62 @@ do
   assert_true(#picked == 1 and picked[1].title == "Friends", "explicit title match works")
 end
 
+-- 4. route_targets(): assigns each matched target the assets of the FIRST
+--    channel it matches, so the store web views get luatools.js while
+--    SharedJSContext gets a DIFFERENT (lumen-menu) bundle — and never the
+--    reverse. This is what lets the menu live in the shell without ever
+--    putting the invasive webkit script there.
+do
+  assert_true(type(cdp.route_targets) == "function", "cdp exposes route_targets")
+  local LUATOOLS = { js = { "luatools" } }
+  local MENU = { js = { "lumenmenu" } }
+  local channels = {
+    { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = LUATOOLS },
+    { titles = { ["SharedJSContext"] = true }, assets = MENU },
+  }
+  local routed = cdp.route_targets(SAMPLE, channels)
+  local by = {}
+  for _, r in ipairs(routed) do by[r.target.webSocketDebuggerUrl] = r.assets end
+  -- store + community web views -> luatools bundle
+  assert_true(by["ws://localhost:8080/devtools/page/C"] == LUATOOLS, "store gets luatools assets")
+  assert_true(by["ws://localhost:8080/devtools/page/D"] == LUATOOLS, "community gets luatools assets")
+  -- SharedJSContext -> menu bundle, NEVER luatools
+  assert_true(by["ws://localhost:8080/devtools/page/B"] == MENU, "SharedJSContext gets menu assets")
+  -- the bare "Steam" (about:blank) target matches nothing -> not routed
+  assert_true(by["ws://localhost:8080/devtools/page/A"] == nil, "unmatched target not routed")
+end
+
+-- 5. route_targets(): a target matching two channels takes the FIRST channel's
+--    assets (deterministic precedence), and is routed only once.
+do
+  local A = { id = "a" }
+  local B = { id = "b" }
+  local channels = {
+    { titles = { ["SharedJSContext"] = true }, assets = A },
+    { titles = { ["SharedJSContext"] = true }, assets = B },
+  }
+  local routed = cdp.route_targets(SAMPLE, channels)
+  local count, picked = 0, nil
+  for _, r in ipairs(routed) do
+    if r.target.title == "SharedJSContext" then count = count + 1; picked = r.assets end
+  end
+  assert_true(count == 1, "matched target routed exactly once")
+  assert_true(picked == A, "first channel wins")
+end
+
+-- 6. route_targets passes through a channel's `control` flag so the manager can
+--    tell which connection is the SharedJSContext control link (no assets).
+do
+  local channels = {
+    { titles = { ["SharedJSContext"] = true }, control = true },
+    { urls = { "store.steampowered.com" }, assets = { js = { "x" } } },
+  }
+  local routed = cdp.route_targets(SAMPLE, channels)
+  local ctrl
+  for _, r in ipairs(routed) do
+    if r.target.title == "SharedJSContext" then ctrl = r end
+  end
+  assert_true(ctrl ~= nil and ctrl.control == true, "control flag passed through")
+end
+
 print("test_inject: ALL PASS")

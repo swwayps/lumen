@@ -41,4 +41,19 @@ do
   assert_true(e.kind == "event" and e.method == "Runtime.executionContextCreated", "classifies event")
 end
 
+-- 5. route_targets passes through a channel's `control` flag (generic; used to
+--    tag special-purpose connections).
+do
+  local channels = {
+    { titles = { ["SharedJSContext"] = true }, control = true },
+    { urls = { "store.steampowered.com" }, assets = { js = { "x" } } },
+  }
+  local routed = cdp.route_targets(SAMPLE, channels)
+  local ctrl
+  for _, r in ipairs(routed) do
+    if r.target.title == "SharedJSContext" then ctrl = r end
+  end
+  assert_true(ctrl ~= nil and ctrl.control == true, "control flag passed through")
+end
+
 print("test_cdp: ALL PASS")

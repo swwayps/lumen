@@ -69,17 +69,63 @@ local function build_assets()
   return { polyfill = polyfill.build(), css = css, js = js }
 end
 
+-- The Lumen settings menu (the full-moon button + settings overlay) is a small,
+-- well-behaved script injected into the main client shell (SharedJSContext) —
+-- NOT luatools.js, which must never go there (see the channel split below). It
+-- talks to the same backend via the same binding polyfill. Register its two
+-- native RPCs (read/write slsteam-moon's config.yaml) into the dispatch table.
+require("slsmenu").register(registry)
+
+local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
+
+local function read_menu_js()
+  local menu_js = utils.read_file(lua_dir .. "/lumen_menu.js")
+  if not menu_js then
+    io.stderr:write("[lumen] WARN: lumen_menu.js not found in " .. lua_dir .. "\n")
+  end
+  return menu_js
+end
+
+-- build_menu_assets() -> assets for the main window ("Steam"): polyfill +
+-- lumen_menu.js (the full-moon button + settings overlay).
+local function build_menu_assets()
+  local js = {}
+  local menu_js = read_menu_js()
+  if menu_js then js[#js + 1] = menu_js end
+  return { polyfill = polyfill.build(), css = {}, js = js }
+end
+
+-- build_webview_assets() -> the store/community bundle: the LuaTools webkit
+-- frontend PLUS lumen_menu.js. The menu script is injected here too (in addition
+-- to the main window) so the settings overlay can render natively inside the web
+-- view that's on top — store/community views composite ABOVE the main-window
+-- DOM, so an overlay in the main window alone would be hidden behind them and
+-- couldn't receive input. lumen_menu.js adds no menubar button here (there's no
+-- menubar in a web view); it only exposes window.__lumenOpenOverlay so the
+-- sidecar can open/close it on demand. See injector State:broadcast_overlay.
+local function build_webview_assets()
+  local base = build_assets()
+  local menu_js = read_menu_js()
+  if menu_js then base.js[#base.js + 1] = menu_js end
+  return base
+end
+
 local loop = require("loop")
+-- Injection channels:
+--   * web views (store/community)  -> luatools.js + lumen_menu.js
+--   * the main client window ("Steam")  -> lumen_menu.js (carries the menubar
+--     button next to Help)
+-- The native menubar (Steam/View/Friends/Games/Help) lives in the main window
+-- target titled "Steam". luatools.js must NEVER reach the main window: it
+-- monkey-patches history.pushState, observes document.body and runs periodic
+-- DOM scans the React shell never expects, which breaks the menubar. The
+-- lumen_menu.js bundle is deliberately minimal and shell-safe. The menubar
+-- button broadcasts open/close to every context so the overlay renders in
+-- whichever view is currently on top (see injector State:broadcast_overlay).
 loop.run({
   registry = registry,
-  build_assets = build_assets,
-  -- The LuaTools frontend is a WebKit/web-view script (Millennium loaded it via
-  -- add_browser_js into the store/community web views only). It must NOT be
-  -- injected into SharedJSContext (the main client shell): doing so breaks the
-  -- native top menubar (Steam/View/Friends/Games/Help), because luatools.js
-  -- monkey-patches history.pushState, observes document.body, and runs periodic
-  -- DOM scans the React shell never expects. So: no title targets; match the
-  -- web views by URL. Titles change per store page, hence URL matching.
-  targets = {},
-  target_urls = { "store.steampowered.com", "steamcommunity.com" },
+  channels = {
+    { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = build_webview_assets() },
+    { titles = { ["Steam"] = true }, assets = build_menu_assets() },
+  },
 })
