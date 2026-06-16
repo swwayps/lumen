@@ -12,11 +12,11 @@ local cdp = require("cdp")
 local httpresp = require("httpresp")
 local polyfill = require("polyfill")
 local rpc = require("rpc")
+local cefport = require("cefport")
 
 local injector = {}
 
 local CEF_HOST = "127.0.0.1"
-local CEF_PORT = 8080
 local BINDING = polyfill.BINDING
 
 local function log(msg)
@@ -27,11 +27,26 @@ end
 io.stderr:setvbuf("no")
 io.stdout:setvbuf("no")
 
+-- Which TCP port Steam's CEF endpoint is on. slsteam-moon rewrites Steam's
+-- hard-coded 8080 to a free loopback port and publishes it to the contract
+-- file; we read it from there, falling back to 8080 (vanilla Steam, or
+-- slsteam-moon not active). Re-read each call (the file is tiny) so a port
+-- rotation on a webhelper restart is picked up; we only log on change.
+local g_logged_port = nil
+local function cef_port()
+  local p, from_file = cefport.resolve(cefport.read_contract, cefport.FALLBACK)
+  if from_file and p ~= g_logged_port then
+    log("CEF port (from contract file): " .. p)
+    g_logged_port = p
+  end
+  return p
+end
+
 -- ── HTTP GET against the CEF endpoint (keep-alive aware) ───────────────────
 local function http_get(path)
   local c = socket.tcp()
   c:settimeout(5)
-  if not c:connect(CEF_HOST, CEF_PORT) then c:close(); return nil end
+  if not c:connect(CEF_HOST, cef_port()) then c:close(); return nil end
   c:send("GET " .. path .. " HTTP/1.1\r\nHost: " .. CEF_HOST .. "\r\nAccept: */*\r\n\r\n")
   local buf, header_block, body = "", nil, nil
   while true do
@@ -61,7 +76,7 @@ local function ws_path(url) return (url:match("^ws://[^/]+(/.*)$")) end
 
 local function ws_handshake(c, path)
   c:send("GET " .. path .. " HTTP/1.1\r\n" ..
-         "Host: " .. CEF_HOST .. ":" .. CEF_PORT .. "\r\n" ..
+         "Host: " .. CEF_HOST .. ":" .. cef_port() .. "\r\n" ..
          "Upgrade: websocket\r\nConnection: Upgrade\r\n" ..
          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ..
          "Sec-WebSocket-Version: 13\r\n\r\n")
@@ -81,7 +96,7 @@ end
 -- to cdp.select_targets so the selection rule is unit-tested (tools/test_inject).
 local function list_wanted_targets(wanted, wanted_url)
   local body = http_get("/json")
-  if not body then return nil, "no /json (port 8080 closed?)" end
+  if not body then return nil, "no /json (CEF port " .. cef_port() .. " closed?)" end
   local ok, targets = pcall(json.decode, body)
   if not ok or type(targets) ~= "table" then return nil, "bad /json" end
   return cdp.select_targets(targets, wanted, wanted_url)
@@ -142,7 +157,7 @@ function Conn:connect()
   local path = ws_path(self.ws_url)
   if not path then return false end
   local c = socket.tcp(); c:settimeout(5)
-  if not c:connect(CEF_HOST, CEF_PORT) then return false end
+  if not c:connect(CEF_HOST, cef_port()) then return false end
   if not ws_handshake(c, path) then c:close(); return false end
   c:settimeout(0)
   self.sock = c
