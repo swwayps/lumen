@@ -90,16 +90,13 @@ local function ws_handshake(c, path)
   return resp:find("101", 1, true) ~= nil
 end
 
--- List targets, returning all that match `wanted` (set of titles) OR whose URL
--- contains one of `wanted_url` substrings (store pages change title per page, so
--- match the store by URL). Returns the target list. Delegates the (pure) match
--- to cdp.select_targets so the selection rule is unit-tested (tools/test_inject).
-local function list_wanted_targets(wanted, wanted_url)
+-- List ALL current CEF targets (decoded /json), or nil + reason.
+local function list_all_targets()
   local body = http_get("/json")
   if not body then return nil, "no /json (CEF port " .. cef_port() .. " closed?)" end
   local ok, targets = pcall(json.decode, body)
   if not ok or type(targets) ~= "table" then return nil, "bad /json" end
-  return cdp.select_targets(targets, wanted, wanted_url)
+  return targets
 end
 
 -- Is Steam's main UI up (past login + first paint)? SharedJSContext exists even
@@ -132,12 +129,13 @@ end
 local Conn = {}
 Conn.__index = Conn
 
-local function conn_new(target, assets, registry)
+local function conn_new(target, assets, registry, manager)
   return setmetatable({
     title = target.title,
     ws_url = target.webSocketDebuggerUrl,
     assets = assets,
     registry = registry,
+    manager = manager,      -- the State, for control relays (view hide/show)
     sock = nil,
     session = nil,
     buf = "",
@@ -208,17 +206,27 @@ function Conn:_on_binding(payload_str)
   if not ok or type(req) ~= "table" then return end
   local id = req.id
   local result
-  local fn = self.registry and self.registry[req.fn]
-  if type(fn) == "function" then
-    -- Millennium-style dispatch: args object -> alphabetical positional args.
-    local ok_call, res = rpc.dispatch(fn, req.args or {})
-    if ok_call then
-      result = (type(res) == "string") and res or json.encode(res)
-    else
-      result = '{"success":false,"error":' .. json.encode(tostring(res)) .. '}'
-    end
+  -- Control commands: open/close the Lumen overlay in EVERY injected context
+  -- (main window + store/community web views). Only the currently-visible view's
+  -- overlay is seen; the others are harmless no-ops behind hidden views. This
+  -- renders the overlay natively in whichever view is on top, so input works and
+  -- it survives minimize/restore — unlike hiding the embedded browser view.
+  if req.fn == "__lumenOpen" or req.fn == "__lumenClose" then
+    if self.manager then self.manager:broadcast_overlay(req.fn == "__lumenOpen") end
+    result = '{"ok":true}'
   else
-    result = '{"success":false,"error":"unknown method: ' .. tostring(req.fn) .. '"}'
+    local fn = self.registry and self.registry[req.fn]
+    if type(fn) == "function" then
+      -- Millennium-style dispatch: args object -> alphabetical positional args.
+      local ok_call, res = rpc.dispatch(fn, req.args or {})
+      if ok_call then
+        result = (type(res) == "string") and res or json.encode(res)
+      else
+        result = '{"success":false,"error":' .. json.encode(tostring(res)) .. '}'
+      end
+    else
+      result = '{"success":false,"error":"unknown method: ' .. tostring(req.fn) .. '"}'
+    end
   end
   -- Resolve the page-side promise. id + result passed as JS string literals.
   local expr = polyfill.resolve_js(json.encode(tostring(id)), json.encode(result))
@@ -280,19 +288,23 @@ end
 local State = {}
 State.__index = State
 
--- new{ targets={set of titles}, assets=, registry=, message= }
+-- new{ channels={ {titles=, urls=, assets=}, ... }, registry=, ... }
+-- Back-compat: a single { targets=, target_urls=, assets= } is accepted and
+-- folded into one channel.
 function injector.new(opts)
   opts = opts or {}
-  local wanted = {}
-  if opts.targets then
-    for _, t in ipairs(opts.targets) do wanted[t] = true end
-  else
-    wanted["SharedJSContext"] = true
+  local channels = opts.channels
+  if not channels then
+    local titles = {}
+    if opts.targets then
+      for _, t in ipairs(opts.targets) do titles[t] = true end
+    else
+      titles["SharedJSContext"] = true
+    end
+    channels = { { titles = titles, urls = opts.target_urls, assets = opts.assets } }
   end
   return setmetatable({
-    wanted = wanted,
-    wanted_url = opts.target_urls,
-    assets = opts.assets,
+    channels = channels,
     registry = opts.registry,
     conns = {},          -- ws_url -> Conn
     backoff = 1,
@@ -326,7 +338,7 @@ function State:_discover()
       return
     end
   end
-  local targets, err = list_wanted_targets(self.wanted, self.wanted_url)
+  local targets, err = list_all_targets()
   if not targets then
     self.next_attempt = now + self.backoff
     self.backoff = math.min(self.backoff * 2, 15)
@@ -334,12 +346,29 @@ function State:_discover()
   end
   self.backoff = 1
   self.next_attempt = 0
-  local seen = {}
-  for _, t in ipairs(targets) do
-    seen[t.webSocketDebuggerUrl] = true
+  -- Route each target to its channel's assets (store web views -> luatools.js;
+  -- SharedJSContext -> lumen-menu bundle). First matching channel wins.
+  local routed = cdp.route_targets(targets, self.channels)
+  for _, r in ipairs(routed) do
+    local t = r.target
     if not self.conns[t.webSocketDebuggerUrl] then
-      local conn = conn_new(t, self.assets, self.registry)
+      local conn = conn_new(t, r.assets, self.registry, self)
       if conn:connect() then self.conns[t.webSocketDebuggerUrl] = conn end
+    end
+  end
+end
+
+-- Open/close the Lumen overlay in every connected context that has it. The menu
+-- exposes window.__lumenOpenOverlay/__lumenCloseOverlay; contexts without it
+-- (none currently) no-op via the && guard. Broadcasting avoids having to detect
+-- which view is active — only the visible view's overlay is seen.
+function State:broadcast_overlay(open)
+  local fn = open and "__lumenOpenOverlay" or "__lumenCloseOverlay"
+  local expr = "window." .. fn .. "&&window." .. fn .. "()"
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.assets then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
     end
   end
 end

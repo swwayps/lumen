@@ -41,6 +41,29 @@ function cdp.select_targets(targets, wanted_titles, wanted_url_frags)
   return out
 end
 
+-- route_targets(targets, channels) -> array of { target=, assets= }.
+-- Each channel is { titles = <set>, urls = <array of url fragments>, assets = }.
+-- A target is routed to the FIRST channel it matches (by title or url fragment,
+-- same rule as select_targets) and routed at most once. This is what keeps the
+-- store web views and SharedJSContext on DIFFERENT asset bundles: the webkit
+-- frontend (luatools.js) goes only to the store/community channel, while the
+-- shell (SharedJSContext) gets the lumen-menu bundle — never the reverse.
+function cdp.route_targets(targets, channels)
+  local out = {}
+  if type(targets) ~= "table" or type(channels) ~= "table" then return out end
+  local seen = {}
+  for _, ch in ipairs(channels) do
+    local matched = cdp.select_targets(targets, ch.titles, ch.urls)
+    for _, t in ipairs(matched) do
+      if not seen[t.webSocketDebuggerUrl] then
+        seen[t.webSocketDebuggerUrl] = true
+        out[#out + 1] = { target = t, assets = ch.assets, control = ch.control }
+      end
+    end
+  end
+  return out
+end
+
 -- A session tracks the monotonically increasing CDP command id.
 function cdp.new_session()
   return setmetatable({ _id = 0 }, { __index = cdp._session })

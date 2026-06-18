@@ -63,23 +63,26 @@ local function encode(v)
   error("cannot encode " .. t)
 end
 
--- Decoder: small recursive-descent parser.
+-- Decoder: small recursive-descent parser. Bounded against EOF — malformed or
+-- truncated input raises an error (matching cjson) instead of looping forever.
 local function decode(str)
   local pos = 1
   local parse_value
   local function skip_ws() pos = str:find("[^ \t\r\n]", pos) or (#str + 1) end
   local function parse_string()
+    if str:sub(pos, pos) ~= '"' then error("json: expected string at " .. pos) end
     pos = pos + 1 -- opening quote
     local out = {}
-    while true do
+    while pos <= #str do
       local c = str:sub(pos, pos)
-      if c == '"' then pos = pos + 1; break
+      if c == '"' then pos = pos + 1; return table.concat(out)
       elseif c == "\\" then
         local n = str:sub(pos + 1, pos + 1)
+        if n == "" then break end  -- trailing backslash at EOF
         local map = { n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["/"] = "/" }
         if n == "u" then
           local hex = str:sub(pos + 2, pos + 5)
-          out[#out + 1] = string.char(tonumber(hex, 16) % 256)
+          out[#out + 1] = string.char((tonumber(hex, 16) or 0) % 256)
           pos = pos + 6
         else
           out[#out + 1] = map[n] or n
@@ -87,14 +90,16 @@ local function decode(str)
         end
       else out[#out + 1] = c; pos = pos + 1 end
     end
-    return table.concat(out)
+    error("json: unterminated string")
   end
   local function parse_number()
     local s, e = str:find("^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
+    if not s then error("json: invalid value at " .. pos) end
     local num = tonumber(str:sub(s, e)); pos = e + 1; return num
   end
   parse_value = function()
     skip_ws()
+    if pos > #str then error("json: unexpected end of input") end
     local c = str:sub(pos, pos)
     if c == "{" then
       pos = pos + 1; local obj = {}
@@ -102,11 +107,14 @@ local function decode(str)
       if str:sub(pos, pos) == "}" then pos = pos + 1; return obj end
       while true do
         skip_ws(); local key = parse_string()
-        skip_ws(); pos = pos + 1 -- colon
+        skip_ws()
+        if str:sub(pos, pos) ~= ":" then error("json: expected ':' at " .. pos) end
+        pos = pos + 1 -- colon
         obj[key] = parse_value()
         skip_ws()
         local d = str:sub(pos, pos); pos = pos + 1
         if d == "}" then break end
+        if d ~= "," then error("json: expected ',' or '}' at " .. (pos - 1)) end
       end
       return obj
     elseif c == "[" then
@@ -118,12 +126,13 @@ local function decode(str)
         skip_ws()
         local d = str:sub(pos, pos); pos = pos + 1
         if d == "]" then break end
+        if d ~= "," then error("json: expected ',' or ']' at " .. (pos - 1)) end
       end
       return arr
     elseif c == '"' then return parse_string()
-    elseif c == "t" then pos = pos + 4; return true
-    elseif c == "f" then pos = pos + 5; return false
-    elseif c == "n" then pos = pos + 4; return nil
+    elseif str:sub(pos, pos + 3) == "true"  then pos = pos + 4; return true
+    elseif str:sub(pos, pos + 4) == "false" then pos = pos + 5; return false
+    elseif str:sub(pos, pos + 3) == "null"  then pos = pos + 4; return nil
     else return parse_number() end
   end
   return parse_value()

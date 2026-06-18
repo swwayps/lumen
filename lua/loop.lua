@@ -13,13 +13,15 @@ local function log(msg)
   io.stderr:flush()
 end
 
--- run{ registry=, build_assets=, targets=, target_urls= }
+-- run{ registry=, build_assets=, targets=, target_urls=, channels= }
+-- If `channels` is given (each { titles=, urls=, assets= }) it is used directly;
+-- otherwise the single targets/target_urls/assets form is used (back-compat).
 function loop.run(opts)
-  local assets = opts.build_assets and opts.build_assets() or nil
   local inj = injector.new({
+    channels = opts.channels,
     targets = opts.targets,
     target_urls = opts.target_urls,
-    assets = assets,
+    assets = (not opts.channels) and opts.build_assets and opts.build_assets() or nil,
     registry = opts.registry,
   })
   -- Exit when Steam is genuinely closed (don't linger as a background process),
