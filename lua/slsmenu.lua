@@ -62,11 +62,27 @@ function slsmenu.set(path, json_str)
   return json.encode({ success = true })
 end
 
+-- reset(path) -> JSON string {success=...[, error]}. Restores all keys to their
+-- defaults and (on success) returns the fresh {schema, values} so the frontend
+-- can re-render the tab without a second round-trip.
+function slsmenu.reset(path)
+  local ok, err = slsconfig.reset_to_defaults(path)
+  if not ok then
+    return json.encode({ success = false, error = tostring(err) })
+  end
+  return json.encode({
+    success = true,
+    schema = slsconfig.SCHEMA,
+    values = slsconfig.read(path),
+  })
+end
+
 -- register(registry): install GetSlsConfig / SetSlsConfig bound to the real
 -- config path. Args from the dispatcher are ignored (the path is fixed).
 function slsmenu.register(registry)
   registry.GetSlsConfig = function() return slsmenu.get(slsconfig.default_path()) end
   registry.SetSlsConfig = function(json_str) return slsmenu.set(slsconfig.default_path(), json_str) end
+  registry.ResetSlsConfig = function() return slsmenu.reset(slsconfig.default_path()) end
   return registry
 end
 

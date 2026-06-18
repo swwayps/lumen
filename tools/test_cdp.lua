@@ -4,6 +4,14 @@ local cdp = require("cdp")
 
 local function assert_true(c, m) if not c then error("FAIL: " .. (m or "")) end end
 
+-- Shared target fixture for the routing test: one shell target (matched by
+-- title) and one store web view (matched by URL fragment).
+local SAMPLE = {
+  { title = "SharedJSContext", webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/B" },
+  { title = "Steam Store", url = "https://store.steampowered.com/app/1",
+    webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/D" },
+}
+
 -- 1. find_shared_js_context picks the target whose title is SharedJSContext.
 do
   local targets = {

@@ -132,6 +132,7 @@ Conn.__index = Conn
 local function conn_new(target, assets, registry, manager)
   return setmetatable({
     title = target.title,
+    url = target.url or "",
     ws_url = target.webSocketDebuggerUrl,
     assets = assets,
     registry = registry,
@@ -362,13 +363,52 @@ end
 -- exposes window.__lumenOpenOverlay/__lumenCloseOverlay; contexts without it
 -- (none currently) no-op via the && guard. Broadcasting avoids having to detect
 -- which view is active — only the visible view's overlay is seen.
+-- Open/close the Lumen overlay. WHERE it renders depends on what's on top:
+--   * a store/community web view is the CURRENT page -> render in that web view
+--     ONLY (it composites above the shell, so the shell's own overlay would be
+--     hidden behind it / misaligned -> the "split" bug);
+--   * otherwise (library/home and other shell pages) the content lives in the
+--     shell window itself -> render there.
+-- "Current" is decided from a fresh /json target list, NOT from self.conns: a
+-- web view conn can linger briefly after you navigate away (its socket isn't
+-- detected closed yet), and targeting that stale conn would render into a dead
+-- view. Close always goes to every context so nothing is left open behind.
 function State:broadcast_overlay(open)
   local fn = open and "__lumenOpenOverlay" or "__lumenCloseOverlay"
   local expr = "window." .. fn .. "&&window." .. fn .. "()"
-  for _, conn in pairs(self.conns) do
-    if conn.sock and conn.assets then
+
+  local function fire(conn)
+    if conn and conn.sock then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",
         { expression = expr, returnByValue = true })
+    end
+  end
+
+  if not open then
+    for _, conn in pairs(self.conns) do fire(conn) end
+    return
+  end
+
+  -- Which web-view targets exist RIGHT NOW (the active store/community page)?
+  local live_webview_ws = {}
+  local targets = list_all_targets()
+  if targets then
+    for _, t in ipairs(targets) do
+      local u = t.url or ""
+      if u:find("store.steampowered.com", 1, true) or u:find("steamcommunity.com", 1, true) then
+        live_webview_ws[t.webSocketDebuggerUrl] = true
+      end
+    end
+  end
+
+  local fired = false
+  for _, conn in pairs(self.conns) do
+    if conn.sock and live_webview_ws[conn.ws_url] then fire(conn); fired = true end
+  end
+  if not fired then
+    -- No active web view: the content is in the shell window itself.
+    for _, conn in pairs(self.conns) do
+      if conn.sock and conn.title == "Steam" then fire(conn) end
     end
   end
 end

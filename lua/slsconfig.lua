@@ -239,4 +239,42 @@ function slsconfig.write_key(path, key, value)
   return true
 end
 
+-- reset_to_defaults(path) -> ok, err. Rewrites EVERY SCHEMA key to its default
+-- value in one atomic write, preserving comments, ordering and unrelated keys
+-- (e.g. AdditionalApps). Same no-clobber guard as write_key: refuse on an
+-- empty/unreadable file or one that doesn't look like a real config.
+function slsconfig.reset_to_defaults(path)
+  if not path then return false, "no path" end
+  local f = io.open(path, "rb")
+  if not f then return false, "config.yaml not found" end
+  local data = f:read("*a") or ""
+  f:close()
+
+  if data == "" then
+    return false, "config empty/unreadable; refusing to overwrite"
+  end
+  if count_known_keys(data) < 3 then
+    return false, "config does not look valid; refusing to reset"
+  end
+
+  local out = data
+  for _, entry in ipairs(slsconfig.SCHEMA) do
+    out = slsconfig.set_key(out, entry.key, entry.default)
+  end
+
+  local tmp = string.format("%s.tmp.lumen.%d.%d.%d", path,
+    os.time(), (write_seq), math.random(100000, 999999))
+  write_seq = write_seq + 1
+  local w, werr = io.open(tmp, "wb")
+  if not w then return false, werr or "open failed" end
+  w:write(out)
+  w:close()
+  local ok, rerr = os.rename(tmp, path)
+  if not ok then
+    os.remove(tmp)
+    return false, rerr or "rename failed"
+  end
+  return true
+end
+
 return slsconfig

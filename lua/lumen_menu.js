@@ -18,6 +18,7 @@
   var BTN_ID = "lumen-moon-btn";
   var OVERLAY_ID = "lumen-settings-overlay";
   var STYLE_ID = "lumen-menu-styles";
+  var _escHandler = null; // active Escape listener, so closeOverlay can drop it
 
   function log() {
     try { console.log.apply(console, ["[lumen-menu]"].concat([].slice.call(arguments))); } catch (e) {}
@@ -43,6 +44,9 @@
       note: "Changes save instantly. slsteam-moon reloads its config live; a few options only take effect after you restart Steam.",
       warnAdvanced: "Advanced — leave it as is unless you understand what it does.",
       warnDanger: "Don't change this unless you know exactly what you're doing. It can break slsteam-moon.",
+      reset: "Reset to defaults",
+      resetConfirm: "Click again to confirm",
+      resetFail: "Reset failed: ",
       keys: {
         PlayNotOwnedGames: { label: "Play not-owned games", desc: "Lets Steam launch games that aren't in your account.", info: "You don't need to turn this on. Games you add through LuaTools are injected and install either way — this switch doesn't change that." },
         DisableFamilyShareLock: { label: "Disable Family Sharing lock", desc: "Stops Family Sharing from locking your games when someone else is playing on a shared library." },
@@ -64,6 +68,9 @@
       note: "As mudanças são salvas na hora. O slsteam-moon recarrega a config ao vivo; algumas opções só valem depois de reiniciar a Steam.",
       warnAdvanced: "Avançado — deixe como está, a menos que entenda o que faz.",
       warnDanger: "Não mexa se você não souber exatamente o que está fazendo. Esta opção pode quebrar o funcionamento do slsteam-moon.",
+      reset: "Restaurar padrões",
+      resetConfirm: "Clique de novo pra confirmar",
+      resetFail: "Falha ao restaurar: ",
       keys: {
         PlayNotOwnedGames: { label: "Jogar jogos não adquiridos", desc: "Permite que a Steam abra jogos que não estão na sua conta.", info: "Você não precisa ativar isso. Os jogos que você adiciona pelo LuaTools são injetados e instalam de qualquer jeito — esta opção não muda isso." },
         DisableFamilyShareLock: { label: "Desativar trava do Family Share", desc: "Impede que o Compartilhamento Familiar trave seus jogos quando outra pessoa está jogando numa biblioteca compartilhada." },
@@ -114,7 +121,7 @@
       "border:1px solid rgba(0,0,0,.5);}",
       // sidebar
       ".lumen-side{flex:0 0 200px;background:#2a2d34;display:flex;flex-direction:column;",
-      "padding-top:8px;overflow-y:auto;}",
+      "padding-top:8px;overflow-y:auto;overscroll-behavior:contain;}",
       ".lumen-side-title{color:#1a9fff;font-size:17px;font-weight:700;text-transform:uppercase;",
       "padding:14px 24px 16px;}",
       ".lumen-tab{display:flex;align-items:center;gap:12px;padding:10px 8px 10px 24px;",
@@ -129,7 +136,12 @@
       ".lumen-ctop .h{flex:1;color:#fff;font-size:22px;font-weight:700;}",
       ".lumen-ctop .x{cursor:pointer;color:#b8bcbf;font-size:18px;padding:2px 8px;border-radius:3px;}",
       ".lumen-ctop .x:hover{color:#fff;background:rgba(255,255,255,.08);}",
-      ".lumen-body{padding:0 24px 22px;overflow-y:auto;overflow-x:hidden;}",
+      ".lumen-ctop .reset{cursor:pointer;color:#b8bcbf;font-size:12px;font-weight:600;" +
+        "margin-right:10px;padding:5px 12px;border-radius:4px;white-space:nowrap;" +
+        "border:1px solid rgba(255,255,255,.14);transition:.12s;}",
+      ".lumen-ctop .reset:hover{color:#fff;background:rgba(255,255,255,.08);}",
+      ".lumen-ctop .reset.confirm{color:#ffb84d;border-color:#ffb84d;}",
+      ".lumen-body{padding:0 24px 22px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;}",
       ".lumen-note{color:#8f98a0;font-size:12px;padding:0 0 10px;line-height:1.4;}",
       ".lumen-row{display:flex;align-items:flex-start;gap:14px;padding:12px 2px;",
       "border-bottom:1px solid rgba(255,255,255,.06);}",
@@ -164,6 +176,10 @@
   function closeOverlay() {
     var o = document.getElementById(OVERLAY_ID);
     if (o) o.remove();
+    if (_escHandler) {
+      document.removeEventListener("keydown", _escHandler, true);
+      _escHandler = null;
+    }
   }
   // Ask the sidecar to close the overlay in EVERY context (the visible one and
   // the hidden duplicates in the other views).
@@ -288,6 +304,7 @@
   function openOverlay() {
     if (document.getElementById(OVERLAY_ID)) return;
     injectStyles();
+    var S0 = I18N[pickLang()] || I18N.en;
 
     var overlay = document.createElement("div");
     overlay.id = OVERLAY_ID;
@@ -327,7 +344,45 @@
     x.className = "x";
     x.textContent = "\u2715";
     x.addEventListener("click", requestClose);
-    ctop.appendChild(h); ctop.appendChild(x);
+
+    // Reset-to-defaults button: header-right (always visible while the list
+    // scrolls). Two-click confirm so it can't fire by accident; on success the
+    // backend returns fresh {schema,values} and we re-render the tab in place.
+    var resetBtn = document.createElement("div");
+    resetBtn.className = "reset";
+    resetBtn.textContent = S0.reset || "Reset to defaults";
+    var armed = false, armTimer = null;
+    var disarm = function () {
+      armed = false;
+      if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+      resetBtn.classList.remove("confirm");
+      resetBtn.textContent = S0.reset || "Reset to defaults";
+    };
+    resetBtn.addEventListener("click", function () {
+      if (!armed) {
+        armed = true;
+        resetBtn.classList.add("confirm");
+        resetBtn.textContent = S0.resetConfirm || "Click again to confirm";
+        armTimer = setTimeout(disarm, 3000);
+        return;
+      }
+      disarm();
+      call("ResetSlsConfig", {})
+        .then(function (res) {
+          var cfg = JSON.parse(res);
+          if (!cfg || !cfg.success) throw new Error((cfg && cfg.error) || "reset failed");
+          renderConfig(body, cfg);
+        })
+        .catch(function (e) {
+          body.textContent = "";
+          var err = document.createElement("div");
+          err.className = "lumen-err";
+          err.textContent = (S0.resetFail || "Reset failed: ") + (e && e.message ? e.message : e);
+          body.appendChild(err);
+        });
+    });
+
+    ctop.appendChild(h); ctop.appendChild(resetBtn); ctop.appendChild(x);
 
     var body = document.createElement("div");
     body.className = "lumen-body";
@@ -355,10 +410,19 @@
       });
 
     var onKey = function (e) {
-      if (e.key === "Escape") { requestClose(); document.removeEventListener("keydown", onKey, true); }
+      if (e.key === "Escape") { requestClose(); }
     };
+    _escHandler = onKey;
     document.addEventListener("keydown", onKey, true);
   }
+
+  // Exposed so the sidecar (injector State:broadcast_overlay) can open/close the
+  // overlay. The injector decides WHICH context renders it: the active store/
+  // community web view if one is on top, otherwise the shell window (where the
+  // library/home content itself lives). So this just opens locally on request;
+  // the shell is told to open only when no web view is covering its content.
+  window.__lumenOpenOverlay = openOverlay;
+  window.__lumenCloseOverlay = closeOverlay;
 
   // ── menubar button ──────────────────────────────────────────────────────────
   var MENU_LABELS = ["Steam", "View", "Friends", "Games", "Help"];
@@ -406,7 +470,9 @@
     b.addEventListener("click", function (e) {
       e.preventDefault();
       e.stopPropagation();
-      openOverlay();
+      // Broadcast so the overlay opens in whichever view is on top (store /
+      // community web views composite above this menubar window).
+      requestOpen();
     });
     return b;
   }
@@ -458,6 +524,17 @@
     else log("menubar not found; giving up (graceful)");
   }
 
-  tryAnchor();
+  // Only anchor the menubar button in the main client shell. This script is
+  // ALSO injected into the store/community web views (so the overlay can render
+  // on top of them), but those have no Steam menubar — and their own page nav
+  // can contain text matching our labels, which made findMenubar() inject a
+  // stray moon button into the page header (the "gap" bug). In a web view we
+  // only need the overlay globals, already exposed above; skip the button.
+  var __lumenHost = (typeof location !== "undefined" && location.hostname) || "";
+  if (__lumenHost === "store.steampowered.com" || __lumenHost === "steamcommunity.com") {
+    log("web view (" + __lumenHost + "): overlay-only, no menubar button");
+  } else {
+    tryAnchor();
+  }
   log("loaded");
 })();

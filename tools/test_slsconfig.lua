@@ -208,4 +208,40 @@ do
   os.remove(tmp)
 end
 
+-- ── reset_to_defaults() restores EVERY schema key to its default ───────────
+do
+  local tmp = os.tmpname()
+  local f = assert(io.open(tmp, "wb"))
+  -- a comment + an unrelated block + several schema keys at non-default values
+  f:write("# my notes\nAdditionalApps:\n  - 480\nPlayNotOwnedGames: yes\n" ..
+          "DisableFamilyShareLock: no\nLogLevel: 5\nUseWhitelist: yes\n")
+  f:close()
+  local ok = slsconfig.reset_to_defaults(tmp)
+  assert_true(ok, "reset ok on a valid config")
+  local v = slsconfig.read(tmp)
+  assert_eq(v.PlayNotOwnedGames, false, "PlayNotOwnedGames -> default")
+  assert_eq(v.DisableFamilyShareLock, true, "DisableFamilyShareLock -> default")
+  assert_eq(v.UseWhitelist, false, "UseWhitelist -> default")
+  assert_eq(v.LogLevel, 2, "LogLevel -> default")
+  local rf = io.open(tmp, "rb"); local body = rf:read("*a"); rf:close()
+  assert_true(body:find("# my notes", 1, true) ~= nil, "comment preserved")
+  assert_true(body:find("AdditionalApps", 1, true) ~= nil and body:find("480", 1, true) ~= nil,
+              "unrelated block preserved")
+  os.remove(tmp)
+end
+
+-- ── reset_to_defaults() refuses a non-config blob (no clobber) ─────────────
+do
+  local tmp = os.tmpname()
+  local f = assert(io.open(tmp, "wb")); f:write("just some garbage\n"); f:close()
+  local ok = slsconfig.reset_to_defaults(tmp)
+  assert_true(not ok, "reset refuses a non-config blob")
+  os.remove(tmp)
+end
+
+-- ── reset_to_defaults() refuses a missing file ─────────────────────────────
+do
+  assert_true(not slsconfig.reset_to_defaults("/no/such/dir/cfg.yaml"), "reset refuses missing file")
+end
+
 print("test_slsconfig: ALL PASS")

@@ -71,4 +71,17 @@ do
   os.remove(p)
 end
 
+-- ── reset() restores defaults and returns fresh values ────────────────────
+do
+  local p = write_tmp("PlayNotOwnedGames: yes\nDisableFamilyShareLock: no\nLogLevel: 5\n")
+  local res = json.decode(slsmenu.reset(p))
+  assert_eq(res.success, true, "reset success")
+  assert_eq(res.values.PlayNotOwnedGames, false, "default in returned values")
+  assert_eq(res.values.LogLevel, 2, "loglevel default in returned values")
+  assert_true(type(res.schema) == "table" and #res.schema > 0, "schema returned for re-render")
+  -- persisted on disk
+  assert_eq(json.decode(slsmenu.get(p)).values.DisableFamilyShareLock, true, "persisted default")
+  os.remove(p)
+end
+
 print("test_slsmenu: ALL PASS")
