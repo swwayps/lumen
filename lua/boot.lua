@@ -127,5 +127,9 @@ loop.run({
   channels = {
     { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = build_webview_assets() },
     { titles = { ["Steam"] = true }, assets = build_menu_assets() },
+    -- Control-only link to SharedJSContext (NO assets injected): the only context
+    -- with SteamClient. Used to relay SteamClient.Apps.SetAppLaunchOptions on
+    -- behalf of the store-page online-fix flow (which can't reach SteamClient).
+    { titles = { ["SharedJSContext"] = true }, control = true },
   },
 })

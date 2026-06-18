@@ -215,6 +215,18 @@ function Conn:_on_binding(payload_str)
   if req.fn == "__lumenOpen" or req.fn == "__lumenClose" then
     if self.manager then self.manager:broadcast_overlay(req.fn == "__lumenOpen") end
     result = '{"ok":true}'
+  elseif req.fn == "__lumenSetLaunchOptions" then
+    -- Relay: set a game's launch options. SteamClient lives only in
+    -- SharedJSContext, not the store web view where the online-fix flow runs.
+    local a = req.args or {}
+    local appid = tonumber(a.appid)
+    local options = a.options
+    if appid and type(options) == "string" and self.manager
+        and self.manager:set_launch_options(appid, options) then
+      result = '{"ok":true}'
+    else
+      result = '{"ok":false}'
+    end
   else
     local fn = self.registry and self.registry[req.fn]
     if type(fn) == "function" then
@@ -363,6 +375,29 @@ end
 -- exposes window.__lumenOpenOverlay/__lumenCloseOverlay; contexts without it
 -- (none currently) no-op via the && guard. Broadcasting avoids having to detect
 -- which view is active — only the visible view's overlay is seen.
+-- Relay a SteamClient.Apps.SetAppLaunchOptions call into SharedJSContext (the
+-- only context with SteamClient). Fire-and-forget: returns true if we have a
+-- SharedJSContext control conn to run it on. `options` is JSON-encoded into a JS
+-- string literal so quotes/percent signs survive.
+function State:set_launch_options(appid, options)
+  -- Set the (already-merged) launch options. The merge with the user's existing
+  -- options is done in the plugin backend (it reads the reliable source,
+  -- localconfig.vdf, and uses fix_overlays.merge_launch_options); here we just
+  -- write. SteamClient lives only in SharedJSContext. Fire-and-forget.
+  local expr = "(function(){try{if(window.SteamClient&&SteamClient.Apps&&"
+    .. "typeof SteamClient.Apps.SetAppLaunchOptions==='function'){"
+    .. "SteamClient.Apps.SetAppLaunchOptions(" .. tostring(tonumber(appid) or 0)
+    .. "," .. json.encode(options) .. ");return true;}return false;}catch(e){return false;}})()"
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+
 -- Open/close the Lumen overlay. WHERE it renders depends on what's on top:
 --   * a store/community web view is the CURRENT page -> render in that web view
 --     ONLY (it composites above the shell, so the shell's own overlay would be
