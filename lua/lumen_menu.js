@@ -56,9 +56,11 @@
         fromLua: "from LuaTools",
         latest: "Latest (auto-update)",
         locked: "Locked",
-        dlcs: "DLCs",
+        pinned: "pinned",
+        advanced: "Advanced",
         back: "Back",
-        dlcTitle: "Components & DLC",
+        dlcTitle: "Depots",
+        depotWarn: "Advanced \u2014 don't change anything here unless you know what you're doing. Forcing one depot to a version that doesn't match the rest of the game can break it.",
         emptyDlc: "You don't have this game's manifests, or it has no DLCs.",
         none: "No LuaTools games with archived versions yet.",
         loadFail: "Failed to load game versions: ",
@@ -98,9 +100,11 @@
         fromLua: "do LuaTools",
         latest: "Mais recente (atualizar)",
         locked: "Travado",
-        dlcs: "DLCs",
+        pinned: "fixado",
+        advanced: "Avan\u00e7ado",
         back: "Voltar",
-        dlcTitle: "Componentes e DLC",
+        dlcTitle: "Depots",
+        depotWarn: "Avan\u00e7ado \u2014 n\u00e3o mexa aqui se voc\u00ea n\u00e3o souber o que est\u00e1 fazendo. For\u00e7ar um depot numa vers\u00e3o que n\u00e3o bate com o resto do jogo pode quebr\u00e1-lo.",
         emptyDlc: "Voc\u00ea n\u00e3o tem os manifests desse jogo, ou ele n\u00e3o tem DLCs.",
         none: "Nenhum jogo do LuaTools com vers\u00f5es arquivadas ainda.",
         loadFail: "Falha ao carregar vers\u00f5es: ",
@@ -235,6 +239,7 @@
       ".lumen-back{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#b8bcbf;",
       "font-size:13px;}",
       ".lumen-back:hover{color:#fff;}",
+      ".lumen-sub-title{color:#fff;font-size:16px;font-weight:700;margin:10px 0 2px;}",
       ".lumen-empty{color:#8f98a0;font-size:13px;padding:20px 4px;text-align:center;}",
     ].join("");
     (document.head || document.documentElement).appendChild(s);
@@ -465,6 +470,13 @@
     back.addEventListener("click", onBack);
     body.appendChild(back);
 
+    var hd = document.createElement("div");
+    hd.className = "lumen-sub-title";
+    hd.textContent = GU.dlcTitle;
+    body.appendChild(hd);
+    // Danger warning: per-depot overrides can mix incompatible versions.
+    addLine(body, GU.depotWarn, "danger", "\u26A0");
+
     if (!game.depots || game.depots.length === 0) {
       var empty = document.createElement("div");
       empty.className = "lumen-empty";
@@ -501,6 +513,7 @@
 
       d.versions.forEach(function (v) {
         var badges = [];
+        if (v.pinned) badges.push({ cls: "lock", text: GU.pinned });
         if (v.installed) badges.push({ cls: "cur", text: GU.current });
         if (v.fromLuaTools) badges.push({ cls: "lt", text: GU.fromLua });
         vers.appendChild(verRow({
@@ -554,7 +567,7 @@
 
     var dlcBtn = document.createElement("div");
     dlcBtn.className = "lumen-dlcs-btn";
-    dlcBtn.textContent = GU.dlcs + " \u203a";
+    dlcBtn.textContent = GU.advanced + " \u203a";
     head.appendChild(dlcBtn);
     wrap.appendChild(head);
 
