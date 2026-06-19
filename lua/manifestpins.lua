@@ -22,6 +22,20 @@ local json = require("json")
 
 local mp = {}
 
+-- ── Steam library folders ────────────────────────────────────────────────
+-- A Steam install can span several library folders (e.g. a second drive). The
+-- appmanifest_<appid>.acf for a game lives in the steamapps/ of whichever
+-- library it's installed on — not necessarily the primary root. parse the
+-- "path" entries from libraryfolders.vdf so installed/workshop lookups search
+-- every library. Pure parser, IO done by library_roots.
+function mp.parse_library_paths(text)
+  local paths = {}
+  for p in (text or ""):gmatch('"path"%s*"([^"]+)"') do
+    paths[#paths + 1] = (p:gsub("\\\\", "/"))
+  end
+  return paths
+end
+
 -- ── manifest creation_time ──────────────────────────────────────────────────
 -- ContentManifestMetadata magic 0x1F4812BE, stored little-endian -> bytes
 -- BE 12 48 1F, followed by a uint32 LE length and that many protobuf bytes.
@@ -231,7 +245,43 @@ function mp.splice_pins(text, pins)
   return body
 end
 
+-- ── shared-runtime depot detection ───────────────────────────────────────
+-- Steamworks Common Redistributables (app 228980) ship as shared depots with
+-- FIXED ids reused by every game (DirectX, VC++, .NET, ...). They carry ancient
+-- manifest dates and aren't part of the game, so the UI labels them as shared
+-- instead of showing a bare id + a confusing old date.
+local SHARED_DEPOTS = {}
+for _, id in ipairs({
+  228981, 228982, 228983, 228984, 228985, 228986, 228987, 228988, 228989, 228990,
+  229000, 229001, 229002, 229003, 229004, 229005, 229006, 229007,
+  229010, 229011, 229012, 229020, 229030, 229031, 229032, 229033,
+}) do SHARED_DEPOTS[id] = true end
+
+function mp.is_shared_depot(depot)
+  return SHARED_DEPOTS[depot] == true
+end
+
+-- ── workshop-depot detection ─────────────────────────────────────────────
+-- Steam's Workshop content depot has id == appid and lives under
+-- steamapps/workshop/content/<appid>, separate from the game's content depots
+-- (which are listed in appmanifest InstalledDepots). Its archived manifests are
+-- workshop snapshots, NOT game builds, so the frontend hides them from a game's
+-- version timeline. Pure decision; the workshop-presence check is done via IO.
+function mp.is_workshop_depot(appid, depot, app_has_workshop)
+  return depot == appid and app_has_workshop == true
+end
+
 -- ── as-of-date selection ──────────────────────────────────────────────────
+-- end_of_day(ts) -> the last second (23:59:59 UTC) of the calendar day holding
+-- ts. A game-level pin targets a DAY (the build timeline shows one row per
+-- day), so the cutoff must include every depot's build from that day — sibling
+-- depots of the same release are commonly packaged seconds/minutes apart, and a
+-- raw exact-timestamp cutoff would drop the ones built just after the base depot.
+function mp.end_of_day(ts)
+  ts = math.floor(tonumber(ts) or 0)
+  return ts - (ts % 86400) + 86399
+end
+
 -- select_as_of(versions_by_depot, T) -> { [depot]="gid" } picking, per depot,
 -- the newest archived gid whose date <= T. Depots with nothing <= T are omitted.
 function mp.select_as_of(versions_by_depot, T)
@@ -312,6 +362,26 @@ local function read_file(path)
   return d
 end
 
+-- All Steam library roots: the primary steam_root plus every "path" listed in
+-- its libraryfolders.vdf (deduped, primary first). Games on a second drive
+-- have their appmanifest there, not under the primary root.
+local function library_roots(steam_root)
+  local roots, seen = {}, {}
+  local function add(r) if r and r ~= "" and not seen[r] then seen[r] = true; roots[#roots + 1] = r end end
+  add(steam_root)
+  if steam_root then
+    for _, vdf in ipairs({ steam_root .. "/steamapps/libraryfolders.vdf",
+                           steam_root .. "/config/libraryfolders.vdf" }) do
+      local t = read_file(vdf)
+      if t then
+        for _, p in ipairs(mp.parse_library_paths(t)) do add(p) end
+        break
+      end
+    end
+  end
+  return roots
+end
+
 -- Count ManifestPins-irrelevant known keys so we never clobber a config we
 -- failed to read (mirror slsconfig's no-clobber guard).
 local function looks_like_config(text)
@@ -349,9 +419,14 @@ local function write_pins(config_path, pins)
 end
 
 -- Currently-installed gid per depot for an app, from appmanifest_<appid>.acf.
+-- Searches every Steam library folder (the game may be on a second drive).
 local function installed_gids(steam_root, appid)
   local out = {}
-  local acf = read_file((steam_root or "") .. "/steamapps/appmanifest_" .. appid .. ".acf")
+  local acf
+  for _, root in ipairs(library_roots(steam_root)) do
+    acf = read_file(root .. "/steamapps/appmanifest_" .. appid .. ".acf")
+    if acf then break end
+  end
   if not acf then return out end
   -- find the InstalledDepots block, then each "depot" { ... "manifest" "gid" }
   local block = acf:match('"InstalledDepots"%s*(%b{})')
@@ -361,6 +436,16 @@ local function installed_gids(steam_root, appid)
     if gid then out[math.tointeger(tonumber(depot))] = gid end
   end
   return out
+end
+
+-- Does this app have Workshop content on disk? Presence of the app's
+-- appworkshop_<appid>.acf (in any library's steamapps/workshop) is the signal.
+local function app_has_workshop(steam_root, appid)
+  for _, root in ipairs(library_roots(steam_root)) do
+    local f = io.open(root .. "/steamapps/workshop/appworkshop_" .. appid .. ".acf", "rb")
+    if f then f:close(); return true end
+  end
+  return false
 end
 
 -- Archived versions for a depot: scan manifests_dir for <depot>_<gid>.manifest.
@@ -382,7 +467,7 @@ local function archived_versions(manifests_dir, depot)
     if gid then
       local bytes = read_file(manifests_dir .. "/" .. name)
       local ct = bytes and mp.creation_time_from_bytes(bytes) or nil
-      versions[#versions + 1] = { gid = gid, date = ct or 0 }
+      versions[#versions + 1] = { gid = gid, date = ct or 0, size = bytes and #bytes or 0 }
     end
   end
   return versions
@@ -416,6 +501,7 @@ function mp.build_games(ctx)
       local parsed = mp.parse_lua(lua)
       local installed = installed_gids(ctx.steam_root, appid)
       local appPins = pins[appid] or { locked = false, depots = {} }
+      local has_workshop = app_has_workshop(ctx.steam_root, appid)
 
       local depots = {}
       for depot, info in pairs(parsed.depots) do
@@ -431,21 +517,85 @@ function mp.build_games(ctx)
             depot = depot,
             fromLuaTools = info.manifestid,
             installed = installed[depot],
+            workshop = mp.is_workshop_depot(appid, depot, has_workshop),
+            shared = mp.is_shared_depot(depot),
             versions = versions,
           }
         end
       end
       table.sort(depots, function(a, b) return a.depot < b.depot end)
 
-      games[#games + 1] = {
-        appid = appid,
-        locked = appPins.locked or false,
-        depots = depots,
-        dlc_appids = parsed.dlc_appids,
-      }
+      -- Skip games with no archived versions at all: there's nothing to show or
+      -- pin, and an empty depot list would serialize as `{}` (not `[]`) and trip
+      -- the frontend. (Also keeps the list clean after a manifest purge.)
+      if #depots > 0 then
+        games[#games + 1] = {
+          appid = appid,
+          locked = appPins.locked or false,
+          depots = depots,
+          dlc_appids = parsed.dlc_appids,
+        }
+      end
     end
   end
   return games
+end
+
+-- ── manifest storage management ──────────────────────────────────────────
+-- delete_manifest(dir, depot, gid) -> ok, err. Removes a single archived
+-- <depot>_<gid>.manifest. depot/gid must be all-digits (guards against path
+-- traversal — the values flow in from the frontend).
+function mp.delete_manifest(manifests_dir, depot, gid)
+  if not manifests_dir then return false, "no manifests dir" end
+  local d = math.tointeger(tonumber(depot))
+  gid = tostring(gid)
+  if not d or not gid:match("^%d+$") then return false, "bad depot/gid" end
+  local path = manifests_dir .. "/" .. d .. "_" .. gid .. ".manifest"
+  local ok, err = os.remove(path)
+  if not ok then return false, err or "remove failed" end
+  return true
+end
+
+-- clear_manifests(ctx) -> removed_count, freed_bytes. Deletes every archived
+-- manifest EXCEPT the ones currently installed or pinned (those are still
+-- needed: the pinned one backs the redirect, and we keep installed defensively).
+-- Frees the rollback history without breaking the current state.
+function mp.clear_manifests(ctx)
+  ctx = ctx or mp.default_ctx()
+  if not ctx.manifests_dir then return 0, 0 end
+
+  local keep = {}
+  local games = mp.build_games(ctx)
+  for _, g in ipairs(games) do
+    for _, dep in ipairs(g.depots) do
+      for _, v in ipairs(dep.versions) do
+        if v.installed or v.pinned then keep[dep.depot .. "_" .. v.gid] = true end
+      end
+    end
+  end
+
+  local names = {}
+  local ok_lfs, lfs = pcall(require, "lfs")
+  if ok_lfs then
+    for entry in lfs.dir(ctx.manifests_dir) do names[#names + 1] = entry end
+  else
+    local p = io.popen("ls -1 '" .. ctx.manifests_dir .. "' 2>/dev/null")
+    if p then for line in p:lines() do names[#names + 1] = line end; p:close() end
+  end
+
+  local removed, freed = 0, 0
+  for _, name in ipairs(names) do
+    local depot, gid = name:match("^(%d+)_(%d+)%.manifest$")
+    if depot and not keep[depot .. "_" .. gid] then
+      local path = ctx.manifests_dir .. "/" .. name
+      local data = read_file(path)
+      if os.remove(path) then
+        removed = removed + 1
+        freed = freed + (data and #data or 0)
+      end
+    end
+  end
+  return removed, freed
 end
 
 -- ── RPC methods (each returns a JSON string) ────────────────────────────────
@@ -477,14 +627,21 @@ function mp.set_game_pin_rpc(ctx, json_str)
   local versions_by_depot = {}
   local gid_date = {}
   for _, d in ipairs(game.depots) do
-    versions_by_depot[d.depot] = d.versions
-    for _, v in ipairs(d.versions) do gid_date[v.gid] = v.date end
+    -- Skip the workshop depot: its snapshots aren't game builds, and locking the
+    -- game version must not downgrade the user's workshop content.
+    if not d.workshop then
+      versions_by_depot[d.depot] = d.versions
+      for _, v in ipairs(d.versions) do gid_date[v.gid] = v.date end
+    end
   end
 
   local T = req.date and as_int(req.date) or (req.gid and gid_date[tostring(req.gid)])
   if not T then return err("could not resolve build date") end
 
-  local depot_gids = mp.select_as_of(versions_by_depot, T)
+  -- Expand the cutoff to the end of the selected day so every depot's build from
+  -- that day is pinned, not just the base depot's exact second (sibling depots
+  -- in a release are packaged a little later — see end_of_day).
+  local depot_gids = mp.select_as_of(versions_by_depot, mp.end_of_day(T))
   if next(depot_gids) == nil then return err("no archived build at or before that date") end
 
   local pins = mp.parse_pins(read_file(ctx.config_path) or "")
@@ -531,6 +688,26 @@ function mp.clear_dlc_pin_rpc(ctx, json_str)
   return json.encode({ success = true })
 end
 
+-- DeleteManifest{depot, gid}: remove a single archived version's manifest.
+function mp.delete_manifest_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or not req.depot or not req.gid then
+    return err("bad request")
+  end
+  local dok, derr = mp.delete_manifest(ctx.manifests_dir, req.depot, req.gid)
+  if not dok then return err(derr) end
+  return json.encode({ success = true })
+end
+
+-- ClearManifests{}: drop all archived manifests except installed/pinned ones.
+function mp.clear_manifests_rpc(ctx)
+  ctx = ctx or mp.default_ctx()
+  local ok, removed, freed = pcall(mp.clear_manifests, ctx)
+  if not ok then return err(removed) end
+  return json.encode({ success = true, removed = removed, freed = freed })
+end
+
 -- register(registry): install the five Game Updates RPCs bound to the real ctx.
 function mp.register(registry)
   registry.GetGameUpdates = function() return mp.get_game_updates(mp.default_ctx()) end
@@ -538,6 +715,8 @@ function mp.register(registry)
   registry.SetDlcPin = function(j) return mp.set_dlc_pin_rpc(mp.default_ctx(), j) end
   registry.ClearGamePin = function(j) return mp.clear_game_pin_rpc(mp.default_ctx(), j) end
   registry.ClearDlcPin = function(j) return mp.clear_dlc_pin_rpc(mp.default_ctx(), j) end
+  registry.DeleteManifest = function(j) return mp.delete_manifest_rpc(mp.default_ctx(), j) end
+  registry.ClearManifests = function() return mp.clear_manifests_rpc(mp.default_ctx()) end
   return registry
 end
 

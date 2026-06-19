@@ -26,6 +26,7 @@ local ALLOWLIST = {
   "RemoveApi","RenameApi","ReorderApis","RestartSteam","ToggleApi","UnFixGame",
   "StartAddViaLuaTools",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
+  "DeleteManifest","ClearManifests",
 }
 
 local registry = {}
