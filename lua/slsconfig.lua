@@ -57,6 +57,37 @@ slsconfig.SCHEMA = {
 local TRUE_TOKENS  = { y = true, yes = true, ["true"] = true, on = true }
 local FALSE_TOKENS = { n = true, no = true, ["false"] = true, off = true }
 
+-- Detect an installed CloudRedirect hook. Its presence flips the sane default
+-- for DisableCloud: CloudRedirect can only intercept cloud saves while Steam
+-- Cloud is ENABLED, so when it is installed we default DisableCloud to OFF
+-- (false). Without it we mirror slsteam-moon's own default of disabling cloud
+-- (true). `home`/`exists` are injectable so this stays host-testable.
+function slsconfig.has_cloudredirect(home, exists)
+  home = home or os.getenv("HOME") or ""
+  if home == "" then return false end
+  exists = exists or function(p)
+    local f = io.open(p, "rb")
+    if f then f:close(); return true end
+    return false
+  end
+  return exists(home .. "/.local/share/CloudRedirect/cloud_redirect.so") and true or false
+end
+
+-- Effective default for a SCHEMA key. Every key uses its static SCHEMA default
+-- except DisableCloud, which is CloudRedirect-aware (see has_cloudredirect):
+-- CR present -> false (don't disable cloud), CR absent -> true. `cr_present`
+-- may be passed explicitly (tests); nil means "detect now".
+function slsconfig.default_for(key, cr_present)
+  if key == "DisableCloud" then
+    if cr_present == nil then cr_present = slsconfig.has_cloudredirect() end
+    return not cr_present
+  end
+  for _, e in ipairs(slsconfig.SCHEMA) do
+    if e.key == key then return e.default end
+  end
+  return nil
+end
+
 -- Find a top-level key's raw value (text after the colon, comment stripped),
 -- or nil if the key is absent. Keys are top-level (no indent) in config.yaml.
 local function raw_value(text, key)
@@ -93,19 +124,22 @@ local function to_string(raw)
   return inner or s
 end
 
--- parse(text) -> { Key = typedValue } for every SCHEMA key (defaults applied
--- when the key is absent or unparseable).
-function slsconfig.parse(text)
+-- parse(text[, cr_present]) -> { Key = typedValue } for every SCHEMA key
+-- (defaults applied when the key is absent or unparseable). `cr_present` is
+-- forwarded to default_for so the DisableCloud default is CloudRedirect-aware;
+-- nil means "detect now".
+function slsconfig.parse(text, cr_present)
   text = text or ""
   local out = {}
   for _, entry in ipairs(slsconfig.SCHEMA) do
+    local dflt = slsconfig.default_for(entry.key, cr_present)
     local raw = raw_value(text, entry.key)
     if raw == nil then
-      out[entry.key] = entry.default
+      out[entry.key] = dflt
     elseif entry.type == "bool" then
-      out[entry.key] = to_bool(raw, entry.default)
+      out[entry.key] = to_bool(raw, dflt)
     elseif entry.type == "int" or entry.type == "enum" then
-      out[entry.key] = to_int(raw, entry.default)
+      out[entry.key] = to_int(raw, dflt)
     else
       out[entry.key] = to_string(raw)
     end
@@ -177,15 +211,16 @@ function slsconfig.default_path()
   return home .. "/.config/SLSsteam/config.yaml"
 end
 
--- read(path) -> values table. A missing/unreadable file yields all defaults
--- (slsteam-moon itself falls back to defaults on a missing config).
-function slsconfig.read(path)
-  if not path then return slsconfig.parse("") end
+-- read(path[, cr_present]) -> values table. A missing/unreadable file yields
+-- all defaults (slsteam-moon itself falls back to defaults on a missing
+-- config). `cr_present` is forwarded to parse for the DisableCloud default.
+function slsconfig.read(path, cr_present)
+  if not path then return slsconfig.parse("", cr_present) end
   local f = io.open(path, "rb")
-  if not f then return slsconfig.parse("") end
+  if not f then return slsconfig.parse("", cr_present) end
   local data = f:read("*a") or ""
   f:close()
-  return slsconfig.parse(data)
+  return slsconfig.parse(data, cr_present)
 end
 
 -- Count how many SCHEMA keys appear in the text (a cheap "does this look like a
@@ -239,11 +274,13 @@ function slsconfig.write_key(path, key, value)
   return true
 end
 
--- reset_to_defaults(path) -> ok, err. Rewrites EVERY SCHEMA key to its default
--- value in one atomic write, preserving comments, ordering and unrelated keys
--- (e.g. AdditionalApps). Same no-clobber guard as write_key: refuse on an
--- empty/unreadable file or one that doesn't look like a real config.
-function slsconfig.reset_to_defaults(path)
+-- reset_to_defaults(path[, cr_present]) -> ok, err. Rewrites EVERY SCHEMA key
+-- to its effective default in one atomic write, preserving comments, ordering
+-- and unrelated keys (e.g. AdditionalApps). The DisableCloud default is
+-- CloudRedirect-aware (default_for): OFF when CloudRedirect is installed, ON
+-- otherwise. Same no-clobber guard as write_key: refuse on an empty/unreadable
+-- file or one that doesn't look like a real config.
+function slsconfig.reset_to_defaults(path, cr_present)
   if not path then return false, "no path" end
   local f = io.open(path, "rb")
   if not f then return false, "config.yaml not found" end
@@ -257,9 +294,10 @@ function slsconfig.reset_to_defaults(path)
     return false, "config does not look valid; refusing to reset"
   end
 
+  if cr_present == nil then cr_present = slsconfig.has_cloudredirect() end
   local out = data
   for _, entry in ipairs(slsconfig.SCHEMA) do
-    out = slsconfig.set_key(out, entry.key, entry.default)
+    out = slsconfig.set_key(out, entry.key, slsconfig.default_for(entry.key, cr_present))
   end
 
   local tmp = string.format("%s.tmp.lumen.%d.%d.%d", path,

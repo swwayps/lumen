@@ -52,12 +52,37 @@ end
 
 -- ── parse() defaults when a key is absent ──────────────────────────────────
 do
-  -- API defaults to true, DisableCloud to true, SafeMode to false per config.cpp.
-  local v = slsconfig.parse("LogLevel: 2\n")
+  -- API defaults to true, SafeMode to false per config.cpp. DisableCloud is
+  -- CloudRedirect-aware, so pin cr_present=false here to assert its no-CR
+  -- default (true). CR-aware behaviour is covered in its own block below.
+  local v = slsconfig.parse("LogLevel: 2\n", false)
   assert_eq(v.API,          true,  "API default true")
-  assert_eq(v.DisableCloud, true,  "DisableCloud default true")
+  assert_eq(v.DisableCloud, true,  "DisableCloud default true (no CloudRedirect)")
   assert_eq(v.SafeMode,     false, "SafeMode default false")
   assert_eq(v.LogLevel,     2,     "LogLevel read")
+end
+
+-- ── DisableCloud default is CloudRedirect-aware ────────────────────────────
+do
+  -- has_cloudredirect(): probes ~/.local/share/CloudRedirect/cloud_redirect.so
+  -- via an injectable existence check.
+  local seen = {}
+  local exists_yes = function(p) seen.p = p; return true end
+  local exists_no  = function(p) seen.p = p; return false end
+  assert_eq(slsconfig.has_cloudredirect("/home/x", exists_yes), true,  "CR .so present -> true")
+  assert_eq(slsconfig.has_cloudredirect("/home/x", exists_no),  false, "CR .so absent -> false")
+  assert_true(seen.p:find("/home/x/.local/share/CloudRedirect/cloud_redirect.so", 1, true),
+              "probes the canonical CR path")
+
+  -- default_for: DisableCloud flips on CR presence; other keys stay static.
+  assert_eq(slsconfig.default_for("DisableCloud", true),  false, "CR present -> don't disable cloud")
+  assert_eq(slsconfig.default_for("DisableCloud", false), true,  "no CR -> disable cloud")
+  assert_eq(slsconfig.default_for("DisableFamilyShareLock", true),  true,  "FamilyShareLock stays default ON")
+  assert_eq(slsconfig.default_for("PlayNotOwnedGames", true), false, "PlayNotOwnedGames stays default OFF")
+
+  -- parse() honours the passed cr_present for the absent-key default.
+  assert_eq(slsconfig.parse("LogLevel: 2\n", true).DisableCloud,  false, "parse CR -> false")
+  assert_eq(slsconfig.parse("LogLevel: 2\n", false).DisableCloud, true,  "parse no-CR -> true")
 end
 
 -- ── parse() accepts the various YAML boolean spellings ─────────────────────
@@ -230,7 +255,34 @@ do
   os.remove(tmp)
 end
 
--- ── reset_to_defaults() refuses a non-config blob (no clobber) ─────────────
+-- ── reset_to_defaults() makes DisableCloud CloudRedirect-aware ─────────────
+do
+  -- With CloudRedirect present, reset must leave Steam Cloud ENABLED
+  -- (DisableCloud=no) so CR can intercept saves; without it, disabled (yes).
+  local function fresh()
+    local tmp = os.tmpname()
+    local f = assert(io.open(tmp, "wb"))
+    f:write("DisableFamilyShareLock: yes\nUseWhitelist: no\n" ..
+            "PlayNotOwnedGames: no\nDisableCloud: yes\nLogLevel: 2\n")
+    f:close()
+    return tmp
+  end
+
+  local t1 = fresh()
+  assert_true(slsconfig.reset_to_defaults(t1, true), "reset ok (CR present)")
+  assert_eq(slsconfig.read(t1, true).DisableCloud, false,
+            "CR present -> reset leaves cloud ENABLED (DisableCloud=no)")
+  os.remove(t1)
+
+  local t2 = fresh()
+  assert_true(slsconfig.reset_to_defaults(t2, false), "reset ok (no CR)")
+  assert_eq(slsconfig.read(t2, false).DisableCloud, true,
+            "no CR -> reset DISABLES cloud (DisableCloud=yes)")
+  -- DisableFamilyShareLock stays ON by default regardless of CR.
+  assert_eq(slsconfig.read(t2, false).DisableFamilyShareLock, true,
+            "FamilyShareLock stays default ON after reset")
+  os.remove(t2)
+end
 do
   local tmp = os.tmpname()
   local f = assert(io.open(tmp, "wb")); f:write("just some garbage\n"); f:close()
