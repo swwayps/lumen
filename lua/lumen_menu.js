@@ -50,22 +50,38 @@
       gu: {
         tab: "Game Updates",
         title: "Game Updates",
-        note: "Lock a game to a build you've archived, or override a single component's version. Only versions you have on disk can be selected.",
+        experimental: "Experimental",
+        experimentalHint: "Experimental feature \u2014 it may not work as expected. Pinning changes what Steam downloads and verifies; use with care.",
+        note: "Pick a build to lock the game to it, or keep \u201cLatest\u201d to auto-update. \u201cInstalled\u201d is the build you have on disk right now. Only versions you have archived can be selected.",
         search: "Search games\u2026",
-        current: "current version",
+        current: "installed",
         fromLua: "from LuaTools",
         latest: "Latest (auto-update)",
         locked: "Locked",
         pinned: "pinned",
         advanced: "Advanced",
+        advancedHint: "Per-component (depot) version overrides \u2014 advanced",
+        showMore: "Show more",
+        showLess: "Show less",
         back: "Back",
         dlcTitle: "Depots",
         depotWarn: "Advanced \u2014 don't change anything here unless you know what you're doing. Forcing one depot to a version that doesn't match the rest of the game can break it.",
         emptyDlc: "You don't have this game's manifests, or it has no DLCs.",
+        sharedRuntime: "Steamworks Common Redistributables",
+        clearManifests: "Clear stored versions",
+        clearConfirm: "Click again to confirm",
+        clearHint: "Delete archived manifests to free space. Installed and pinned versions are kept.",
+        clearFail: "Couldn't clear: ",
+        delTitle: "Delete this stored version",
+        delFail: "Couldn't delete: ",
         none: "No LuaTools games with archived versions yet.",
         loadFail: "Failed to load game versions: ",
         saveFail: "Could not save: ",
         depot: "Depot",
+        validateTitle: "Apply selected build",
+        validateBody: "To apply the build you picked, Steam needs to verify the game's files. It compares what's installed against the selected build and re-downloads anything that differs. You can also do this later from the game's properties.",
+        validateConfirm: "Validate now",
+        validateDecline: "Not now",
       },
       keys: {
         PlayNotOwnedGames: { label: "Play not-owned games", desc: "Lets Steam launch games that aren't in your account.", info: "You don't need to turn this on. Games you add through LuaTools are injected and install either way — this switch doesn't change that." },
@@ -154,6 +170,13 @@
       "rgba(74,81,92,.4) 0%,rgba(75,81,92,0) 60%);display:flex;flex-direction:column;overflow:hidden;}",
       ".lumen-ctop{display:flex;align-items:center;padding:24px 24px 14px;}",
       ".lumen-ctop .h{flex:1;color:#fff;font-size:22px;font-weight:700;}",
+      ".lumen-exp{display:inline-block;vertical-align:middle;margin-left:10px;font-size:10px;",
+      "font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#ffb84d;",
+      "background:#3a2f1a;padding:2px 8px;border-radius:10px;}",
+      ".lumen-info{display:inline-flex;vertical-align:middle;margin-left:6px;width:16px;height:16px;",
+      "align-items:center;justify-content:center;font-size:11px;font-weight:700;font-style:italic;",
+      "cursor:pointer;color:#8f98a0;border:1px solid #4a5663;border-radius:50%;}",
+      ".lumen-info:hover{color:#fff;border-color:#8f98a0;}",
       ".lumen-ctop .x{cursor:pointer;color:#b8bcbf;font-size:18px;padding:2px 8px;border-radius:3px;}",
       ".lumen-ctop .x:hover{color:#fff;background:rgba(255,255,255,.08);}",
       ".lumen-ctop .reset{cursor:pointer;color:#b8bcbf;font-size:12px;font-weight:600;" +
@@ -205,9 +228,12 @@
       ".lumen-badge.lock{background:#3a2f1a;color:#ffb84d;}",
       ".lumen-badge.cur{background:#1a3a24;color:#6fd08c;}",
       ".lumen-badge.lt{background:#1a2c3a;color:#66c0f4;}",
-      ".lumen-dlcs-btn{flex:0 0 auto;color:#b8bcbf;font-size:13px;padding:4px 10px;border-radius:3px;",
-      "border:1px solid rgba(255,255,255,.14);cursor:pointer;white-space:nowrap;}",
-      ".lumen-dlcs-btn:hover{color:#fff;background:rgba(255,255,255,.08);}",
+      ".lumen-adv{flex:0 0 auto;color:#5c6370;font-size:11px;padding:2px 6px;",
+      "cursor:pointer;white-space:nowrap;align-self:flex-start;}",
+      ".lumen-adv:hover{color:#a0a6ad;text-decoration:underline;}",
+      ".lumen-more{color:#66c0f4;font-size:12px;cursor:pointer;padding:6px 8px 4px 12px;",
+      "user-select:none;}",
+      ".lumen-more:hover{text-decoration:underline;}",
       ".lumen-vers{padding:4px 2px 10px 104px;display:flex;flex-direction:column;gap:2px;}",
       ".lumen-ver{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:3px;",
       "cursor:pointer;font-size:13px;color:#cdd1d4;}",
@@ -216,11 +242,31 @@
       ".lumen-ver .dot{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid #6b7280;}",
       ".lumen-ver.sel .dot{border-color:#1a9fff;background:#1a9fff;}",
       ".lumen-ver .vgid{color:#8f98a0;font-size:11px;font-family:monospace;}",
+      ".lumen-del{margin-left:auto;flex:0 0 auto;cursor:pointer;color:#6b7280;",
+      "font-size:13px;padding:2px 8px;border-radius:3px;opacity:0;transition:.12s;}",
+      ".lumen-ver:hover .lumen-del{opacity:1;}",
+      ".lumen-del:hover{color:#ec5c5c;background:rgba(236,92,92,.12);}",
       ".lumen-back{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#b8bcbf;",
       "font-size:13px;}",
       ".lumen-back:hover{color:#fff;}",
       ".lumen-sub-title{color:#fff;font-size:16px;font-weight:700;margin:10px 0 2px;}",
       ".lumen-empty{color:#8f98a0;font-size:13px;padding:20px 4px;text-align:center;}",
+      // confirm modal (validate prompt) — sits above the settings overlay
+      ".lumen-modal-back{position:fixed;inset:0;z-index:100000;display:flex;",
+      "align-items:center;justify-content:center;background:rgba(0,0,0,.6);",
+      "font-family:'Motiva Sans',Arial,Helvetica,sans-serif;}",
+      ".lumen-modal{width:420px;max-width:90vw;background:#23262d;border-radius:4px;",
+      "border:1px solid rgba(0,0,0,.5);box-shadow:0 16px 48px rgba(0,0,0,.6);",
+      "padding:22px 24px 18px;}",
+      ".lumen-modal .mt{color:#fff;font-size:17px;font-weight:700;margin-bottom:10px;}",
+      ".lumen-modal .mb{color:#b8bcbf;font-size:13px;line-height:1.5;margin-bottom:18px;}",
+      ".lumen-modal .mrow{display:flex;justify-content:flex-end;gap:10px;}",
+      ".lumen-mbtn{cursor:pointer;font-size:13px;font-weight:600;padding:8px 16px;",
+      "border-radius:4px;border:1px solid rgba(255,255,255,.14);color:#b8bcbf;",
+      "background:transparent;transition:.12s;}",
+      ".lumen-mbtn:hover{color:#fff;background:rgba(255,255,255,.08);}",
+      ".lumen-mbtn.primary{background:#1a9fff;border-color:#1a9fff;color:#fff;}",
+      ".lumen-mbtn.primary:hover{background:#3cb0ff;border-color:#3cb0ff;}",
     ].join("");
     (document.head || document.documentElement).appendChild(s);
   }
@@ -387,25 +433,86 @@
     return p(d.getUTCDate()) + "/" + p(d.getUTCMonth() + 1) + "/" + d.getUTCFullYear();
   }
 
-  // Collapse a game's per-depot versions into a single build timeline keyed by
-  // date (a "whole-game lock" pins every depot as-of a date, so the user picks a
-  // date, not a per-depot gid). Newest first. Each build: {date, fromLua,
-  // installed, pinned}.
+  // The "base" depot whose timeline represents the game's builds. Picking the
+  // right one is heuristic (no clean on-disk signal for "main content depot"):
+  //   1) ignore "stub" depots whose biggest manifest is tiny vs the game's
+  //      largest depot (<5%) — e.g. Wallpaper Engine's appid-depot 431960 is a
+  //      ~15 KB launcher while the real content (431961) is ~867 KB.
+  //   2) among the rest, prefer the appid-depot if it survived (it's the base
+  //      game for most titles, e.g. BoI 250900); else the depot with the most
+  //      archived versions (the actively-updated content), tie-break lowest id.
+  function depotMaxSize(d) {
+    var m = 0;
+    (d.versions || []).forEach(function (v) { if ((v.size || 0) > m) m = v.size; });
+    return m;
+  }
+  function baseDepot(game) {
+    var all = game.depots || [];
+    if (all.length === 0) return null;
+    // 1) Workshop content (depot id == appid) holds workshop snapshots, not game
+    //    builds. The backend flags it; never use it for the game's timeline.
+    var depots = all.filter(function (d) { return !d.workshop; });
+    if (depots.length === 0) return null;
+    // 2) Prefer depots actually installed (real game content on disk). Fall back
+    //    to every non-workshop depot when nothing is installed yet (e.g. added
+    //    via LuaTools but not downloaded).
+    var inst = depots.filter(function (d) { return d.installed; });
+    var pool = inst.length > 0 ? inst : depots;
+    // 3) Drop stub depots (tiny launcher depots) by manifest size.
+    var largest = 0;
+    pool.forEach(function (d) { var s = depotMaxSize(d); if (s > largest) largest = s; });
+    var threshold = largest / 20;  // 5%
+    var cands = pool.filter(function (d) { return depotMaxSize(d) >= threshold; });
+    if (cands.length === 0) cands = pool;
+    // 4) Prefer the depot whose id == appid (only reachable here when it's real
+    //    content, not workshop), else the one with the most archived versions
+    //    (ties -> lowest id).
+    for (var i = 0; i < cands.length; i++) {
+      if (cands[i].depot === game.appid) return cands[i];
+    }
+    var best = null;
+    cands.forEach(function (d) {
+      var dn = (d.versions || []).length, bn = best ? (best.versions || []).length : -1;
+      if (!best || dn > bn || (dn === bn && d.depot < best.depot)) best = d;
+    });
+    return best;
+  }
+
+  // The game's selectable build timeline, taken from its BASE depot only and
+  // collapsed to one row per calendar day (a day can hold several manifests),
+  // newest first. Mixing every depot here produced duplicate-looking dates and
+  // surfaced ancient DLC-only dates that aren't real game builds.
   function gameBuilds(game) {
-    var byDate = {};
-    (game.depots || []).forEach(function (d) {
-      (d.versions || []).forEach(function (v) {
-        var e = byDate[v.date] || { date: v.date, fromLua: false, installed: false, pinned: false };
-        if (v.fromLuaTools) e.fromLua = true;
-        if (v.installed) e.installed = true;
-        if (v.pinned) e.pinned = true;
-        byDate[v.date] = e;
-      });
+    var bd = baseDepot(game);
+    if (!bd) return [];
+    var byDay = {};
+    (bd.versions || []).forEach(function (v) {
+      var k = fmtDate(v.date);
+      var e = byDay[k] || { date: v.date, fromLua: false, installed: false, pinned: false };
+      if (v.date > e.date) e.date = v.date;
+      if (v.fromLuaTools) e.fromLua = true;
+      if (v.installed) e.installed = true;
+      if (v.pinned) e.pinned = true;
+      byDay[k] = e;
     });
     var arr = [];
-    Object.keys(byDate).forEach(function (k) { arr.push(byDate[k]); });
+    Object.keys(byDay).forEach(function (k) { arr.push(byDay[k]); });
     arr.sort(function (a, b) { return b.date - a.date; });
     return arr;
+  }
+
+  // Mark the "from LuaTools" build in the main list, combining two signals:
+  //   1) LOGICAL (precise): gameBuilds already flags a build whose gid matches
+  //      the base depot's setManifestid in the .lua — that IS the LuaTools
+  //      build. If present, keep it.
+  //   2) EMPIRICAL (fallback): most base depots have no setManifestid, so we
+  //      can't know the literal build. slsteam-moon only archives a depot AFTER
+  //      the LuaTools install, so the OLDEST archived build (bottom row) is the
+  //      one present at install. Mark that.
+  function markLuaToolsBuild(builds) {
+    if (builds.length === 0) return;
+    if (builds.some(function (b) { return b.fromLua; })) return;  // literal pin
+    builds[builds.length - 1].fromLua = true;  // oldest (list is newest-first)
   }
 
   // A small selectable version row (radio dot + label + optional badges).
@@ -434,12 +541,61 @@
     return row;
   }
 
+  // Confirm modal shown after a build is pinned: applying a pin only takes
+  // effect once Steam re-verifies the game's files, so offer to kick that off
+  // now. Declining is fine — the user can validate later from the game's
+  // properties. The validate is relayed into SharedJSContext (SteamClient),
+  // see injector State:validate_app.
+  function showValidatePrompt(appid) {
+    var GU = I18N.en.gu;
+    injectStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var card = document.createElement("div");
+    card.className = "lumen-modal";
+    var t = document.createElement("div");
+    t.className = "mt";
+    t.textContent = GU.validateTitle;
+    var b = document.createElement("div");
+    b.className = "mb";
+    b.textContent = GU.validateBody;
+    var row = document.createElement("div");
+    row.className = "mrow";
+    var close = function () { if (back.parentNode) back.remove(); };
+    var decline = document.createElement("button");
+    decline.className = "lumen-mbtn";
+    decline.textContent = GU.validateDecline;
+    decline.addEventListener("click", function (e) { e.stopPropagation(); close(); });
+    var confirm = document.createElement("button");
+    confirm.className = "lumen-mbtn primary";
+    confirm.textContent = GU.validateConfirm;
+    confirm.addEventListener("click", function (e) {
+      e.stopPropagation();
+      call("__lumenValidateApp", { appid: appid }).catch(function (err) { log("validate", err); });
+      close();
+    });
+    // Clicking the backdrop dismisses (same as declining).
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    row.appendChild(decline); row.appendChild(confirm);
+    card.appendChild(t); card.appendChild(b); card.appendChild(row);
+    back.appendChild(card);
+    (document.body || document.documentElement).appendChild(back);
+  }
+
+  // Label a depot row: shared Steam runtimes (flagged by the backend) get a
+  // friendly name + id so their old manifest dates don't read as game builds;
+  // everything else is just "Depot <id>".
+  function depotLabel(d) {
+    if (d.shared) return I18N.en.gu.sharedRuntime + " (" + d.depot + ")";
+    return I18N.en.gu.depot + " " + d.depot;
+  }
+
   // DLC / per-component sub-page: each of the game's depots is independently
   // pinnable (SetDlcPin / ClearDlcPin). We can't map depot->DLC appid purely
   // from on-disk data, so depots are labelled by id (a best-effort name lookup
   // could be added later). master-detail: a back arrow returns to the list.
-  function renderDlcSubpage(body, game, S, onBack) {
-    var GU = I18N.en.gu;  // Game Updates tab is English-only for now
+  function renderDlcSubpage(body, game, onBack) {
+    var GU = I18N.en.gu;
     body.textContent = "";
     var back = document.createElement("div");
     back.className = "lumen-back";
@@ -473,7 +629,7 @@
       meta.className = "lumen-game-meta";
       var name = document.createElement("div");
       name.className = "lumen-game-name";
-      name.textContent = GU.depot + " " + d.depot;
+      name.textContent = depotLabel(d);
       meta.appendChild(name);
       head.appendChild(meta);
       body.appendChild(head);
@@ -481,44 +637,73 @@
       var vers = document.createElement("div");
       vers.className = "lumen-vers";
       var anyPinned = d.versions.some(function (v) { return v.pinned; });
+      var rows = [];
+      var select = function (target) {
+        rows.forEach(function (r) { r.classList.toggle("sel", r === target); });
+      };
 
-      vers.appendChild(verRow({
+      var latest = verRow({
         label: GU.latest, selected: !anyPinned,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
-            .then(function () { reloadGameUpdates(body, S); })
+            .then(function () { select(latest); showValidatePrompt(game.appid); })
             .catch(function (e) { log("ClearDlcPin", e); });
         },
-      }));
+      });
+      rows.push(latest);
+      vers.appendChild(latest);
 
       d.versions.forEach(function (v) {
         var badges = [];
         if (v.pinned) badges.push({ cls: "lock", text: GU.pinned });
         if (v.installed) badges.push({ cls: "cur", text: GU.current });
         if (v.fromLuaTools) badges.push({ cls: "lt", text: GU.fromLua });
-        vers.appendChild(verRow({
+        var row = verRow({
           label: fmtDate(v.date), gid: v.gid, selected: v.pinned, badges: badges,
           onClick: function () {
             call("SetDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot, gid: v.gid }) })
-              .then(function () { reloadGameUpdates(body, S); })
+              .then(function () {
+                select(row);
+                // Already-installed gid -> lock only, no re-download, no validate.
+                if (!v.installed) showValidatePrompt(game.appid);
+              })
               .catch(function (e) { log("SetDlcPin", e); });
           },
-        }));
+        });
+        rows.push(row);
+        vers.appendChild(row);
+        // Trash: drop this archived version's manifest (frees space). Not offered
+        // for installed/pinned versions — those are still needed on disk.
+        if (!v.installed && !v.pinned) {
+          var del = document.createElement("span");
+          del.className = "lumen-del";
+          del.textContent = "\uD83D\uDDD1";
+          del.title = GU.delTitle;
+          del.addEventListener("click", function (e) {
+            e.stopPropagation();
+            call("DeleteManifest", { json: JSON.stringify({ depot: d.depot, gid: v.gid }) })
+              .then(function () { if (row.parentNode) row.remove(); })
+              .catch(function (er) { log("DeleteManifest", er); });
+          });
+          row.appendChild(del);
+        }
       });
       body.appendChild(vers);
     });
   }
 
-  // One game card: capsule + name + appid + a "DLCs" button; clicking the body
-  // toggles an inline build timeline. Selecting a build calls SetGamePin (by
-  // date); "Latest" calls ClearGamePin.
-  function gameCard(game, S) {
-    var GU = I18N.en.gu;  // Game Updates tab is English-only for now
+  // One game card: capsule + name + a subtle "Advanced" link. The build
+  // timeline shows inline by default (collapsed to a few rows + Show more), so
+  // picking a version is the obvious action and "Advanced" (per-depot
+  // overrides) stays low-key.
+  function gameCard(game) {
+    var GU = I18N.en.gu;
     var wrap = document.createElement("div");
     wrap.className = "lumen-game";
 
     var head = document.createElement("div");
     head.className = "lumen-game-head";
+    head.style.cursor = "default";
     var cap = document.createElement("img");
     cap.className = "lumen-cap";
     cap.src = capsuleUrl(game.appid);
@@ -533,73 +718,107 @@
     nm.textContent = "App " + game.appid;
     name.appendChild(nm);
     fetchAppName(game.appid).then(function (n) { if (n) nm.textContent = n; });
-    if (game.locked) {
-      var lb = document.createElement("span");
-      lb.className = "lumen-badge lock";
-      lb.textContent = GU.locked;
-      name.appendChild(lb);
-    }
+    var lockBadge = document.createElement("span");
+    lockBadge.className = "lumen-badge lock";
+    lockBadge.textContent = GU.locked;
+    if (game.locked) name.appendChild(lockBadge);
+    var setLocked = function (locked) {
+      game.locked = locked;
+      if (locked && !lockBadge.parentNode) name.appendChild(lockBadge);
+      else if (!locked && lockBadge.parentNode) lockBadge.remove();
+    };
     var sub = document.createElement("div");
     sub.className = "lumen-game-sub";
     sub.textContent = "" + game.appid;
     meta.appendChild(name); meta.appendChild(sub);
     head.appendChild(meta);
 
-    var dlcBtn = document.createElement("div");
-    dlcBtn.className = "lumen-dlcs-btn";
-    dlcBtn.textContent = GU.advanced + " \u203a";
-    head.appendChild(dlcBtn);
-    wrap.appendChild(head);
-
     var vers = document.createElement("div");
     vers.className = "lumen-vers";
-    vers.style.display = "none";
-    var built = false;
 
-    function buildVers() {
-      if (built) return; built = true;
-      var builds = gameBuilds(game);
-      vers.appendChild(verRow({
-        label: GU.latest, selected: !game.locked,
+    var adv = document.createElement("div");
+    adv.className = "lumen-adv";
+    adv.textContent = GU.advanced + " \u203a";
+    adv.title = GU.advancedHint;
+    adv.addEventListener("click", function (e) {
+      e.stopPropagation();
+      renderDlcSubpage(vers.__bodyRef, game, function () { reloadGameUpdates(vers.__bodyRef); });
+    });
+    head.appendChild(adv);
+    wrap.appendChild(head);
+    wrap.appendChild(vers);
+
+    // Inline timeline, visible by default, collapsed to the most recent few.
+    // Selecting a build moves the radio IN PLACE (no list re-render) so scroll
+    // position and the Show-more expansion are preserved.
+    var DEFAULT_SHOWN = 3;
+    var builds = gameBuilds(game);
+    markLuaToolsBuild(builds);
+    var rows = [];
+    var select = function (target) {
+      rows.forEach(function (r) { r.classList.toggle("sel", r === target); });
+    };
+
+    var latest = verRow({
+      label: GU.latest, selected: !game.locked,
+      onClick: function () {
+        call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
+          .then(function () { select(latest); setLocked(false); showValidatePrompt(game.appid); })
+          .catch(function (e) { log("ClearGamePin", e); });
+      },
+    });
+    rows.push(latest);
+    vers.appendChild(latest);
+
+    var extra = [];
+    builds.forEach(function (b, idx) {
+      var badges = [];
+      if (b.installed) badges.push({ cls: "cur", text: GU.current });
+      if (b.fromLua) badges.push({ cls: "lt", text: GU.fromLua });
+      var row = verRow({
+        label: fmtDate(b.date), selected: game.locked && b.pinned, badges: badges,
         onClick: function () {
-          call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
-            .then(function () { reloadGameUpdates(vers.__bodyRef, S); })
-            .catch(function (e) { log("ClearGamePin", e); });
+          call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
+            .then(function () {
+              select(row); setLocked(true);
+              // Pinning the build that's already installed only locks it (no
+              // version change) — nothing to download, so skip the validate prompt.
+              if (!b.installed) showValidatePrompt(game.appid);
+            })
+            .catch(function (e) { log("SetGamePin", e); });
         },
-      }));
-      builds.forEach(function (b) {
-        var badges = [];
-        if (b.installed) badges.push({ cls: "cur", text: GU.current });
-        if (b.fromLua) badges.push({ cls: "lt", text: GU.fromLua });
-        vers.appendChild(verRow({
-          label: fmtDate(b.date), selected: game.locked && b.pinned, badges: badges,
-          onClick: function () {
-            call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
-              .then(function () { reloadGameUpdates(vers.__bodyRef, S); })
-              .catch(function (e) { log("SetGamePin", e); });
-          },
-        }));
       });
+      rows.push(row);
+      if (idx >= DEFAULT_SHOWN) { row.style.display = "none"; extra.push(row); }
+      vers.appendChild(row);
+    });
+    if (extra.length > 0) {
+      var more = document.createElement("div");
+      more.className = "lumen-more";
+      var open = false;
+      var setMore = function () {
+        more.textContent = open ? (GU.showLess + " \u25B4")
+                                 : (GU.showMore + " (" + extra.length + ") \u25BE");
+      };
+      setMore();
+      more.addEventListener("click", function (e) {
+        e.stopPropagation();
+        open = !open;
+        extra.forEach(function (r) { r.style.display = open ? "flex" : "none"; });
+        setMore();
+      });
+      vers.appendChild(more);
     }
 
-    head.addEventListener("click", function (e) {
-      if (e.target === dlcBtn) {
-        renderDlcSubpage(vers.__bodyRef, game, S, function () { reloadGameUpdates(vers.__bodyRef, S); });
-        return;
-      }
-      buildVers();
-      vers.style.display = (vers.style.display === "none") ? "flex" : "none";
-    });
-    wrap.appendChild(vers);
     wrap.__versRef = vers;
     return wrap;
   }
 
   // Re-fetch + re-render the whole Game Updates list into `body`.
-  function reloadGameUpdates(body, S) { renderGameUpdates(body, S); }
+  function reloadGameUpdates(body) { renderGameUpdates(body); }
 
-  function renderGameUpdates(body, S) {
-    var GU = I18N.en.gu;  // Game Updates tab is English-only for now
+  function renderGameUpdates(body) {
+    var GU = I18N.en.gu;
     body.textContent = "";
     var note = document.createElement("div");
     note.className = "lumen-note";
@@ -620,7 +839,16 @@
       .then(function (res) {
         var data = JSON.parse(res);
         if (!data || !data.success) throw new Error((data && data.error) || "load failed");
-        var games = data.games || [];
+        // Lua serializes an empty array as {} (an object), so coerce every list
+        // back to an array before we filter/iterate, and drop games that ended
+        // up with no archived versions (e.g. after a manifest purge).
+        var arr = function (x) { return Array.isArray(x) ? x : []; };
+        var games = arr(data.games).filter(function (g) {
+          g.depots = arr(g.depots);
+          g.dlc_appids = arr(g.dlc_appids);
+          g.depots.forEach(function (d) { d.versions = arr(d.versions); });
+          return g.depots.length > 0;
+        });
         listWrap.textContent = "";
         if (games.length === 0) {
           var empty = document.createElement("div");
@@ -630,7 +858,7 @@
           return;
         }
         var cards = games.map(function (g) {
-          var card = gameCard(g, S);
+          var card = gameCard(g);
           card.__versRef.__bodyRef = body;
           card.__appid = g.appid;
           listWrap.appendChild(card);
@@ -740,7 +968,44 @@
         });
     });
 
-    ctop.appendChild(h); ctop.appendChild(resetBtn); ctop.appendChild(x);
+    // Clear-stored-versions button: header-right (Game Updates tab only). Drops
+    // archived manifests EXCEPT installed/pinned ones; two-click confirm.
+    var clearBtn = document.createElement("div");
+    clearBtn.className = "reset";
+    clearBtn.textContent = I18N.en.gu.clearManifests;
+    clearBtn.title = I18N.en.gu.clearHint;
+    clearBtn.style.display = "none";
+    var carmed = false, carmTimer = null;
+    var cdisarm = function () {
+      carmed = false;
+      if (carmTimer) { clearTimeout(carmTimer); carmTimer = null; }
+      clearBtn.classList.remove("confirm");
+      clearBtn.textContent = I18N.en.gu.clearManifests;
+    };
+    clearBtn.addEventListener("click", function () {
+      if (!carmed) {
+        carmed = true;
+        clearBtn.classList.add("confirm");
+        clearBtn.textContent = I18N.en.gu.clearConfirm;
+        carmTimer = setTimeout(cdisarm, 3000);
+        return;
+      }
+      cdisarm();
+      call("ClearManifests", {})
+        .then(function (res) {
+          var r = JSON.parse(res);
+          if (!r || !r.success) throw new Error((r && r.error) || "clear failed");
+          renderGameUpdates(body);
+        })
+        .catch(function (e) {
+          var er = document.createElement("div");
+          er.className = "lumen-err";
+          er.textContent = I18N.en.gu.clearFail + (e && e.message ? e.message : e);
+          body.appendChild(er);
+        });
+    });
+
+    ctop.appendChild(h); ctop.appendChild(clearBtn); ctop.appendChild(resetBtn); ctop.appendChild(x);
 
     var body = document.createElement("div");
     body.className = "lumen-body";
@@ -773,15 +1038,30 @@
     // then render the tab's body.
     function selectTab(which) {
       disarm();
+      cdisarm();
       tabSls.classList.toggle("active", which === "sls");
       tabGu.classList.toggle("active", which === "gu");
       if (which === "gu") {
-        h.textContent = I18N.en.gu.title;
+        h.textContent = "";
+        var gt = document.createElement("span");
+        gt.textContent = I18N.en.gu.title;
+        h.appendChild(gt);
+        var exp = document.createElement("span");
+        exp.className = "lumen-exp";
+        exp.textContent = I18N.en.gu.experimental;
+        h.appendChild(exp);
+        var info = document.createElement("span");
+        info.className = "lumen-info";
+        info.textContent = "i";
+        info.title = I18N.en.gu.experimentalHint;
+        h.appendChild(info);
         resetBtn.style.display = "none";
-        renderGameUpdates(body, S0);
+        clearBtn.style.display = "";
+        renderGameUpdates(body);
       } else {
         h.textContent = "slsteam-moon";
         resetBtn.style.display = "";
+        clearBtn.style.display = "none";
         loadSlsConfig();
       }
     }
