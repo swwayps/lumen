@@ -25,6 +25,7 @@ local ALLOWLIST = {
   "HasLuaToolsForApp","OpenExternalUrl","OpenGameFolder","ReadLoadedApps",
   "RemoveApi","RenameApi","ReorderApis","RestartSteam","ToggleApi","UnFixGame",
   "StartAddViaLuaTools",
+  "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
 }
 
 local registry = {}
@@ -75,6 +76,10 @@ end
 -- talks to the same backend via the same binding polyfill. Register its two
 -- native RPCs (read/write slsteam-moon's config.yaml) into the dispatch table.
 require("slsmenu").register(registry)
+
+-- The "Game Updates" tab (manifest pinning): assemble the per-game version
+-- tree from on-disk data and read/write the ManifestPins map in config.yaml.
+require("manifestpins").register(registry)
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
