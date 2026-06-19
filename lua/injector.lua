@@ -19,6 +19,38 @@ local injector = {}
 local CEF_HOST = "127.0.0.1"
 local BINDING = polyfill.BINDING
 
+-- Build the JS that asks the Steam client to verify a game's local files. It is
+-- relayed into SharedJSContext (the only context exposing SteamClient) and
+-- drives Steam's own steam://validate handler via SteamClient.URL.ExecuteSteamURL.
+-- We deliberately avoid navigating window.location to the steam:// URL: the
+-- overlay can live in the main shell window, where a location change would tear
+-- down the client. `appid` is coerced to an integer so nothing user-controlled
+-- is interpolated into the expression.
+function injector.validate_app_expr(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  return "(function(){try{if(window.SteamClient&&SteamClient.URL&&"
+    .. "typeof SteamClient.URL.ExecuteSteamURL==='function'){"
+    .. "SteamClient.URL.ExecuteSteamURL('steam://validate/" .. id .. "');return true;}"
+    .. "return false;}catch(e){return false;}})()"
+end
+
+-- Look up `fn_name` in the dispatch registry and run it (Millennium-style: an
+-- args object is mapped to alphabetical positional args by rpc.dispatch).
+-- Returns the result as a JSON string, or a {success=false} JSON string for an
+-- unknown method / a thrown error. Pure except for the registered fn it calls,
+-- so the registry-dispatch path is host-testable (test_inject.lua).
+function injector.dispatch_method(registry, fn_name, args)
+  local fn = registry and registry[fn_name]
+  if type(fn) ~= "function" then
+    return '{"success":false,"error":"unknown method: ' .. tostring(fn_name) .. '"}'
+  end
+  local ok_call, res = rpc.dispatch(fn, args or {})
+  if ok_call then
+    return (type(res) == "string") and res or json.encode(res)
+  end
+  return '{"success":false,"error":' .. json.encode(tostring(res)) .. '}'
+end
+
 local function log(msg)
   io.stderr:write(os.date("!%H:%M:%S ") .. "[lumen] " .. msg .. "\n")
   io.stderr:flush()
@@ -227,19 +259,19 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
-  else
-    local fn = self.registry and self.registry[req.fn]
-    if type(fn) == "function" then
-      -- Millennium-style dispatch: args object -> alphabetical positional args.
-      local ok_call, res = rpc.dispatch(fn, req.args or {})
-      if ok_call then
-        result = (type(res) == "string") and res or json.encode(res)
-      else
-        result = '{"success":false,"error":' .. json.encode(tostring(res)) .. '}'
-      end
+  elseif req.fn == "__lumenValidateApp" then
+    -- Relay: ask the Steam client to verify a game's files via its own
+    -- steam://validate handler. SteamClient lives only in SharedJSContext, not
+    -- the shell/web-view contexts the menu overlay runs in.
+    local a = req.args or {}
+    local appid = tonumber(a.appid)
+    if appid and self.manager and self.manager:validate_app(appid) then
+      result = '{"ok":true}'
     else
-      result = '{"success":false,"error":"unknown method: ' .. tostring(req.fn) .. '"}'
+      result = '{"ok":false}'
     end
+  else
+    result = injector.dispatch_method(self.registry, req.fn, req.args)
   end
   -- Resolve the page-side promise. id + result passed as JS string literals.
   local expr = polyfill.resolve_js(json.encode(tostring(id)), json.encode(result))
@@ -398,7 +430,20 @@ function State:set_launch_options(appid, options)
   return false
 end
 
--- Open/close the Lumen overlay. WHERE it renders depends on what's on top:
+-- Relay a steam://validate/<appid> into SharedJSContext (the only context with
+-- SteamClient) to verify a game's local files. Fire-and-forget: returns true if
+-- we have a SharedJSContext control conn to run it on.
+function State:validate_app(appid)
+  local expr = injector.validate_app_expr(appid)
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
 --   * a store/community web view is the CURRENT page -> render in that web view
 --     ONLY (it composites above the shell, so the shell's own overlay would be
 --     hidden behind it / misaligned -> the "split" bug);

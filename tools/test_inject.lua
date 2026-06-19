@@ -8,6 +8,7 @@
 -- ever loaded luatools.js into WebKit (web view) contexts via add_browser_js.
 package.path = "lua/?.lua;" .. package.path
 local cdp = require("cdp")
+local injector = require("injector")
 
 local function assert_true(c, m) if not c then error("FAIL: " .. (m or "")) end end
 
@@ -109,6 +110,54 @@ do
     if r.target.title == "SharedJSContext" then ctrl = r end
   end
   assert_true(ctrl ~= nil and ctrl.control == true, "control flag passed through")
+end
+
+-- 7. validate_app_expr(): builds the JS that asks the Steam client to verify a
+--    game's files. It must be relayed into SharedJSContext (the only context
+--    with SteamClient), so we drive Steam's own steam://validate handler via
+--    SteamClient.URL.ExecuteSteamURL rather than navigating window.location
+--    (which would blow away the shell when the overlay is in the main window).
+do
+  assert_true(type(injector.validate_app_expr) == "function",
+    "injector exposes validate_app_expr for testing")
+  local expr = injector.validate_app_expr(250900)
+  assert_true(expr:find("steam://validate/250900", 1, true) ~= nil,
+    "expr targets steam://validate/<appid>")
+  assert_true(expr:find("ExecuteSteamURL", 1, true) ~= nil,
+    "expr drives the Steam URL handler via SteamClient")
+  assert_true(expr:find("try", 1, true) ~= nil and expr:find("catch", 1, true) ~= nil,
+    "expr is wrapped in try/catch so a missing API can't throw")
+  -- appid is coerced to an integer: nothing user-controlled is interpolated.
+  -- A malformed value can't parse as a number, so it falls back to 0 (safe) and
+  -- the injected JS never makes it into the expression.
+  local inj = injector.validate_app_expr("250900'); alert(1); //")
+  assert_true(inj:find("alert", 1, true) == nil, "injected JS is not interpolated")
+  assert_true(inj:find("steam://validate/0", 1, true) ~= nil,
+    "a malformed appid coerces to 0, not the attacker tail")
+  local zero = injector.validate_app_expr("not a number")
+  assert_true(zero:find("steam://validate/0", 1, true) ~= nil,
+    "a non-numeric appid coerces to 0")
+end
+
+-- 8. dispatch_method(): the binding handler's registry lookup. A regression
+--    here (dropping the registry lookup) makes EVERY backend RPC come back as
+--    "unknown method", which is exactly what broke the menu once.
+do
+  assert_true(type(injector.dispatch_method) == "function",
+    "injector exposes dispatch_method for testing")
+  local registry = {
+    GetSlsConfig = function() return '{"success":true,"values":{}}' end,
+    Echo = function(a) return { got = a } end,
+  }
+  local r = injector.dispatch_method(registry, "GetSlsConfig", {})
+  assert_true(r:find('"success":true', 1, true) ~= nil,
+    "a registered method is dispatched and its result returned")
+  local u = injector.dispatch_method(registry, "GetGameUpdates", {})
+  assert_true(u:find("unknown method: GetGameUpdates", 1, true) ~= nil,
+    "an unregistered method returns a clear unknown-method error")
+  local n = injector.dispatch_method(nil, "Anything", {})
+  assert_true(n:find("unknown method", 1, true) ~= nil,
+    "a nil registry doesn't throw, just reports unknown")
 end
 
 print("test_inject: ALL PASS")
