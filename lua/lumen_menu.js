@@ -91,26 +91,6 @@
       reset: "Restaurar padrões",
       resetConfirm: "Clique de novo pra confirmar",
       resetFail: "Falha ao restaurar: ",
-      gu: {
-        tab: "Atualiza\u00e7\u00f5es",
-        title: "Atualiza\u00e7\u00f5es de jogos",
-        note: "Trave um jogo numa vers\u00e3o que voc\u00ea arquivou, ou sobrescreva a vers\u00e3o de um componente. S\u00f3 d\u00e1 pra escolher vers\u00f5es que voc\u00ea tem no disco.",
-        search: "Buscar jogos\u2026",
-        current: "vers\u00e3o atual",
-        fromLua: "do LuaTools",
-        latest: "Mais recente (atualizar)",
-        locked: "Travado",
-        pinned: "fixado",
-        advanced: "Avan\u00e7ado",
-        back: "Voltar",
-        dlcTitle: "Depots",
-        depotWarn: "Avan\u00e7ado \u2014 n\u00e3o mexa aqui se voc\u00ea n\u00e3o souber o que est\u00e1 fazendo. For\u00e7ar um depot numa vers\u00e3o que n\u00e3o bate com o resto do jogo pode quebr\u00e1-lo.",
-        emptyDlc: "Voc\u00ea n\u00e3o tem os manifests desse jogo, ou ele n\u00e3o tem DLCs.",
-        none: "Nenhum jogo do LuaTools com vers\u00f5es arquivadas ainda.",
-        loadFail: "Falha ao carregar vers\u00f5es: ",
-        saveFail: "N\u00e3o foi poss\u00edvel salvar: ",
-        depot: "Depot",
-      },
       keys: {
         PlayNotOwnedGames: { label: "Jogar jogos não adquiridos", desc: "Permite que a Steam abra jogos que não estão na sua conta.", info: "Você não precisa ativar isso. Os jogos que você adiciona pelo LuaTools são injetados e instalam de qualquer jeito — esta opção não muda isso." },
         DisableFamilyShareLock: { label: "Desativar trava do Family Share", desc: "Impede que o Compartilhamento Familiar trave seus jogos quando outra pessoa está jogando numa biblioteca compartilhada." },
@@ -459,7 +439,7 @@
   // from on-disk data, so depots are labelled by id (a best-effort name lookup
   // could be added later). master-detail: a back arrow returns to the list.
   function renderDlcSubpage(body, game, S, onBack) {
-    var GU = S.gu;
+    var GU = I18N.en.gu;  // Game Updates tab is English-only for now
     body.textContent = "";
     var back = document.createElement("div");
     back.className = "lumen-back";
@@ -533,7 +513,7 @@
   // toggles an inline build timeline. Selecting a build calls SetGamePin (by
   // date); "Latest" calls ClearGamePin.
   function gameCard(game, S) {
-    var GU = S.gu;
+    var GU = I18N.en.gu;  // Game Updates tab is English-only for now
     var wrap = document.createElement("div");
     wrap.className = "lumen-game";
 
@@ -619,7 +599,7 @@
   function reloadGameUpdates(body, S) { renderGameUpdates(body, S); }
 
   function renderGameUpdates(body, S) {
-    var GU = S.gu;
+    var GU = I18N.en.gu;  // Game Updates tab is English-only for now
     body.textContent = "";
     var note = document.createElement("div");
     note.className = "lumen-note";
@@ -709,7 +689,7 @@
       return t;
     }
     var tabSls = mkTab("slsteam-moon", MOON_SVG);
-    var tabGu = mkTab(S0.gu.tab, GU_SVG);
+    var tabGu = mkTab(I18N.en.gu.tab, GU_SVG);
 
     // content
     var content = document.createElement("div");
@@ -796,7 +776,7 @@
       tabSls.classList.toggle("active", which === "sls");
       tabGu.classList.toggle("active", which === "gu");
       if (which === "gu") {
-        h.textContent = S0.gu.title;
+        h.textContent = I18N.en.gu.title;
         resetBtn.style.display = "none";
         renderGameUpdates(body, S0);
       } else {
