@@ -84,12 +84,30 @@ require("manifestpins").register(registry)
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
+-- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
+-- split into ordered source fragments under menu/ (one concern per file) for
+-- maintainability. They share a SINGLE closure (idempotency guard + private
+-- state), so they must be injected as one unit: we concatenate them in order
+-- into one string and inject that with a single Runtime.evaluate. The assembled
+-- output is behaviourally identical to the old single file. ORDER MATTERS:
+-- 01-core opens the IIFE; 09-menubar runs the bootstrap and closes it.
+local MENU_PARTS = {
+  "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
+  "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
+  "08-overlay.js", "09-menubar.js",
+}
+
 local function read_menu_js()
-  local menu_js = utils.read_file(lua_dir .. "/lumen_menu.js")
-  if not menu_js then
-    io.stderr:write("[lumen] WARN: lumen_menu.js not found in " .. lua_dir .. "\n")
+  local parts = {}
+  for _, name in ipairs(MENU_PARTS) do
+    local chunk = utils.read_file(lua_dir .. "/menu/" .. name)
+    if not chunk then
+      io.stderr:write("[lumen] WARN: menu fragment not found: menu/" .. name .. "\n")
+      return nil
+    end
+    parts[#parts + 1] = chunk
   end
-  return menu_js
+  return table.concat(parts, "\n")
 end
 
 -- build_menu_assets() -> assets for the main window ("Steam"): polyfill +

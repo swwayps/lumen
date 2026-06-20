@@ -1,0 +1,112 @@
+// LM-FRAGMENT i18n strings + locale picker (pickLang)
+// LM-FRAGMENT source fragment of lumen_menu, assembled in order into ONE IIFE
+// LM-FRAGMENT by boot.lua (read_menu_js). Not a standalone module. See 01-core.js.
+
+  // ── i18n ───────────────────────────────────────────────────────────────────
+  // Display strings follow the user's Steam language. EN is the base/fallback;
+  // PT-BR is provided. To add a language, copy the "en" block and translate —
+  // pickLang() maps navigator.language (Steam's UI locale) onto these keys.
+  var I18N = {
+    en: {
+      note: "Changes save instantly. slsteam-moon reloads its config live; a few options only take effect after you restart Steam.",
+      warnAdvanced: "Advanced — leave it as is unless you understand what it does.",
+      warnDanger: "Don't change this unless you know exactly what you're doing. It can break slsteam-moon.",
+      reset: "Reset to defaults",
+      resetConfirm: "Click again to confirm",
+      resetFail: "Reset failed: ",
+      gu: {
+        tab: "Game Updates",
+        title: "Game Updates",
+        experimental: "Experimental",
+        experimentalHint: "Experimental feature \u2014 it may not work as expected. Pinning changes what Steam downloads and verifies; use with care.",
+        note: "Pick a build to lock the game to it, or keep \u201cLatest\u201d to auto-update. \u201cInstalled\u201d is the build you have on disk right now. Only versions you have archived can be selected.",
+        search: "Search games\u2026",
+        current: "installed",
+        fromLua: "from LuaTools",
+        latest: "Latest (auto-update)",
+        locked: "Locked",
+        pinned: "pinned",
+        advanced: "Advanced",
+        advancedHint: "Per-component (depot) version overrides \u2014 advanced",
+        importLua: "Load .lua",
+        importHint: "Pin this game to the exact build a fix needs, using a manifest .lua from lua.tools.",
+        importOk: "Pinned to the build from the .lua. Validate to apply.",
+        importBadApp: "That .lua is for a different game.",
+        importNoPins: "That .lua has no manifest pins (no setManifestid lines).",
+        importFail: "Couldn't load .lua: ",
+        showMore: "Show more",
+        showLess: "Show less",
+        back: "Back",
+        dlcTitle: "Depots",
+        depotWarn: "Advanced \u2014 don't change anything here unless you know what you're doing. Forcing one depot to a version that doesn't match the rest of the game can break it.",
+        emptyDlc: "You don't have this game's manifests, or it has no DLCs.",
+        sharedRuntime: "Steamworks Common Redistributables",
+        clearManifests: "Clear stored versions",
+        clearConfirm: "Click again to confirm",
+        clearHint: "Delete archived manifests to free space. Installed and pinned versions are kept.",
+        clearFail: "Couldn't clear: ",
+        delTitle: "Delete this stored version",
+        delFail: "Couldn't delete: ",
+        none: "No LuaTools games with archived versions yet.",
+        loadFail: "Failed to load game versions: ",
+        saveFail: "Could not save: ",
+        depot: "Depot",
+        validateTitle: "Apply selected build",
+        validateBody: "To apply the build you picked, Steam needs to verify the game's files. It compares what's installed against the selected build and re-downloads anything that differs. You can also do this later from the game's properties.",
+        validateConfirm: "Validate now",
+        validateDecline: "Not now",
+      },
+      keys: {
+        PlayNotOwnedGames: { label: "Play not-owned games", desc: "Lets Steam launch games that aren't in your account.", info: "You don't need to turn this on. Games you add through LuaTools are injected and install either way — this switch doesn't change that." },
+        DisableFamilyShareLock: { label: "Disable Family Sharing lock", desc: "Stops Family Sharing from locking your games when someone else is playing on a shared library." },
+        AutoFilterList: { label: "Auto-filter app list", desc: "Automatically limits ownership checks to games and applications. Best left on." },
+        UseWhitelist: { label: "Use a whitelist", desc: "Treats the AppIds list as a whitelist (only those) instead of a blacklist (all but those)." },
+        SafeMode: { label: "Safe mode", desc: "Automatically turns slsteam-moon off if Steam's client file doesn't match a known-good version. Useful on Steam Deck game mode." },
+        Notifications: { label: "Notifications", desc: "Show desktop notifications from slsteam-moon (uses notify-send)." },
+        NotifyInit: { label: "Notify when ready", desc: "Show a notification once slsteam-moon has finished loading." },
+        WarnHashMissmatch: { label: "Warn on client change", desc: "Notify when Steam's client file differs from the known-good version. Mostly for development." },
+        API: { label: "Control socket (API)", desc: "Lets external tools send commands to slsteam-moon through a local socket." },
+        DisableCloud: { label: "Disable Steam Cloud", desc: "Keep this OFF if you use CloudRedirect for cloud saves. Turn it ON only if you don't sync saves at all." },
+        ExtendedLogging: { label: "Verbose logging", desc: "Logs every Steam call. For debugging only — it makes the log file very large." },
+        FakeEmail: { label: "Fake e-mail", desc: "Shows a made-up e-mail in the Steam client only (cosmetic). Leave blank to disable." },
+        FakeWalletBalance: { label: "Fake wallet balance", desc: "Shows a made-up wallet balance in the client only (cosmetic). 0 disables it." },
+        LogLevel: { label: "Log level", desc: "How much detail slsteam-moon writes to its log file. Default is 2 (Info)." },
+      },
+    },
+    "pt-BR": {
+      note: "As mudanças são salvas na hora. O slsteam-moon recarrega a config ao vivo; algumas opções só valem depois de reiniciar a Steam.",
+      warnAdvanced: "Avançado — deixe como está, a menos que entenda o que faz.",
+      warnDanger: "Não mexa se você não souber exatamente o que está fazendo. Esta opção pode quebrar o funcionamento do slsteam-moon.",
+      reset: "Restaurar padrões",
+      resetConfirm: "Clique de novo pra confirmar",
+      resetFail: "Falha ao restaurar: ",
+      keys: {
+        PlayNotOwnedGames: { label: "Jogar jogos não adquiridos", desc: "Permite que a Steam abra jogos que não estão na sua conta.", info: "Você não precisa ativar isso. Os jogos que você adiciona pelo LuaTools são injetados e instalam de qualquer jeito — esta opção não muda isso." },
+        DisableFamilyShareLock: { label: "Desativar trava do Family Share", desc: "Impede que o Compartilhamento Familiar trave seus jogos quando outra pessoa está jogando numa biblioteca compartilhada." },
+        AutoFilterList: { label: "Filtrar lista de apps automaticamente", desc: "Limita as verificações de propriedade a jogos e aplicativos automaticamente. Melhor deixar ligado." },
+        UseWhitelist: { label: "Usar lista de permissões", desc: "Trata a lista de AppIds como permissões (só esses) em vez de bloqueio (todos menos esses)." },
+        SafeMode: { label: "Modo seguro", desc: "Desliga o slsteam-moon automaticamente se o arquivo do cliente Steam não bater com uma versão conhecida. Útil no modo jogo do Steam Deck." },
+        Notifications: { label: "Notificações", desc: "Mostra notificações da área de trabalho do slsteam-moon (usa notify-send)." },
+        NotifyInit: { label: "Avisar quando pronto", desc: "Mostra uma notificação quando o slsteam-moon termina de carregar." },
+        WarnHashMissmatch: { label: "Avisar se o cliente mudar", desc: "Notifica quando o arquivo do cliente Steam muda em relação à versão conhecida. Útil principalmente para desenvolvimento." },
+        API: { label: "Soquete de controle (API)", desc: "Permite que ferramentas externas enviem comandos ao slsteam-moon por um soquete local." },
+        DisableCloud: { label: "Desativar Steam Cloud", desc: "Deixe DESLIGADO se você usa o CloudRedirect para saves na nuvem. Ligue só se você não sincroniza saves." },
+        ExtendedLogging: { label: "Log detalhado", desc: "Registra toda chamada à Steam. Só para depuração — deixa o arquivo de log enorme." },
+        FakeEmail: { label: "E-mail falso", desc: "Mostra um e-mail inventado só no cliente Steam (cosmético). Deixe em branco para desativar." },
+        FakeWalletBalance: { label: "Saldo falso da carteira", desc: "Mostra um saldo inventado só no cliente (cosmético). 0 desativa." },
+        LogLevel: { label: "Nível de log", desc: "Quanto detalhe o slsteam-moon escreve no arquivo de log. O padrão é 2 (Info)." },
+      },
+    },
+  };
+
+  // pickLang() -> a key of I18N, following Steam's UI locale (navigator.language).
+  function pickLang() {
+    try {
+      var raw = navigator.language || "en";
+      if (I18N[raw]) return raw;
+      var p = raw.toLowerCase().split("-")[0];
+      if (p === "pt") return "pt-BR";
+      if (I18N[p]) return p;
+    } catch (e) {}
+    return "en";
+  }
