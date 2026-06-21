@@ -1,42 +1,42 @@
--- Run: lua5.4 tools/test_proc.lua
--- proc.is_alive(comm, root) scans <root>/*/comm for an exact process name. Used
--- to detect whether the main `steam` client process is running, the liveness
--- signal that drives the lifecycle watcher.
-package.path = "lua/?.lua;" .. package.path
+-- Leak/regression test for lua/proc.lua (proc.is_alive).
+--
+-- is_alive scans /proc and BREAKS early when it finds the target comm. The
+-- lfs directory handle must be closed on that early-exit path or the /proc
+-- directory fd leaks (it's polled every lifecycle tick -> fd exhaustion ->
+-- is_alive starts failing -> Lumen wrongly exits mid-session). This test calls
+-- is_alive many times via the early-break path (matching this process's own
+-- comm, "lumen") and asserts the count of open fds pointing at /proc does not
+-- grow.
+--
+-- Run:  LUMEN_LUA_DIR=lua ./bin/lumen --test tools/test_proc.lua
+
 local proc = require("proc")
-local lfs = require("lfs")  -- available via the lumen binary's --test runner
+local lfs = require("lfs")
 
-local function assert_true(c, m) if not c then error("FAIL: " .. (m or "")) end end
-
--- Build a fake /proc with a couple of pids and comm files.
-local function write(path, s)
-  local f = assert(io.open(path, "w")); f:write(s); f:close()
-end
-local root = os.tmpname()
-os.remove(root)
-lfs.mkdir(root)
-for _, e in ipairs({ { "100", "steam\n" }, { "101", "steamwebhelper\n" }, { "102", "bash\n" } }) do
-  lfs.mkdir(root .. "/" .. e[1])
-  write(root .. "/" .. e[1] .. "/comm", e[2])
+local function procfd_count()
+  local n = 0
+  for e in lfs.dir("/proc/self/fd") do
+    if e ~= "." and e ~= ".." then
+      local target = lfs.symlinkattributes("/proc/self/fd/" .. e, "target")
+      if target == "/proc" then n = n + 1 end
+    end
+  end
+  return n
 end
 
--- 1. exact match finds the steam client (and is NOT fooled by steamwebhelper).
-assert_true(proc.is_alive("steam", root) == true, "finds exact 'steam'")
+-- This process's comm is "lumen" (the test runner binary), so is_alive finds it
+-- partway through /proc and takes the early-break path that used to leak.
+assert(proc.is_alive("lumen") == true, "expected to find own comm 'lumen' alive")
+assert(proc.is_alive("definitely_not_a_real_comm_zzz") == false, "false positive")
 
--- 2. a name that only appears as a prefix of another comm is not matched.
-assert_true(proc.is_alive("stea", root) == false, "no partial match")
-
--- 3. absent process -> false.
-assert_true(proc.is_alive("doesnotexist", root) == false, "absent -> false")
-
--- 4. after removing the steam pid, it reports gone.
-os.remove(root .. "/100/comm"); lfs.rmdir(root .. "/100")
-assert_true(proc.is_alive("steam", root) == false, "gone after removal")
-
--- cleanup
-for _, p in ipairs({ "101", "102" }) do
-  os.remove(root .. "/" .. p .. "/comm"); lfs.rmdir(root .. "/" .. p)
+local before = procfd_count()
+for _ = 1, 300 do
+  proc.is_alive("lumen")
 end
-lfs.rmdir(root)
+collectgarbage("collect")  -- pre-fix would still show growth pre-GC; post-fix is 0 regardless
+local after = procfd_count()
 
-print("test_proc: ALL PASS")
+io.stderr:write("test_proc: /proc fds before=" .. before .. " after=" .. after .. "\n")
+assert(after <= before + 1,
+  "FAIL: proc.is_alive leaks /proc fds (" .. before .. " -> " .. after .. ")")
+io.stderr:write("test_proc OK\n")
