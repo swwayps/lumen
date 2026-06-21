@@ -139,6 +139,26 @@ do
     "a non-numeric appid coerces to 0")
 end
 
+-- 7b. uninstall_app_expr(): same relay shape as validate, but drives
+--     steam://uninstall/<appid> (Steam's own uninstall flow). Used when a build
+--     is pinned for an INSTALLED game: a verify can't switch the installed
+--     build (zero chunk delta), so the game must be uninstalled + reinstalled.
+do
+  assert_true(type(injector.uninstall_app_expr) == "function",
+    "injector exposes uninstall_app_expr for testing")
+  local expr = injector.uninstall_app_expr(250900)
+  assert_true(expr:find("steam://uninstall/250900", 1, true) ~= nil,
+    "expr targets steam://uninstall/<appid>")
+  assert_true(expr:find("ExecuteSteamURL", 1, true) ~= nil,
+    "expr drives the Steam URL handler via SteamClient")
+  assert_true(expr:find("try", 1, true) ~= nil and expr:find("catch", 1, true) ~= nil,
+    "expr is wrapped in try/catch so a missing API can't throw")
+  local inj = injector.uninstall_app_expr("250900'); alert(1); //")
+  assert_true(inj:find("alert", 1, true) == nil, "injected JS is not interpolated")
+  assert_true(inj:find("steam://uninstall/0", 1, true) ~= nil,
+    "a malformed appid coerces to 0, not the attacker tail")
+end
+
 -- 8. dispatch_method(): the binding handler's registry lookup. A regression
 --    here (dropping the registry lookup) makes EVERY backend RPC come back as
 --    "unknown method", which is exactly what broke the menu once.

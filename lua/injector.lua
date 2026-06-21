@@ -34,6 +34,18 @@ function injector.validate_app_expr(appid)
     .. "return false;}catch(e){return false;}})()"
 end
 
+-- Same relay as validate_app_expr but drives steam://uninstall/<appid> (Steam's
+-- own uninstall confirm). Used when a build is pinned for an INSTALLED game: a
+-- verify can't switch the installed build (the gid delta is zero), so the game
+-- has to be uninstalled and reinstalled to come down at the pinned build.
+function injector.uninstall_app_expr(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  return "(function(){try{if(window.SteamClient&&SteamClient.URL&&"
+    .. "typeof SteamClient.URL.ExecuteSteamURL==='function'){"
+    .. "SteamClient.URL.ExecuteSteamURL('steam://uninstall/" .. id .. "');return true;}"
+    .. "return false;}catch(e){return false;}})()"
+end
+
 -- Look up `fn_name` in the dispatch registry and run it (Millennium-style: an
 -- args object is mapped to alphabetical positional args by rpc.dispatch).
 -- Returns the result as a JSON string, or a {success=false} JSON string for an
@@ -270,6 +282,17 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
+  elseif req.fn == "__lumenUninstallApp" then
+    -- Relay: open Steam's own steam://uninstall/<appid> flow (its confirm
+    -- dialog). For an installed pinned game, a verify won't switch the build,
+    -- so the user uninstalls here, then reinstalls fresh at the pinned build.
+    local a = req.args or {}
+    local appid = tonumber(a.appid)
+    if appid and self.manager and self.manager:uninstall_app(appid) then
+      result = '{"ok":true}'
+    else
+      result = '{"ok":false}'
+    end
   else
     result = injector.dispatch_method(self.registry, req.fn, req.args)
   end
@@ -435,6 +458,21 @@ end
 -- we have a SharedJSContext control conn to run it on.
 function State:validate_app(appid)
   local expr = injector.validate_app_expr(appid)
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+
+-- Relay a steam://uninstall/<appid> into SharedJSContext to open Steam's own
+-- uninstall flow. Fire-and-forget: returns true if we have a SharedJSContext
+-- control conn to run it on.
+function State:uninstall_app(appid)
+  local expr = injector.uninstall_app_expr(appid)
   for _, conn in pairs(self.conns) do
     if conn.sock and conn.title == "SharedJSContext" then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",
