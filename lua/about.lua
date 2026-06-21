@@ -96,24 +96,34 @@ function about.fmt_date(iso)
 end
 
 -- compare_state(inst, latest) -> "current" | "update" | "unknown", where inst
--- and latest are { tag, asset_at, size } tables.
---   * Both sides have an asset fingerprint (asset_at[+size]) -> compare THAT, so
---     re-uploading the asset under the SAME tag is detected as an update.
---   * Otherwise fall back to comparing tags (legacy stamp / missing asset data).
---   * Missing tag on either side, or no latest at all -> unknown.
+-- and latest are { tag, asset_at, size } tables. An update is reported when
+-- EITHER signal changed, so both release workflows are covered:
+--   * tag bump (e.g. v2.6 -> v2.7)                                   -> update
+--   * SAME tag, asset re-uploaded (different upload time/size)       -> update
+-- When there's no asset fingerprint to compare (legacy tag-only stamp) it falls
+-- back to a tag comparison. No latest, or no installed identity at all -> unknown.
 function about.compare_state(inst, latest)
   inst = inst or {}
   latest = latest or {}
-  if not about.norm_tag(latest.tag) then return "unknown" end
+  local lt = about.norm_tag(latest.tag)
+  if not lt then return "unknown" end
+  local it = about.norm_tag(inst.tag)
+  -- No installed identity (neither tag nor asset) -> can't tell.
+  if not it and not inst.asset_at then return "unknown" end
+  -- 1) Tag changed -> update (caught even if we can't compare assets).
+  if it and it ~= lt then return "update" end
+  -- 2) Same (or unknown) tag: compare the asset fingerprint so a re-upload under
+  --    the same tag is still detected.
   if inst.asset_at and latest.asset_at then
-    local same = (inst.asset_at == latest.asset_at)
-      and (tostring(inst.size or "") == tostring(latest.size or ""))
-    return same and "current" or "update"
+    if inst.asset_at ~= latest.asset_at
+        or tostring(inst.size or "") ~= tostring(latest.size or "") then
+      return "update"
+    end
+    return "current"
   end
-  -- No fingerprint to compare -> tag-only best effort.
-  local ni = about.norm_tag(inst.tag)
-  if not ni then return "unknown" end
-  return (ni == about.norm_tag(latest.tag)) and "current" or "update"
+  -- 3) No asset fingerprint to compare (legacy stamp): tags match -> current.
+  if it and it == lt then return "current" end
+  return "unknown"
 end
 
 -- API URL for a repo's latest published (non-draft, non-prerelease) release.

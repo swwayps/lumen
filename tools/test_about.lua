@@ -37,6 +37,14 @@ check("compare same tag, new asset -> update", about.compare_state(
 check("compare same tag, size change -> update", about.compare_state(
   { tag = "v2.6", asset_at = "2026-06-17T00:00:00Z", size = 100 },
   { tag = "v2.6", asset_at = "2026-06-17T00:00:00Z", size = 200 }) == "update")
+-- Tag bump (v2.6 -> v2.7) with a new asset -> update.
+check("compare tag bump -> update", about.compare_state(
+  { tag = "v2.6", asset_at = "2026-06-17T00:00:00Z", size = 100 },
+  { tag = "v2.7", asset_at = "2026-06-21T00:00:00Z", size = 200 }) == "update")
+-- Tag bump caught even if the asset fingerprint somehow looks identical.
+check("compare tag bump wins over identical asset", about.compare_state(
+  { tag = "v2.6", asset_at = "2026-06-17T00:00:00Z", size = 100 },
+  { tag = "v2.7", asset_at = "2026-06-17T00:00:00Z", size = 100 }) == "update")
 -- No fingerprint on installed side (legacy stamp): fall back to tag compare.
 check("compare legacy tag equal -> current", about.compare_state(
   { tag = "v2.6" }, { tag = "v2.6", asset_at = "x", size = 1 }) == "current")

@@ -18,28 +18,42 @@
     body.appendChild(intro);
 
     // ── versions list ────────────────────────────────────────────────────────
+    // Render the three component rows INSTANTLY (names are known client-side),
+    // each showing a loading spinner where the version line and the state pill
+    // go. The single GetAboutVersions RPC (installed from versions.json + latest
+    // from the releases API) fills them in when it resolves — nothing waits on
+    // the network to draw the list.
     var list = document.createElement("div");
-    list.textContent = S.checking;
-    list.style.cssText = "color:#8f98a0;font-size:13px;padding:8px 2px;";
     body.appendChild(list);
+
+    var COMPS = [
+      { key: "slsteam_moon", name: "slsteam-moon" },
+      { key: "plugin", name: "LuaTools plugin" },
+      { key: "lumen", name: "Lumen" },
+    ];
+    var rowsByKey = {};
+    COMPS.forEach(function (c) {
+      var row = versionRow(c.name, S);
+      rowsByKey[c.key] = row;
+      list.appendChild(row.el);
+    });
 
     call("GetAboutVersions", {})
       .then(function (res) {
         var data = JSON.parse(res);
         if (!data || !data.success) throw new Error((data && data.error) || "load failed");
-        list.textContent = "";
-        list.style.cssText = "";
-        (data.components || []).forEach(function (c) {
-          list.appendChild(versionRow(c, S));
+        var got = {};
+        (data.components || []).forEach(function (c) { got[c.key] = c; });
+        COMPS.forEach(function (c) {
+          var row = rowsByKey[c.key];
+          if (!row) return;
+          if (got[c.key]) row.fill(got[c.key]);
+          else row.fail();
         });
       })
       .catch(function (e) {
-        list.style.cssText = "";
-        list.textContent = "";
-        var err = document.createElement("div");
-        err.className = "lumen-err";
-        err.textContent = S.loadFail + (e && e.message ? e.message : e);
-        list.appendChild(err);
+        log("GetAboutVersions", e);
+        COMPS.forEach(function (c) { if (rowsByKey[c.key]) rowsByKey[c.key].fail(); });
       });
 
     // ── actions ──────────────────────────────────────────────────────────────
@@ -95,8 +109,11 @@
     body.appendChild(credit);
   }
 
-  // One version row: name + "installed / latest" + a state pill.
-  function versionRow(c, S) {
+  // One version row, rendered in a LOADING state first: name + a spinner where
+  // the version line goes + a spinner where the state pill goes. Returns
+  // { el, fill(c), fail() }: fill() swaps the spinners for the real version text
+  // and state pill once GetAboutVersions resolves; fail() shows an unknown state.
+  function versionRow(name, S) {
     var row = document.createElement("div");
     row.className = "lumen-about-ver";
 
@@ -104,25 +121,51 @@
     left.style.cssText = "flex:1;min-width:0;";
     var nm = document.createElement("div");
     nm.className = "nm";
-    nm.textContent = c.name;
+    nm.textContent = name;
     left.appendChild(nm);
     var vv = document.createElement("div");
     vv.className = "vv";
-    var inst = c.installed && c.installed !== "" ? c.installed : S.unknown;
-    var latest = c.latest && c.latest !== "" ? c.latest : S.unknown;
-    if (c.installedBuild) inst += " (" + c.installedBuild + ")";
-    if (c.latestBuild) latest += " (" + c.latestBuild + ")";
-    vv.textContent = S.installed + ": " + inst + "  \u00b7  " + S.latest + ": " + latest;
+    vv.appendChild(spinnerEl());          // loading: where "installed: …" goes
     left.appendChild(vv);
     row.appendChild(left);
 
-    var pill = document.createElement("span");
-    pill.className = "lumen-about-state " +
-      (c.state === "current" ? "cur" : c.state === "update" ? "upd" : "unk");
-    pill.textContent = c.state === "current" ? S.upToDate
-      : c.state === "update" ? S.updateAvailable : S.unknown;
-    row.appendChild(pill);
-    return row;
+    var right = document.createElement("span");
+    right.className = "lumen-about-right";
+    right.appendChild(spinnerEl());        // loading: where the state pill goes
+    row.appendChild(right);
+
+    function setPill(state) {
+      right.textContent = "";
+      var pill = document.createElement("span");
+      pill.className = "lumen-about-state " +
+        (state === "current" ? "cur" : state === "update" ? "upd" : "unk");
+      pill.textContent = state === "current" ? S.upToDate
+        : state === "update" ? S.updateAvailable : S.unknown;
+      right.appendChild(pill);
+    }
+
+    function fill(c) {
+      var inst = c.installed && c.installed !== "" ? c.installed : S.unknown;
+      var latest = c.latest && c.latest !== "" ? c.latest : S.unknown;
+      if (c.installedBuild) inst += " (" + c.installedBuild + ")";
+      if (c.latestBuild) latest += " (" + c.latestBuild + ")";
+      vv.textContent = S.installed + ": " + inst + "  \u00b7  " + S.latest + ": " + latest;
+      setPill(c.state);
+    }
+
+    function fail() {
+      vv.textContent = S.installed + ": " + S.unknown + "  \u00b7  " + S.latest + ": " + S.unknown;
+      setPill("unknown");
+    }
+
+    return { el: row, fill: fill, fail: fail };
+  }
+
+  // A small rotating loading spinner element.
+  function spinnerEl() {
+    var s = document.createElement("span");
+    s.className = "lumen-spin";
+    return s;
   }
 
   // One action card: title + description + a button. When `confirmLabel` is

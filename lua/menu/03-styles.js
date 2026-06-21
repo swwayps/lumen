@@ -148,6 +148,13 @@
       "letter-spacing:.3px;}",
       ".lumen-about-credit a{color:#66c0f4;text-decoration:none;}",
       ".lumen-about-credit a:hover{text-decoration:underline;}",
+      ".lumen-about-right{flex:0 0 auto;display:inline-flex;align-items:center;min-width:90px;",
+      "justify-content:flex-end;}",
+      // loading spinner (version line + state pill while versions are fetched)
+      ".lumen-spin{display:inline-block;width:14px;height:14px;box-sizing:border-box;",
+      "border:2px solid rgba(255,255,255,.16);border-top-color:#9aa3ab;border-radius:50%;",
+      "animation:lumen-rot .7s linear infinite;vertical-align:middle;}",
+      "@keyframes lumen-rot{to{transform:rotate(360deg);}}",
       // confirm modal (validate prompt) — sits above the settings overlay
       ".lumen-modal-back{position:fixed;inset:0;z-index:100000;display:flex;",
       "align-items:center;justify-content:center;background:rgba(0,0,0,.6);",
