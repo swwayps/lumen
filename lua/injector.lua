@@ -46,6 +46,18 @@ function injector.uninstall_app_expr(appid)
     .. "return false;}catch(e){return false;}})()"
 end
 
+-- Relay steam://nav/games/details/<appid> into SharedJSContext to open a game's
+-- library page (the Game Updates card click target). Same shape as
+-- validate_app_expr; appid coerced to an int so nothing user-controlled is
+-- interpolated.
+function injector.open_library_app_expr(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  return "(function(){try{if(window.SteamClient&&SteamClient.URL&&"
+    .. "typeof SteamClient.URL.ExecuteSteamURL==='function'){"
+    .. "SteamClient.URL.ExecuteSteamURL('steam://nav/games/details/" .. id .. "');return true;}"
+    .. "return false;}catch(e){return false;}})()"
+end
+
 -- Look up `fn_name` in the dispatch registry and run it (Millennium-style: an
 -- args object is mapped to alphabetical positional args by rpc.dispatch).
 -- Returns the result as a JSON string, or a {success=false} JSON string for an
@@ -293,6 +305,16 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
+  elseif req.fn == "__lumenOpenLibraryApp" then
+    -- Open a game's library page (Game Updates card click). SteamClient lives
+    -- only in SharedJSContext. Fire-and-forget.
+    local a = req.args or {}
+    local appid = tonumber(a.appid)
+    if appid and self.manager and self.manager:open_library_app(appid) then
+      result = '{"ok":true}'
+    else
+      result = '{"ok":false}'
+    end
   else
     result = injector.dispatch_method(self.registry, req.fn, req.args)
   end
@@ -473,6 +495,19 @@ end
 -- control conn to run it on.
 function State:uninstall_app(appid)
   local expr = injector.uninstall_app_expr(appid)
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+-- Relay steam://nav/games/details/<appid> into SharedJSContext to open a game's
+-- library page. Fire-and-forget: returns true if a SharedJSContext conn exists.
+function State:open_library_app(appid)
+  local expr = injector.open_library_app_expr(appid)
   for _, conn in pairs(self.conns) do
     if conn.sock and conn.title == "SharedJSContext" then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",

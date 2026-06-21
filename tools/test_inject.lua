@@ -159,6 +159,23 @@ do
     "a malformed appid coerces to 0, not the attacker tail")
 end
 
+-- 7d. open_library_app_expr(): opens a game's library page (Game Updates card
+--     click), relayed via SharedJSContext's SteamClient. Same shape/safety as
+--     validate; appid coerced to an int.
+do
+  assert_true(type(injector.open_library_app_expr) == "function",
+    "injector exposes open_library_app_expr for testing")
+  local expr = injector.open_library_app_expr(1054490)
+  assert_true(expr:find("steam://nav/games/details/1054490", 1, true) ~= nil,
+    "expr targets steam://nav/games/details/<appid>")
+  assert_true(expr:find("ExecuteSteamURL", 1, true) ~= nil,
+    "expr drives the Steam URL handler via SteamClient")
+  local inj = injector.open_library_app_expr("1054490'); alert(1); //")
+  assert_true(inj:find("alert", 1, true) == nil, "injected JS is not interpolated")
+  assert_true(inj:find("steam://nav/games/details/0", 1, true) ~= nil,
+    "a malformed appid coerces to 0")
+end
+
 -- 8. dispatch_method(): the binding handler's registry lookup. A regression
 --    here (dropping the registry lookup) makes EVERY backend RPC come back as
 --    "unknown method", which is exactly what broke the menu once.

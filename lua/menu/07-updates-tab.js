@@ -122,7 +122,13 @@
 
     var head = document.createElement("div");
     head.className = "lumen-game-head";
-    head.style.cursor = "default";
+    head.style.cursor = "pointer";
+    // Clicking the card (capsule / name) opens the game's library page. The
+    // "Advanced" link stops propagation, and the version rows live outside head,
+    // so they keep their own behaviour.
+    head.addEventListener("click", function () {
+      call("__lumenOpenLibraryApp", { appid: game.appid }).catch(function (e) { log("openLibrary", e); });
+    });
     var cap = document.createElement("img");
     cap.className = "lumen-cap";
     // Defer offscreen capsule loads/decoding (native, behaviour-preserving: if
