@@ -422,8 +422,25 @@ function mp.default_ctx()
     config_path = (h ~= "" and (h .. "/.config/SLSsteam/config.yaml")) or nil,
     stplug_dir = root and (root .. "/config/stplug-in") or nil,
     manifests_dir = (h ~= "" and (h .. "/.config/SLSsteam/manifests")) or nil,
+    cache_dir = (h ~= "" and (h .. "/.config/SLSsteam/cache")) or nil,
     steam_root = root,
   }
+end
+
+-- invalidate_appinfo_cache(ctx, appid): drop the provisioned appinfo buffers for
+-- an app (<cache>/picsbuffer_<appid>.{bin,yaml}) so SLSsteam re-renders them with
+-- the CURRENT pins on its next start. Without this, a pin set after the buffer
+-- was last rendered leaves a stale public gid in appinfo, which loops the build
+-- reconcile (manifest-pin-reconcile-RE.md §0). Safe no-op on a nil appid or when
+-- the ctx carries no cache_dir (host tests that don't exercise it).
+function mp.invalidate_appinfo_cache(ctx, appid)
+  ctx = ctx or {}
+  local dir = ctx.cache_dir
+  local id = math.tointeger(tonumber(appid))
+  if not dir or not id then return end
+  for _, ext in ipairs({ "bin", "yaml" }) do
+    os.remove(dir .. "/picsbuffer_" .. id .. "." .. ext)
+  end
 end
 
 local function read_file(path)
@@ -754,6 +771,7 @@ function mp.set_game_pin_rpc(ctx, json_str)
   mp.set_game_pin(pins, appid, depot_gids)
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
+  mp.invalidate_appinfo_cache(ctx, appid)
   return json.encode({ success = true, appid = appid })
 end
 
@@ -767,6 +785,7 @@ function mp.set_dlc_pin_rpc(ctx, json_str)
   mp.set_dlc_pin(pins, as_int(req.appid), as_int(req.depot), tostring(req.gid))
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
+  mp.invalidate_appinfo_cache(ctx, as_int(req.appid))
   return json.encode({ success = true })
 end
 
@@ -778,6 +797,7 @@ function mp.clear_game_pin_rpc(ctx, json_str)
   mp.clear_game_pin(pins, as_int(req.appid))
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
+  mp.invalidate_appinfo_cache(ctx, as_int(req.appid))
   return json.encode({ success = true })
 end
 
@@ -791,6 +811,7 @@ function mp.clear_dlc_pin_rpc(ctx, json_str)
   mp.clear_dlc_pin(pins, as_int(req.appid), as_int(req.depot))
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
+  mp.invalidate_appinfo_cache(ctx, as_int(req.appid))
   return json.encode({ success = true })
 end
 
@@ -827,6 +848,7 @@ function mp.import_lua_pin_rpc(ctx, json_str)
   mp.set_game_pin(pins, appid, depot_gids)
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
+  mp.invalidate_appinfo_cache(ctx, appid)
   return json.encode({ success = true, appid = appid, pinned = count })
 end
 
@@ -875,6 +897,7 @@ function mp.import_lua_full_rpc(ctx, json_str)
   end
   local cwok, cwerr = write_config_raw(ctx.config_path, newcfg)
   if not cwok then return err(cwerr) end
+  mp.invalidate_appinfo_cache(ctx, appid)
 
   return json.encode({ success = true, appid = appid, pinned = count, added = status })
 end

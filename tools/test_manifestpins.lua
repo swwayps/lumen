@@ -656,6 +656,43 @@ do
   eq(removed3, false, "drop: prefix id does not match a longer depot")
 end
 
+-- ── 17. invalidate_appinfo_cache: a pin change drops the stale provisioned
+-- appinfo buffer so SLSsteam re-renders it with the new pin on next start
+-- (else the loop in manifest-pin-reconcile-RE.md §0). ──────────────────────
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local function exists(p) local h = io.open(p, "rb"); if h then h:close(); return true end return false end
+  local function seed(cache, id)
+    for _, ext in ipairs({ "bin", "yaml" }) do
+      local f = assert(io.open(cache .. "/picsbuffer_" .. id .. "." .. ext, "wb")); f:write("x"); f:close()
+    end
+  end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local cache = root .. "/cache"; mkdir(cache)
+  local cfg = root .. "/config.yaml"
+  local cf = assert(io.open(cfg, "wb")); cf:write("AdditionalApps:\n  - 700\n"); cf:close()
+  local ctx = { config_path = cfg, cache_dir = cache }
+
+  -- direct helper removes both buffer files
+  seed(cache, 700)
+  check(exists(cache .. "/picsbuffer_700.bin"), "cache: buffer present before")
+  mp.invalidate_appinfo_cache(ctx, 700)
+  check(not exists(cache .. "/picsbuffer_700.bin"), "cache: .bin removed")
+  check(not exists(cache .. "/picsbuffer_700.yaml"), "cache: .yaml removed")
+
+  -- a pin RPC invalidates the app's buffer as part of writing the pin
+  seed(cache, 700)
+  mp.set_dlc_pin_rpc(ctx, json.encode({ appid = 700, depot = 701, gid = "900" }))
+  check(not exists(cache .. "/picsbuffer_700.bin"), "rpc set_dlc_pin: invalidates appinfo cache")
+
+  -- guards: nil appid / absent cache_dir are safe no-ops (no crash)
+  mp.invalidate_appinfo_cache(ctx, nil)
+  mp.invalidate_appinfo_cache({}, 700)
+  check(true, "cache: nil appid / absent cache_dir is a safe no-op")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
 if fails == 0 then print("\ntest_manifestpins: ALL PASS") else
   print("\ntest_manifestpins: " .. fails .. " FAILED"); os.exit(1)
 end
