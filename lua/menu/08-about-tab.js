@@ -3,11 +3,9 @@
 // LM-FRAGMENT by boot.lua (read_menu_js). Not a standalone module. See 01-core.js.
 
   // The About tab: shows the installed vs latest release of each of the three
-  // stack components (slsteam-moon / Lumen / LuaTools plugin), a "Reload All"
-  // that live-reloads the UI without a Steam restart (Millennium's apply-changes
-  // mechanism, relayed as __lumenRestartJSContext), and an "Update All" that
-  // opens a terminal running the installer. Versions come from GetAboutVersions
-  // (releases are canonical; the installer stamps the installed tag).
+  // stack components (slsteam-moon / Lumen / LuaTools plugin) and an "Update
+  // All" that opens a terminal running the installer. Versions come from
+  // GetAboutVersions (releases are canonical; the installer stamps the tag).
   function renderAbout(body) {
     var S = (I18N[pickLang()] || I18N.en).about || I18N.en.about;
     body.textContent = "";
@@ -59,18 +57,6 @@
     // ── actions ──────────────────────────────────────────────────────────────
     var actions = document.createElement("div");
     actions.className = "lumen-about-actions";
-
-    actions.appendChild(actionRow(S.reloadTitle, S.reloadDesc, S.reloadBtn, {
-      confirmLabel: S.reloadConfirm,
-      onConfirmed: function (btn) {
-        btn.textContent = S.reloadGo;
-        btn.classList.add("busy");
-        // Fire-and-forget: the relay restarts the Steam UI JS context, which
-        // tears down this overlay (and the whole shell JS) and reloads ~2s
-        // later. No success modal — the reload itself is the feedback.
-        call("__lumenRestartJSContext").catch(function (e) { log("ReloadAll", e); });
-      },
-    }));
 
     actions.appendChild(actionRow(S.updateTitle, S.updateDesc, S.updateBtn, {
       onConfirmed: function (btn) {
@@ -125,13 +111,12 @@
     left.appendChild(nm);
     var vv = document.createElement("div");
     vv.className = "vv";
-    vv.appendChild(spinnerEl());          // loading: where "installed: …" goes
-    left.appendChild(vv);
+    left.appendChild(vv);                  // version line: empty while loading
     row.appendChild(left);
 
     var right = document.createElement("span");
     right.className = "lumen-about-right";
-    right.appendChild(spinnerEl());        // loading: where the state pill goes
+    right.appendChild(spinnerEl());        // single loading spinner (pill slot)
     row.appendChild(right);
 
     function setPill(state) {

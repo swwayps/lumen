@@ -126,7 +126,7 @@
       "border-bottom:1px solid rgba(255,255,255,.06);}",
       ".lumen-about-ver .nm{flex:1;min-width:0;color:#dcdedf;font-size:14px;font-weight:600;}",
       ".lumen-about-ver .vv{color:#8f98a0;font-size:12px;font-family:monospace;margin-top:3px;",
-      "font-weight:400;}",
+      "font-weight:400;min-height:15px;}",
       ".lumen-about-state{flex:0 0 auto;font-size:11px;font-weight:700;text-transform:uppercase;",
       "letter-spacing:.4px;padding:3px 9px;border-radius:10px;white-space:nowrap;}",
       ".lumen-about-state.cur{background:#1a3a24;color:#6fd08c;}",

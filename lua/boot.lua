@@ -85,7 +85,6 @@ require("manifestpins").register(registry)
 
 -- The "About" tab: report installed-vs-latest versions of the three stack
 -- components (from the release tags) and open a terminal for "Update All".
--- ("Reload All" is the injector's __lumenRestartJSContext control relay.)
 require("about").register(registry)
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
