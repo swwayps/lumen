@@ -697,7 +697,13 @@ function mp.build_games(ctx)
   local ok_lfs, lfs = pcall(require, "lfs")
   if ctx.stplug_dir then
     if ok_lfs then
-      for entry in lfs.dir(ctx.stplug_dir) do lua_files[#lua_files + 1] = entry end
+      -- lfs.dir THROWS if the directory doesn't exist yet (a fresh install with
+      -- no games added has no config/stplug-in). Guard it so build_games returns
+      -- an empty list and the tab shows its normal empty state, instead of the
+      -- error bubbling up as "Failed to load game versions".
+      pcall(function()
+        for entry in lfs.dir(ctx.stplug_dir) do lua_files[#lua_files + 1] = entry end
+      end)
     else
       local p = io.popen("ls -1 '" .. ctx.stplug_dir .. "' 2>/dev/null")
       if p then for line in p:lines() do lua_files[#lua_files + 1] = line end; p:close() end

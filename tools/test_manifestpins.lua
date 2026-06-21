@@ -357,6 +357,15 @@ do
   for _, gg in ipairs(games3) do if gg.appid == 228980 then hasTool = true end end
   check(not hasTool, "build: a Steam tool app (228980) is omitted from the list")
 
+  -- Fresh install: no config/stplug-in dir at all. build_games must return an
+  -- empty list (the tab shows its empty state), NOT throw "cannot open ...
+  -- stplug-in: No such file or directory".
+  local fresh = { config_path = cfg, stplug_dir = root .. "/does-not-exist",
+                  manifests_dir = mans, steam_root = root }
+  local ok_fresh, games_fresh = pcall(mp.build_games, fresh)
+  check(ok_fresh, "build: missing stplug-in dir does not throw")
+  check(ok_fresh and #games_fresh == 0, "build: missing stplug-in dir yields no games")
+
   -- locking the game must pin only real content depots, NEVER the workshop depot
   -- (its snapshots aren't game builds — pinning it would downgrade workshop).
   local sg = json.decode(mp.set_game_pin_rpc(ctx, json.encode({ appid = 638510, date = 250 })))
