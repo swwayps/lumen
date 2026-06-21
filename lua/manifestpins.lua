@@ -245,6 +245,58 @@ function mp.splice_pins(text, pins)
   return body
 end
 
+-- add_additional_app(text, appid) -> new_text, status. Registers `appid` in the
+-- AdditionalApps block-list (the id SLSsteam reads to treat a game as managed —
+-- see slsteam.lua). Pure text transform so ImportLuaFull can fold it into the
+-- SAME atomic write as the pin (no second racing write to config.yaml).
+-- status: "added" | "already_present" | "inline_refused" (won't rewrite the
+-- inline "[a, b]" form). Mirrors the plugin's register_app block editing.
+function mp.add_additional_app(text, appid)
+  appid = math.tointeger(tonumber(appid))
+  text = text or ""
+  if not appid then return text, "bad_appid" end
+
+  local had_trailing_nl = (#text > 0 and text:sub(-1) == "\n")
+  local lines = {}
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+  if had_trailing_nl then lines[#lines] = nil end
+
+  local header_idx
+  for i, line in ipairs(lines) do
+    if line:match("^AdditionalApps%s*:") then header_idx = i; break end
+  end
+
+  if header_idx then
+    -- value after the colon (ignoring a trailing comment) => inline form
+    local after = lines[header_idx]:match("^AdditionalApps%s*:%s*(.-)%s*$") or ""
+    if after:gsub("#.*$", ""):gsub("%s+$", "") ~= "" then return text, "inline_refused" end
+  else
+    if #lines > 0 and lines[#lines] ~= "" then lines[#lines + 1] = "" end
+    lines[#lines + 1] = "AdditionalApps:"
+    header_idx = #lines
+  end
+
+  local last_entry_idx, indent = header_idx, "  "
+  for i = header_idx + 1, #lines do
+    local stripped = lines[i]:gsub("^%s+", "")
+    if stripped == "" or stripped:match("^#") then
+      -- comment/blank: belongs to whatever follows; skip
+    else
+      local entry_indent, rest = lines[i]:match("^(%s+)%-%s+(.*)$")
+      if not entry_indent then break end  -- next top-level key ends the block
+      indent = entry_indent
+      last_entry_idx = i
+      local id = math.tointeger(tonumber((rest:gsub("#.*$", ""):gsub("%s+$", ""))))
+      if id == appid then return text, "already_present" end
+    end
+  end
+
+  table.insert(lines, last_entry_idx + 1, indent .. "- " .. tostring(appid))
+  local body = table.concat(lines, "\n")
+  if #lines > 0 then body = body .. "\n" end
+  return body, "added"
+end
+
 -- ── shared-runtime depot detection ───────────────────────────────────────
 -- Steamworks Common Redistributables (app 228980) ship as shared depots with
 -- FIXED ids reused by every game (DirectX, VC++, .NET, ...). They carry ancient
@@ -322,6 +374,26 @@ function mp.clear_dlc_pin(pins, appid, depot)
   if not a.locked and (not a.depots or next(a.depots) == nil) then
     pins[appid] = nil
   end
+end
+
+-- drop_installed_depot(acf_text, depot) -> new_text, removed_bool. Removes the
+-- "<depot>" { ... } entry from an appmanifest's InstalledDepots block so Steam
+-- replans a FRESH install of that depot at the pinned gid (Approach A). Pure,
+-- brace-balanced VDF edit; no-op (text unchanged, false) when the depot isn't
+-- listed. The id is matched quoted so a shorter id can't match a longer one.
+-- Callers must only apply this with Steam closed (editing a live .acf is racy).
+function mp.drop_installed_depot(acf_text, depot)
+  acf_text = acf_text or ""
+  local d = math.tointeger(tonumber(depot))
+  if not d then return acf_text, false end
+  local blk = acf_text:match('"InstalledDepots"%s*(%b{})')
+  if not blk then return acf_text, false end
+  local s, e = blk:find('%s*"' .. d .. '"%s*%b{}')
+  if not s then return acf_text, false end
+  local new_blk = blk:sub(1, s - 1) .. blk:sub(e + 1)
+  local i = acf_text:find(blk, 1, true)
+  if not i then return acf_text, false end
+  return acf_text:sub(1, i - 1) .. new_blk .. acf_text:sub(i + #blk), true
 end
 
 -- ── IO layer ────────────────────────────────────────────────────────────────
@@ -414,6 +486,40 @@ local function write_pins(config_path, pins)
   if not w then return false, werr or "open failed" end
   w:write(out); w:close()
   local ok, rerr = os.rename(tmp, config_path)
+  if not ok then os.remove(tmp); return false, rerr or "rename failed" end
+  return true
+end
+
+-- write_config_raw(config_path, text) -> ok, err. Atomic write of a full config
+-- body (ImportLuaFull edits AdditionalApps + pins together). Same no-clobber
+-- guard + temp-rename as write_pins.
+local function write_config_raw(config_path, text)
+  if not config_path then return false, "no path" end
+  if not looks_like_config(text) then
+    return false, "config does not look valid; refusing to write"
+  end
+  local tmp = string.format("%s.tmp.lumen.%d.%d.%d", config_path,
+    os.time(), write_seq, math.random(100000, 999999))
+  write_seq = write_seq + 1
+  local w, werr = io.open(tmp, "wb")
+  if not w then return false, werr or "open failed" end
+  w:write(text); w:close()
+  local ok, rerr = os.rename(tmp, config_path)
+  if not ok then os.remove(tmp); return false, rerr or "rename failed" end
+  return true
+end
+
+-- write_lua_file(stplug_dir, appid, text) -> ok, err. Atomic write of the
+-- LuaTools <appid>.lua (the depot keys SLSsteam needs) into config/stplug-in.
+local function write_lua_file(stplug_dir, appid, text)
+  if not stplug_dir then return false, "no stplug-in dir" end
+  os.execute("mkdir -p '" .. stplug_dir .. "' 2>/dev/null")
+  local path = stplug_dir .. "/" .. tostring(appid) .. ".lua"
+  local tmp = string.format("%s.tmp.lumen.%d.%d", path, os.time(), math.random(100000, 999999))
+  local w, werr = io.open(tmp, "wb")
+  if not w then return false, werr or "open failed" end
+  w:write(text); w:close()
+  local ok, rerr = os.rename(tmp, path)
   if not ok then os.remove(tmp); return false, rerr or "rename failed" end
   return true
 end
@@ -688,6 +794,126 @@ function mp.clear_dlc_pin_rpc(ctx, json_str)
   return json.encode({ success = true })
 end
 
+-- ImportLuaPin{appid, lua}: pin a game to the exact build named by a lua.tools
+-- manifest .lua (the file its "Manifest" button hands out). Its
+-- setManifestid(depot,"gid") lines name the build a crack/fix targets; we write
+-- those depot gids as ManifestPins + lock the app, so the manifestbind redirect
+-- installs that build unconditionally (online, BYld fetches each manifest by
+-- request code using the depot key already present in the installed .lua).
+-- `lua` is the file's full text (uploaded from the frontend). When `appid` is
+-- given (the card's game) it must equal the .lua's base appid, guarding against
+-- importing the wrong game's file.
+function mp.import_lua_pin_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or type(req.lua) ~= "string" then
+    return err("bad request")
+  end
+  local parsed = mp.parse_lua(req.lua)
+  local appid = as_int(req.appid) or parsed.base
+  if not appid then return err("could not determine app id from .lua") end
+  if parsed.base and as_int(req.appid) and parsed.base ~= as_int(req.appid) then
+    return err("this .lua is for app " .. parsed.base .. ", not " .. as_int(req.appid))
+  end
+
+  local depot_gids = {}
+  local count = 0
+  for depot, info in pairs(parsed.depots) do
+    if info.manifestid then depot_gids[depot] = info.manifestid; count = count + 1 end
+  end
+  if count == 0 then return err("no setManifestid pins found in .lua") end
+
+  local pins = mp.parse_pins(read_file(ctx.config_path) or "")
+  mp.set_game_pin(pins, appid, depot_gids)
+  local wok, werr = write_pins(ctx.config_path, pins)
+  if not wok then return err(werr) end
+  return json.encode({ success = true, appid = appid, pinned = count })
+end
+
+-- ImportLuaFull{appid?, lua}: import a LuaTools .lua for a game NOT yet added
+-- via the LuaTools plugin. Writes the .lua to stplug-in/<appid>.lua (depot
+-- keys), registers the appid in AdditionalApps, and applies the setManifestid
+-- pins (locking the build) when the file carries any — all config edits in ONE
+-- atomic write. The appid is the .lua's base (first bare addappid); a
+-- card-supplied appid must match it. A .lua with no setManifestid still imports
+-- (pinned=0): the game installs at the latest build. SLSsteam only provisions a
+-- brand-new appid on its next start, so the frontend prompts a Steam restart.
+function mp.import_lua_full_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or type(req.lua) ~= "string" then
+    return err("bad request")
+  end
+  local parsed = mp.parse_lua(req.lua)
+  local appid = as_int(req.appid) or parsed.base
+  if not appid then return err("could not determine app id from .lua") end
+  if parsed.base and as_int(req.appid) and parsed.base ~= as_int(req.appid) then
+    return err("this .lua is for app " .. parsed.base .. ", not " .. as_int(req.appid))
+  end
+
+  -- 1) write the .lua (depot keys) to stplug-in.
+  local lok, lerr = write_lua_file(ctx.stplug_dir, appid, req.lua)
+  if not lok then return err(lerr) end
+
+  -- 2) collect setManifestid pins (optional — a keys-only .lua is valid).
+  local depot_gids, count = {}, 0
+  for depot, info in pairs(parsed.depots) do
+    if info.manifestid then depot_gids[depot] = info.manifestid; count = count + 1 end
+  end
+
+  -- 3) register the appid in AdditionalApps + apply pins in one atomic write.
+  local cfg = read_file(ctx.config_path)
+  if not cfg then return err("config.yaml not found") end
+  local newcfg, status = mp.add_additional_app(cfg, appid)
+  if status == "inline_refused" then
+    return err("AdditionalApps uses an inline list; refusing to edit")
+  end
+  if count > 0 then
+    local pins = mp.parse_pins(newcfg)
+    mp.set_game_pin(pins, appid, depot_gids)
+    newcfg = mp.splice_pins(newcfg, pins)
+  end
+  local cwok, cwerr = write_config_raw(ctx.config_path, newcfg)
+  if not cwok then return err(cwerr) end
+
+  return json.encode({ success = true, appid = appid, pinned = count, added = status })
+end
+
+-- InspectLua{appid?, lua}: read-only pre-check for the "Load .lua" flow.
+-- Returns the .lua's base appid, whether the game is currently installed (an
+-- appmanifest exists in any library), and how many setManifestid pins it
+-- carries — so the frontend can choose between a plain import and the
+-- reinstall-confirm modal WITHOUT writing anything yet.
+function mp.inspect_lua_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or type(req.lua) ~= "string" then
+    return err("bad request")
+  end
+  local parsed = mp.parse_lua(req.lua)
+  local appid = as_int(req.appid) or parsed.base
+  if not appid then return err("could not determine app id from .lua") end
+  if parsed.base and as_int(req.appid) and parsed.base ~= as_int(req.appid) then
+    return err("this .lua is for app " .. parsed.base .. ", not " .. as_int(req.appid))
+  end
+  local count = 0
+  for _, info in pairs(parsed.depots) do if info.manifestid then count = count + 1 end end
+  -- alreadyOnBuild: the game is installed AND every depot the .lua pins is
+  -- already installed at that exact gid -> nothing to change (the frontend then
+  -- only offers a force "apply anyway", never a silent re-validate).
+  local inst = installed_gids(ctx.steam_root, appid)
+  local installed = (next(inst) ~= nil)
+  local matched = 0
+  for depot, info in pairs(parsed.depots) do
+    if info.manifestid and inst[depot] ~= nil and inst[depot] == info.manifestid then
+      matched = matched + 1
+    end
+  end
+  local already_on_build = installed and count > 0 and matched == count
+  return json.encode({ success = true, appid = appid,
+    installed = installed, pinned = count, alreadyOnBuild = already_on_build })
+end
+
 -- DeleteManifest{depot, gid}: remove a single archived version's manifest.
 function mp.delete_manifest_rpc(ctx, json_str)
   ctx = ctx or mp.default_ctx()
@@ -715,6 +941,9 @@ function mp.register(registry)
   registry.SetDlcPin = function(j) return mp.set_dlc_pin_rpc(mp.default_ctx(), j) end
   registry.ClearGamePin = function(j) return mp.clear_game_pin_rpc(mp.default_ctx(), j) end
   registry.ClearDlcPin = function(j) return mp.clear_dlc_pin_rpc(mp.default_ctx(), j) end
+  registry.ImportLuaPin = function(j) return mp.import_lua_pin_rpc(mp.default_ctx(), j) end
+  registry.ImportLuaFull = function(j) return mp.import_lua_full_rpc(mp.default_ctx(), j) end
+  registry.InspectLua = function(j) return mp.inspect_lua_rpc(mp.default_ctx(), j) end
   registry.DeleteManifest = function(j) return mp.delete_manifest_rpc(mp.default_ctx(), j) end
   registry.ClearManifests = function() return mp.clear_manifests_rpc(mp.default_ctx()) end
   return registry

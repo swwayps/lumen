@@ -442,6 +442,220 @@ do
   os.execute("rm -rf '" .. root .. "'")
 end
 
+-- ── 12. ImportLuaPin: pin a game to the gids in an uploaded lua.tools .lua ──
+-- The lua.tools "Manifest" button hands the user a <appid>.lua whose
+-- setManifestid(depot,"gid") lines name the exact build a crack/fix needs.
+-- Importing it writes those depot gids as ManifestPins + locks the app, so the
+-- redirect installs that build (online BYld fetches the manifest by request
+-- code using the depot key already in the installed .lua).
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local cfg = root .. "/config.yaml"
+  local cf = assert(io.open(cfg, "wb"))
+  cf:write("AdditionalApps:\n  - 3357650\nLogLevel: 2\n"); cf:close()
+  local ctx = { config_path = cfg }
+
+  -- a real lua.tools PRAGMATA manifest .lua (keys truncated for the fixture).
+  local lua = table.concat({
+    "-- PRAGMATA",
+    "addappid(3357650)",
+    "addappid(3859920)",
+    "addappid(3859930)",
+    'addappid(3357651, 1, "18e75bfb")',
+    'addappid(3859920, 1, "1fb81184")',
+    'addappid(3859930, 1, "14001799")',
+    'setManifestid(3357651, "2417499809052404547")',
+    'setManifestid(3859920, "4731286747379700304")',
+    'setManifestid(3859930, "6714427611547107917")',
+  }, "\n")
+
+  local res = json.decode(mp.import_lua_pin_rpc(ctx, json.encode({ appid = 3357650, lua = lua })))
+  eq(res.success, true, "import: success")
+  eq(res.pinned, 3, "import: three depots pinned")
+
+  local rf = assert(io.open(cfg, "rb")); local body = rf:read("*a"); rf:close()
+  local pins = mp.parse_pins(body)
+  check(pins[3357650] ~= nil, "import: app pinned")
+  eq(pins[3357650].locked, true, "import: locks the app to the build")
+  eq(pins[3357650].depots[3357651], "2417499809052404547", "import: base depot gid")
+  eq(pins[3357650].depots[3859920], "4731286747379700304", "import: dlc depot gid")
+  eq(pins[3357650].depots[3859930], "6714427611547107917", "import: dlc2 depot gid")
+  check(body:find("AdditionalApps:", 1, true) ~= nil, "import: preserves rest of config")
+
+  -- guard: appid passed by the card must match the .lua's base (wrong file)
+  local bad = json.decode(mp.import_lua_pin_rpc(ctx, json.encode({ appid = 999999, lua = lua })))
+  eq(bad.success, false, "import: rejects .lua whose base != selected game")
+
+  -- guard: a .lua with no setManifestid lines has nothing to pin
+  local nopins = json.decode(mp.import_lua_pin_rpc(ctx, json.encode({ lua = "addappid(42)\n" })))
+  eq(nopins.success, false, "import: errors when no setManifestid present")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
+-- ── 13. add_additional_app (pure config-text edit) ────────────────────────
+-- Mirrors the plugin's AdditionalApps block-list editor but as a pure
+-- text->text transform so ImportLuaFull can register an appid in the SAME
+-- atomic write that applies the pin (no second racing write to config.yaml).
+do
+  local t1 = "AdditionalApps:\n  - 111\nLogLevel: 2\n"
+  local out, st = mp.add_additional_app(t1, 222)
+  eq(st, "added", "add_app: reports added")
+  check(out:find("- 222", 1, true) ~= nil, "add_app: appid inserted")
+  check(out:find("- 111", 1, true) ~= nil, "add_app: existing entry kept")
+  check(out:find("LogLevel: 2", 1, true) ~= nil, "add_app: rest preserved")
+
+  local out2, st2 = mp.add_additional_app(out, 222)
+  eq(st2, "already_present", "add_app: idempotent on duplicate")
+
+  local out3, st3 = mp.add_additional_app("LogLevel: 2\n", 333)
+  eq(st3, "added", "add_app: creates block when absent")
+  check(out3:find("AdditionalApps:", 1, true) ~= nil, "add_app: block header created")
+  check(out3:find("- 333", 1, true) ~= nil, "add_app: appid in new block")
+
+  local _, st4 = mp.add_additional_app("AdditionalApps: [1, 2]\n", 444)
+  eq(st4, "inline_refused", "add_app: refuses inline-list form")
+end
+
+-- ── 14. ImportLuaFull: load a .lua for a game NOT added via LuaTools ───────
+-- Writes the .lua to stplug-in/<appid>.lua (depot keys), registers the appid
+-- in AdditionalApps, and applies the setManifestid pins (if any) in ONE atomic
+-- config write. appid comes from the .lua's base; a card appid must match it.
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local stplug = root .. "/stplug-in"; mkdir(stplug)
+  local cfg = root .. "/config.yaml"
+  local cf = assert(io.open(cfg, "wb"))
+  cf:write("AdditionalApps:\n  - 555\nLogLevel: 2\n"); cf:close()
+  local ctx = { config_path = cfg, stplug_dir = stplug }
+
+  local lua = table.concat({
+    "addappid(3357650)",
+    'addappid(3357651, 1, "key1")',
+    'setManifestid(3357651, "2417499809052404547")',
+  }, "\n")
+
+  local res = json.decode(mp.import_lua_full_rpc(ctx, json.encode({ lua = lua })))
+  eq(res.success, true, "full: success")
+  eq(res.appid, 3357650, "full: base appid detected from .lua")
+  eq(res.pinned, 1, "full: one depot pinned")
+
+  local lf = io.open(stplug .. "/3357650.lua", "rb")
+  check(lf ~= nil, "full: .lua written to stplug-in")
+  if lf then local c = lf:read("*a"); lf:close()
+    check(c:find("3357651", 1, true) ~= nil, "full: .lua content written verbatim") end
+
+  local rf = assert(io.open(cfg, "rb")); local body = rf:read("*a"); rf:close()
+  check(body:find("- 3357650", 1, true) ~= nil, "full: appid added to AdditionalApps")
+  check(body:find("- 555", 1, true) ~= nil, "full: existing AdditionalApps kept")
+  local pins = mp.parse_pins(body)
+  check(pins[3357650] ~= nil and pins[3357650].locked == true, "full: app locked to build")
+  eq(pins[3357650].depots[3357651], "2417499809052404547", "full: depot pinned")
+
+  -- a .lua with NO setManifestid still imports the game (pinned=0, unlocked):
+  -- the §3.3 "not installed yet" path installs at latest.
+  local lua2 = "addappid(777)\naddappid(778,1,\"k\")\n"
+  local res2 = json.decode(mp.import_lua_full_rpc(ctx, json.encode({ lua = lua2 })))
+  eq(res2.success, true, "full: no-pin .lua still imports")
+  eq(res2.pinned, 0, "full: zero pins reported")
+  local rf2 = assert(io.open(cfg, "rb")); local body2 = rf2:read("*a"); rf2:close()
+  check(body2:find("- 777", 1, true) ~= nil, "full: no-pin game added to AdditionalApps")
+  check(mp.parse_pins(body2)[777] == nil, "full: no-pin game left unlocked")
+
+  -- guard: a card-supplied appid must equal the .lua's base.
+  local bad = json.decode(mp.import_lua_full_rpc(ctx, json.encode({ appid = 999999, lua = lua })))
+  eq(bad.success, false, "full: rejects appid != .lua base")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
+-- ── 15. InspectLua: read-only pre-check for the Load-.lua flow ────────────
+-- The top "Load .lua" button must decide between a plain import and the
+-- reinstall-confirm modal BEFORE writing anything, so it needs the .lua's base
+-- appid and whether the game is currently installed (appmanifest present).
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  mkdir(root .. "/steamapps")
+  local cfg = root .. "/config.yaml"
+  local cf = assert(io.open(cfg, "wb")); cf:write("AdditionalApps:\n  - 1\n"); cf:close()
+  local ctx = { config_path = cfg, steam_root = root,
+                stplug_dir = root .. "/stplug-in", manifests_dir = root .. "/manifests" }
+
+  local lua = 'addappid(700)\naddappid(701,1,"k")\nsetManifestid(701,"900")\n'
+
+  local r1 = json.decode(mp.inspect_lua_rpc(ctx, json.encode({ lua = lua })))
+  eq(r1.success, true, "inspect: success")
+  eq(r1.appid, 700, "inspect: appid from .lua base")
+  eq(r1.installed, false, "inspect: not installed yet")
+  eq(r1.pinned, 1, "inspect: pin count")
+  eq(r1.alreadyOnBuild, false, "inspect: not-installed -> not alreadyOnBuild")
+
+  -- installed at the SAME gid the .lua pins -> alreadyOnBuild
+  local af = assert(io.open(root .. "/steamapps/appmanifest_700.acf", "wb"))
+  af:write('"AppState"\n{\n\t"InstalledDepots"\n\t{\n\t\t"701"\n\t\t{\n\t\t\t"manifest"\t\t"900"\n\t\t}\n\t}\n}\n')
+  af:close()
+  local r2 = json.decode(mp.inspect_lua_rpc(ctx, json.encode({ lua = lua })))
+  eq(r2.installed, true, "inspect: installed when appmanifest present")
+  eq(r2.alreadyOnBuild, true, "inspect: installed gid matches the .lua pin -> alreadyOnBuild")
+
+  -- installed at a DIFFERENT gid -> a real build change, not alreadyOnBuild
+  local af2 = assert(io.open(root .. "/steamapps/appmanifest_700.acf", "wb"))
+  af2:write('"AppState"\n{\n\t"InstalledDepots"\n\t{\n\t\t"701"\n\t\t{\n\t\t\t"manifest"\t\t"999"\n\t\t}\n\t}\n}\n')
+  af2:close()
+  local r3 = json.decode(mp.inspect_lua_rpc(ctx, json.encode({ lua = lua })))
+  eq(r3.installed, true, "inspect: still installed (different gid)")
+  eq(r3.alreadyOnBuild, false, "inspect: installed gid differs from pin -> build change")
+
+  check(io.open(root .. "/stplug-in/700.lua", "rb") == nil, "inspect: read-only (no .lua written)")
+
+  local rb = json.decode(mp.inspect_lua_rpc(ctx, json.encode({ lua = "-- nothing\n" })))
+  eq(rb.success, false, "inspect: errors when no appid in .lua")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
+-- ── 16. drop_installed_depot (Approach A: pure appmanifest .acf transform) ──
+-- Removing the base content depot from InstalledDepots makes Steam plan a FRESH
+-- install of that depot at the pinned gid (the content mechanism a pin alone
+-- can't provide, per HANDOFF v2 §8/§9). Pure text transform only; whether/how to
+-- flip StateFlags and the live download behavior (delta vs full ~35 GB) are
+-- validated separately on a real install — this never edits a live .acf itself.
+do
+  local acf = table.concat({
+    '"AppState"', "{",
+    '\t"appid"\t\t"3357650"',
+    '\t"StateFlags"\t\t"4"',
+    '\t"InstalledDepots"', "\t{",
+    '\t\t"3357651"', "\t\t{",
+    '\t\t\t"manifest"\t\t"6330832861176696160"',
+    '\t\t\t"size"\t\t"123"', "\t\t}",
+    '\t\t"3859920"', "\t\t{",
+    '\t\t\t"manifest"\t\t"4731286747379700304"', "\t\t}",
+    "\t}", "}",
+  }, "\n") .. "\n"
+
+  local out, removed = mp.drop_installed_depot(acf, 3357651)
+  eq(removed, true, "drop: reports removed")
+  check(out:find('"3357651"', 1, true) == nil, "drop: base depot gone")
+  check(out:find('"3859920"', 1, true) ~= nil, "drop: sibling depot kept")
+  check(out:find('"4731286747379700304"', 1, true) ~= nil, "drop: sibling manifest kept")
+  check(out:find('"InstalledDepots"', 1, true) ~= nil, "drop: block header kept")
+  local blk = out:match('"InstalledDepots"%s*(%b{})')
+  check(blk ~= nil, "drop: InstalledDepots still brace-balanced")
+  check(blk:match('"(%d+)"%s*%b{}') == "3859920", "drop: only sibling remains")
+
+  local out2, removed2 = mp.drop_installed_depot(acf, 999999)
+  eq(removed2, false, "drop: absent depot -> no-op")
+  eq(out2, acf, "drop: text unchanged when depot absent")
+
+  -- id quoting guards against a prefix collision (335765 vs 3357651)
+  local out3, removed3 = mp.drop_installed_depot(acf, 335765)
+  eq(removed3, false, "drop: prefix id does not match a longer depot")
+end
+
 if fails == 0 then print("\ntest_manifestpins: ALL PASS") else
   print("\ntest_manifestpins: " .. fails .. " FAILED"); os.exit(1)
 end
