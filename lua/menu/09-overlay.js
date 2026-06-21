@@ -38,6 +38,7 @@
     }
     var tabSls = mkTab("slsteam-moon", MOON_SVG);
     var tabGu = mkTab(I18N.en.gu.tab, GU_SVG);
+    var tabAbout = mkTab(((I18N[pickLang()] || I18N.en).about || I18N.en.about).tab, ABOUT_SVG);
 
     // content
     var content = document.createElement("div");
@@ -161,6 +162,7 @@
       cdisarm();
       tabSls.classList.toggle("active", which === "sls");
       tabGu.classList.toggle("active", which === "gu");
+      tabAbout.classList.toggle("active", which === "about");
       if (which === "gu") {
         h.textContent = "";
         var gt = document.createElement("span");
@@ -178,6 +180,11 @@
         resetBtn.style.display = "none";
         clearBtn.style.display = "";
         renderGameUpdates(body);
+      } else if (which === "about") {
+        h.textContent = ((I18N[pickLang()] || I18N.en).about || I18N.en.about).title;
+        resetBtn.style.display = "none";
+        clearBtn.style.display = "none";
+        renderAbout(body);
       } else {
         h.textContent = "slsteam-moon";
         resetBtn.style.display = "";
@@ -187,6 +194,7 @@
     }
     tabSls.addEventListener("click", function () { selectTab("sls"); });
     tabGu.addEventListener("click", function () { selectTab("gu"); });
+    tabAbout.addEventListener("click", function () { selectTab("about"); });
     selectTab("sls");
 
     var onKey = function (e) {

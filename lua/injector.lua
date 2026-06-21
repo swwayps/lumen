@@ -34,6 +34,20 @@ function injector.validate_app_expr(appid)
     .. "return false;}catch(e){return false;}})()"
 end
 
+-- Reload All relay: ask the Steam client to reload its UI JS context, the same
+-- mechanism Millennium's "apply changes" uses (SteamClient.Browser.RestartJSContext).
+-- The main window blanks and returns ~2s later on the same screen; on the way
+-- back our injector re-binds + re-injects (executionContextsCleared path), so
+-- the LuaTools frontend and the Lumen menu reload live without a Steam restart.
+-- SteamClient lives only in SharedJSContext, so this is relayed there. Pure
+-- string builder (no args) so it's host-testable.
+function injector.restart_js_context_expr()
+  return "(function(){try{if(window.SteamClient&&SteamClient.Browser&&"
+    .. "typeof SteamClient.Browser.RestartJSContext==='function'){"
+    .. "SteamClient.Browser.RestartJSContext();return true;}"
+    .. "return false;}catch(e){return false;}})()"
+end
+
 -- Same relay as validate_app_expr but drives steam://uninstall/<appid> (Steam's
 -- own uninstall confirm). Used when a build is pinned for an INSTALLED game: a
 -- verify can't switch the installed build (the gid delta is zero), so the game
@@ -293,6 +307,16 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
+  elseif req.fn == "__lumenRestartJSContext" then
+    -- Reload All: relay SteamClient.Browser.RestartJSContext() into
+    -- SharedJSContext (the only context with SteamClient) to live-reload the
+    -- Steam UI JS — reloads the LuaTools frontend + Lumen menu without a Steam
+    -- restart. Fire-and-forget.
+    if self.manager and self.manager:restart_js_context() then
+      result = '{"ok":true}'
+    else
+      result = '{"ok":false}'
+    end
   else
     result = injector.dispatch_method(self.registry, req.fn, req.args)
   end
@@ -473,6 +497,21 @@ end
 -- control conn to run it on.
 function State:uninstall_app(appid)
   local expr = injector.uninstall_app_expr(appid)
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+-- Relay SteamClient.Browser.RestartJSContext() into SharedJSContext (the only
+-- context with SteamClient) to live-reload the Steam UI JS — the "Reload All"
+-- action. Fire-and-forget: returns true if we have a SharedJSContext control
+-- conn to run it on.
+function State:restart_js_context()
+  local expr = injector.restart_js_context_expr()
   for _, conn in pairs(self.conns) do
     if conn.sock and conn.title == "SharedJSContext" then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",

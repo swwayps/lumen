@@ -159,6 +159,22 @@ do
     "a malformed appid coerces to 0, not the attacker tail")
 end
 
+-- 7c. restart_js_context_expr(): the "Reload All" relay. Drives
+--     SteamClient.Browser.RestartJSContext() (Millennium's apply-changes
+--     mechanism) in SharedJSContext to live-reload the Steam UI JS without a
+--     Steam restart. No args, wrapped in try/catch.
+do
+  assert_true(type(injector.restart_js_context_expr) == "function",
+    "injector exposes restart_js_context_expr for testing")
+  local expr = injector.restart_js_context_expr()
+  assert_true(expr:find("RestartJSContext", 1, true) ~= nil,
+    "expr drives SteamClient.Browser.RestartJSContext")
+  assert_true(expr:find("SteamClient.Browser", 1, true) ~= nil,
+    "expr guards on SteamClient.Browser")
+  assert_true(expr:find("try", 1, true) ~= nil and expr:find("catch", 1, true) ~= nil,
+    "expr is wrapped in try/catch so a missing API can't throw")
+end
+
 -- 8. dispatch_method(): the binding handler's registry lookup. A regression
 --    here (dropping the registry lookup) makes EVERY backend RPC come back as
 --    "unknown method", which is exactly what broke the menu once.

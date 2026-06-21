@@ -24,10 +24,12 @@
  *                         validate prompt, depot labelling)
  *   07-updates-tab.js     Game Updates tab (renderDlcSubpage, gameCard,
  *                         renderGameUpdates)
- *   08-overlay.js         the settings window (openOverlay) + window.__lumen*
- *   09-menubar.js         menubar button (findMenubar, anchoring) + bootstrap
+ *   08-about-tab.js       About tab (renderAbout: versions, Reload All,
+ *                         Update All, credit)
+ *   09-overlay.js         the settings window (openOverlay) + window.__lumen*
+ *   10-menubar.js         menubar button (findMenubar, anchoring) + bootstrap
  *
- * The fragments share ONE closure (the IIFE this file opens and 09-menubar
+ * The fragments share ONE closure (the IIFE this file opens and 10-menubar
  * closes), so they are NOT standalone modules — boot.lua (read_menu_js)
  * concatenates them in order into a single string and injects that as one unit.
  * Edit a fragment to change only its concern; keep the open/close at the ends.

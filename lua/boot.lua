@@ -83,6 +83,11 @@ require("slsmenu").register(registry)
 -- tree from on-disk data and read/write the ManifestPins map in config.yaml.
 require("manifestpins").register(registry)
 
+-- The "About" tab: report installed-vs-latest versions of the three stack
+-- components (from the release tags) and open a terminal for "Update All".
+-- ("Reload All" is the injector's __lumenRestartJSContext control relay.)
+require("about").register(registry)
+
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
@@ -95,7 +100,7 @@ local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
-  "08-overlay.js", "09-menubar.js",
+  "08-about-tab.js", "09-overlay.js", "10-menubar.js",
 }
 
 local function read_menu_js()

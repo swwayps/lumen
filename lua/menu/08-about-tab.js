@@ -1,0 +1,209 @@
+// LM-FRAGMENT About tab (renderAbout): versions + Reload All + Update All
+// LM-FRAGMENT source fragment of lumen_menu, assembled in order into ONE IIFE
+// LM-FRAGMENT by boot.lua (read_menu_js). Not a standalone module. See 01-core.js.
+
+  // The About tab: shows the installed vs latest release of each of the three
+  // stack components (slsteam-moon / Lumen / LuaTools plugin), a "Reload All"
+  // that live-reloads the UI without a Steam restart (Millennium's apply-changes
+  // mechanism, relayed as __lumenRestartJSContext), and an "Update All" that
+  // opens a terminal running the installer. Versions come from GetAboutVersions
+  // (releases are canonical; the installer stamps the installed tag).
+  function renderAbout(body) {
+    var S = (I18N[pickLang()] || I18N.en).about || I18N.en.about;
+    body.textContent = "";
+
+    var intro = document.createElement("div");
+    intro.className = "lumen-about-intro";
+    intro.textContent = S.intro;
+    body.appendChild(intro);
+
+    // ── versions list ────────────────────────────────────────────────────────
+    var list = document.createElement("div");
+    list.textContent = S.checking;
+    list.style.cssText = "color:#8f98a0;font-size:13px;padding:8px 2px;";
+    body.appendChild(list);
+
+    call("GetAboutVersions", {})
+      .then(function (res) {
+        var data = JSON.parse(res);
+        if (!data || !data.success) throw new Error((data && data.error) || "load failed");
+        list.textContent = "";
+        list.style.cssText = "";
+        (data.components || []).forEach(function (c) {
+          list.appendChild(versionRow(c, S));
+        });
+      })
+      .catch(function (e) {
+        list.style.cssText = "";
+        list.textContent = "";
+        var err = document.createElement("div");
+        err.className = "lumen-err";
+        err.textContent = S.loadFail + (e && e.message ? e.message : e);
+        list.appendChild(err);
+      });
+
+    // ── actions ──────────────────────────────────────────────────────────────
+    var actions = document.createElement("div");
+    actions.className = "lumen-about-actions";
+
+    actions.appendChild(actionRow(S.reloadTitle, S.reloadDesc, S.reloadBtn, {
+      confirmLabel: S.reloadConfirm,
+      onConfirmed: function (btn) {
+        btn.textContent = S.reloadGo;
+        btn.classList.add("busy");
+        // Fire-and-forget: the relay restarts the Steam UI JS context, which
+        // tears down this overlay (and the whole shell JS) and reloads ~2s
+        // later. No success modal — the reload itself is the feedback.
+        call("__lumenRestartJSContext").catch(function (e) { log("ReloadAll", e); });
+      },
+    }));
+
+    actions.appendChild(actionRow(S.updateTitle, S.updateDesc, S.updateBtn, {
+      onConfirmed: function (btn) {
+        btn.classList.add("busy");
+        call("UpdateAll", {})
+          .then(function (res) {
+            btn.classList.remove("busy");
+            var r = typeof res === "string" ? JSON.parse(res) : res;
+            if (r && r.success) {
+              aboutModal(S.updateOpenedTitle, S.updateOpenedBody, S.ok);
+            } else {
+              var msg = r && r.error ? String(r.error) : "";
+              // A missing terminal returns a specific error; show the manual
+              // command in that case, otherwise the generic failure.
+              if (msg.indexOf("No terminal") !== -1) {
+                aboutModal(S.updateTitle, S.updateNoTerm, S.ok);
+              } else {
+                aboutModal(S.updateTitle, S.updateFail + msg, S.ok);
+              }
+            }
+          })
+          .catch(function (e) {
+            btn.classList.remove("busy");
+            log("UpdateAll", e);
+            aboutModal(S.updateTitle, S.updateFail + (e && e.message ? e.message : e), S.ok);
+          });
+      },
+    }));
+
+    body.appendChild(actions);
+
+    // ── credit ─────────────────────────────────────────────────────────────
+    var credit = document.createElement("div");
+    credit.className = "lumen-about-credit";
+    credit.textContent = "by SWay";
+    body.appendChild(credit);
+  }
+
+  // One version row: name + "installed / latest" + a state pill.
+  function versionRow(c, S) {
+    var row = document.createElement("div");
+    row.className = "lumen-about-ver";
+
+    var left = document.createElement("div");
+    left.style.cssText = "flex:1;min-width:0;";
+    var nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = c.name;
+    left.appendChild(nm);
+    var vv = document.createElement("div");
+    vv.className = "vv";
+    var inst = c.installed && c.installed !== "" ? c.installed : S.unknown;
+    var latest = c.latest && c.latest !== "" ? c.latest : S.unknown;
+    if (c.installedBuild) inst += " (" + c.installedBuild + ")";
+    if (c.latestBuild) latest += " (" + c.latestBuild + ")";
+    vv.textContent = S.installed + ": " + inst + "  \u00b7  " + S.latest + ": " + latest;
+    left.appendChild(vv);
+    row.appendChild(left);
+
+    var pill = document.createElement("span");
+    pill.className = "lumen-about-state " +
+      (c.state === "current" ? "cur" : c.state === "update" ? "upd" : "unk");
+    pill.textContent = c.state === "current" ? S.upToDate
+      : c.state === "update" ? S.updateAvailable : S.unknown;
+    row.appendChild(pill);
+    return row;
+  }
+
+  // One action card: title + description + a button. When `confirmLabel` is
+  // given the button is two-click (arm -> confirm) so a live reload can't fire
+  // by accident; otherwise it acts on the first click. `onConfirmed(btn)` runs
+  // when the action is triggered.
+  function actionRow(title, desc, btnLabel, opts) {
+    opts = opts || {};
+    var row = document.createElement("div");
+    row.className = "lumen-about-act";
+
+    var txt = document.createElement("div");
+    txt.className = "txt";
+    var at = document.createElement("div");
+    at.className = "at";
+    at.textContent = title;
+    var ad = document.createElement("div");
+    ad.className = "ad";
+    ad.textContent = desc;
+    txt.appendChild(at); txt.appendChild(ad);
+    row.appendChild(txt);
+
+    var btn = document.createElement("div");
+    btn.className = "lumen-about-btn";
+    btn.textContent = btnLabel;
+
+    if (opts.confirmLabel) {
+      var armed = false, armTimer = null;
+      var disarm = function () {
+        armed = false;
+        if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+        btn.classList.remove("confirm");
+        btn.textContent = btnLabel;
+      };
+      btn.addEventListener("click", function () {
+        if (btn.classList.contains("busy")) return;
+        if (!armed) {
+          armed = true;
+          btn.classList.add("confirm");
+          btn.textContent = opts.confirmLabel;
+          armTimer = setTimeout(disarm, 3000);
+          return;
+        }
+        disarm();
+        opts.onConfirmed(btn);
+      });
+    } else {
+      btn.addEventListener("click", function () {
+        if (btn.classList.contains("busy")) return;
+        opts.onConfirmed(btn);
+      });
+    }
+    row.appendChild(btn);
+    return row;
+  }
+
+  // A small info modal (reusing the validate-prompt modal styling) with a single
+  // OK button. Body may contain newlines (pre-wrapped).
+  function aboutModal(title, bodyText, okLabel) {
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var modal = document.createElement("div");
+    modal.className = "lumen-modal";
+    var mt = document.createElement("div");
+    mt.className = "mt";
+    mt.textContent = title;
+    var mb = document.createElement("div");
+    mb.className = "mb";
+    mb.style.whiteSpace = "pre-wrap";
+    mb.textContent = bodyText;
+    var mrow = document.createElement("div");
+    mrow.className = "mrow";
+    var ok = document.createElement("div");
+    ok.className = "lumen-mbtn primary";
+    ok.textContent = okLabel || "OK";
+    var close = function () { if (back.parentNode) back.remove(); };
+    ok.addEventListener("click", close);
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    mrow.appendChild(ok);
+    modal.appendChild(mt); modal.appendChild(mb); modal.appendChild(mrow);
+    back.appendChild(modal);
+    (document.body || document.documentElement).appendChild(back);
+  }
+

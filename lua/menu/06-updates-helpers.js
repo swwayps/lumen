@@ -7,6 +7,8 @@
   var MOON_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="currentColor"/></svg>';
   // Download/version icon for the Game Updates tab.
   var GU_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 1a1 1 0 0 1 1 1v6.6l2-2 1.4 1.4L8 12.4 3.6 8 5 6.6l2 2V2a1 1 0 0 1 1-1zM3 13h10v2H3z"/></svg>';
+  // Info icon for the About tab.
+  var ABOUT_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zM7 4h2v2H7V4zm0 3h2v5H7V7z"/></svg>';
 
   // ── Game Updates helpers ────────────────────────────────────────────────
   var _nameCache = {};
