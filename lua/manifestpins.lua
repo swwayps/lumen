@@ -313,6 +313,96 @@ function mp.is_shared_depot(depot)
   return SHARED_DEPOTS[depot] == true
 end
 
+-- ── Steam tools / runtimes / redistributables (NOT games) ─────────────────
+-- Steam ships many non-game "apps": Linux runtimes, Proton builds, anti-cheat
+-- runtimes, Source SDK bases, the Steamworks Common Redistributables (app +
+-- per-component depots), and internal platform files. They can carry a stplug
+-- .lua + archived manifests, but they're not games — showing them as cards in
+-- the Game Updates list is noise. This map gives each a friendly name (used to
+-- label a depot row) and doubles as the "is this a tool, not a game?" set used
+-- to drop them from the main list. Source: steam_tools_appids.txt (verified via
+-- the Valve Developer wiki + SteamDB).
+local STEAM_TOOL_NAMES = {
+  -- Steam Linux runtimes
+  [1070560] = "Steam Linux Runtime 1.0 (scout)",
+  [1391110] = "Steam Linux Runtime 2.0 (soldier)",
+  [1628350] = "Steam Linux Runtime 3.0 (sniper)",
+  [4183110] = "Steam Linux Runtime 4.0 (steamrt4)",
+  [4690330] = "Legacy Steam Runtime (scout)",
+  -- Proton
+  [1493710] = "Proton Experimental",
+  [2180100] = "Proton Hotfix",
+  [2230260] = "Proton Next",
+  [4628710] = "Proton 11.0 (Beta)",
+  [4628740] = "Proton 11.0 (ARM64) (Beta)",
+  [3658110] = "Proton 10.0 (Beta)",
+  [2805730] = "Proton 9.0 (Beta)",
+  [2348590] = "Proton 8.0",
+  [1887720] = "Proton 7.0",
+  [1580130] = "Proton 6.3",
+  [1420170] = "Proton 5.13",
+  [1245040] = "Proton 5.0",
+  [1113280] = "Proton 4.11",
+  [1054830] = "Proton 4.2",
+  [996510]  = "Proton 3.16 Beta",
+  [961940]  = "Proton 3.16",
+  [930400]  = "Proton 3.7 Beta",
+  [858280]  = "Proton 3.7",
+  -- Anti-cheat runtimes
+  [1161040] = "Proton BattlEye Runtime",
+  [1826330] = "Proton EasyAntiCheat Runtime",
+  -- Source SDK bases / authoring tools
+  [215]     = "Source SDK Base 2006",
+  [218]     = "Source SDK Base 2007",
+  [243730]  = "Source SDK Base 2013 - Singleplayer",
+  [243750]  = "Source SDK Base 2013 - Multiplayer",
+  [201890]  = "Nuclear Dawn Authoring Tools",
+  -- Sound / media
+  [3086180] = "Proton Voice Files",
+  [910]     = "Steam Media Player",
+  -- Steamworks Common Redistributables (app + per-component depots)
+  [228980]  = "Steamworks Common Redistributables",
+  [228981]  = "Steamworks Common Redistributable (Config)",
+  [228988]  = "Windows VC 2019 Redist",
+  [228989]  = "Windows VC 2022 Redist",
+  [228990]  = "Windows DirectX Jun 2010 Redist",
+  [229000]  = "Windows .NET 3.5 Redist",
+  [229001]  = "Windows .NET 3.5 Client Profile Redist",
+  [229002]  = "Windows .NET 4.0 Redist",
+  [229003]  = "Windows .NET 4.0 Client Profile Redist",
+  [229004]  = "Windows .NET 4.5.2 Redist",
+  [229005]  = "Windows .NET 4.6 Redist",
+  [229006]  = "Windows .NET 4.7 Redist",
+  [229007]  = "Windows .NET 4.8 Redist",
+  [229010]  = "Windows XNA 3.0 Redist",
+  [229011]  = "Windows XNA 3.1 Redist",
+  [229012]  = "Windows XNA 4.0 Redist",
+  [229020]  = "Windows OpenAL 2.0.7.0 Redist",
+  [229030]  = "Windows PhysX System Software 8.09.04",
+  [229031]  = "Windows PhysX System Software 9.12.1031",
+  [229032]  = "Windows PhysX System Software 9.13.1220",
+  [229033]  = "Windows PhysX System Software 9.14.0702",
+  -- Other Valve tools / platform files
+  [891390]  = "SteamPlay 2.0 Manifests",
+  [480]     = "Spacewar / SteamworksExample",
+  [250820]  = "SteamVR",
+  [221410]  = "Steam for Linux",
+  [3]       = "Original Platform (Steam base)",
+  [7]       = "Steam WinUI",
+  [8]       = "Steam WinUI2",
+}
+
+-- tool_name(id) -> friendly name string, or nil if `id` isn't a known tool.
+function mp.tool_name(id)
+  return STEAM_TOOL_NAMES[math.tointeger(tonumber(id)) or -1]
+end
+
+-- is_tool(id) -> true when `id` is a Steam tool/runtime/redistributable, i.e.
+-- NOT a real game; such apps are dropped from the main Game Updates list.
+function mp.is_tool(id)
+  return mp.tool_name(id) ~= nil
+end
+
 -- ── workshop-depot detection ─────────────────────────────────────────────
 -- Steam's Workshop content depot has id == appid and lives under
 -- steamapps/workshop/content/<appid>, separate from the game's content depots
@@ -431,7 +521,7 @@ end
 -- an app (<cache>/picsbuffer_<appid>.{bin,yaml}) so SLSsteam re-renders them with
 -- the CURRENT pins on its next start. Without this, a pin set after the buffer
 -- was last rendered leaves a stale public gid in appinfo, which loops the build
--- reconcile (manifest-pin-reconcile-RE.md §0). Safe no-op on a nil appid or when
+-- reconcile. Safe no-op on a nil appid or when
 -- the ctx carries no cache_dir (host tests that don't exercise it).
 function mp.invalidate_appinfo_cache(ctx, appid)
   ctx = ctx or {}
@@ -620,6 +710,11 @@ function mp.build_games(ctx)
     local appid = name:match("^(%d+)%.lua$")
     if appid then
       appid = math.tointeger(tonumber(appid))
+    end
+    -- Skip Steam tools / runtimes / redistributables outright: they're not
+    -- games, so they shouldn't appear as cards in the main list (same reason as
+    -- the Steamworks redistributables).
+    if appid and not mp.is_tool(appid) then
       local lua = read_file(ctx.stplug_dir .. "/" .. name) or ""
       local parsed = mp.parse_lua(lua)
       local installed = installed_gids(ctx.steam_root, appid)
@@ -638,6 +733,7 @@ function mp.build_games(ctx)
           table.sort(versions, function(a, b) return (a.date or 0) > (b.date or 0) end)
           depots[#depots + 1] = {
             depot = depot,
+            name = mp.tool_name(depot),
             fromLuaTools = info.manifestid,
             installed = installed[depot],
             workshop = mp.is_workshop_depot(appid, depot, has_workshop),
@@ -648,10 +744,21 @@ function mp.build_games(ctx)
       end
       table.sort(depots, function(a, b) return a.depot < b.depot end)
 
+      -- The Steamworks Common Redistributables app (and any pure-runtime entry)
+      -- has a .lua too, so it surfaces here — but every one of its depots is a
+      -- shared runtime depot. It's not a real game (a single ancient "build",
+      -- nothing meaningful to pin), so showing it as a top-level card is
+      -- inconsistent. Drop a game whose depots are ALL shared; a real game always
+      -- has at least one non-shared content depot.
+      local all_shared = #depots > 0
+      for _, d in ipairs(depots) do
+        if not d.shared then all_shared = false; break end
+      end
+
       -- Skip games with no archived versions at all: there's nothing to show or
       -- pin, and an empty depot list would serialize as `{}` (not `[]`) and trip
       -- the frontend. (Also keeps the list clean after a manifest purge.)
-      if #depots > 0 then
+      if #depots > 0 and not all_shared then
         games[#games + 1] = {
           appid = appid,
           locked = appPins.locked or false,

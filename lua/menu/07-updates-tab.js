@@ -73,15 +73,20 @@
         var row = verRow({
           label: fmtDate(v.date), gid: v.gid, selected: v.pinned, badges: badges,
           onClick: function () {
-            call("SetDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot, gid: v.gid }) })
-              .then(function () {
-                select(row);
-                // Already-installed gid -> lock only. Not-installed game ->
-                // nothing to verify yet. Installed at a different gid -> a verify
-                // can't switch it, so offer uninstall + reinstall fresh.
-                if (isGameInstalled(game) && !v.installed) showUninstallPrompt(game.appid);
-              })
-              .catch(function (e) { log("SetDlcPin", e); });
+            // Write the pin (and move the selection) ONLY if the user follows
+            // through the modal; "Not now"/"Later"/dismiss cancels it and the
+            // previous selection stands.
+            var applyPin = function () {
+              return call("SetDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot, gid: v.gid }) })
+                .then(function () { select(row); })
+                .catch(function (e) { log("SetDlcPin", e); });
+            };
+            if (isGameInstalled(game)) {
+              if (v.installed) applyPin();                      // already on this gid
+              else showUninstallPrompt(game.appid, applyPin);   // confirm uninstall first
+            } else {
+              showPinRestartPrompt(applyPin);                   // confirm restart first
+            }
           },
         });
         rows.push(row);
@@ -124,8 +129,9 @@
     // unsupported the image just loads eagerly as before). Set before .src.
     cap.loading = "lazy";
     cap.decoding = "async";
-    cap.src = capsuleUrl(game.appid);
-    cap.addEventListener("error", function () { cap.style.visibility = "hidden"; });
+    // loadCapsule tries the static header.jpg, then the store's header_image for
+    // newer titles whose static capsule isn't published yet.
+    loadCapsule(game.appid, cap);
     head.appendChild(cap);
 
     var meta = document.createElement("div");
@@ -197,16 +203,20 @@
       var row = verRow({
         label: fmtDate(b.date), selected: game.locked && b.pinned, badges: badges,
         onClick: function () {
-          call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
-            .then(function () {
-              select(row); setLocked(true);
-              // Already-installed build -> lock only, nothing to do. Not
-              // installed -> nothing to verify yet (pin is stored, install picks
-              // it up). Installed at a DIFFERENT build -> a verify can't switch
-              // it (zero delta), so offer to uninstall + reinstall fresh.
-              if (isGameInstalled(game) && !b.installed) showUninstallPrompt(game.appid);
-            })
-            .catch(function (e) { log("SetGamePin", e); });
+          // Write the pin (and lock/move the selection) ONLY if the user follows
+          // through the modal; "Not now"/"Later"/dismiss cancels it and the
+          // previous selection stands (no half-applied pin).
+          var applyPin = function () {
+            return call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
+              .then(function () { select(row); setLocked(true); })
+              .catch(function (e) { log("SetGamePin", e); });
+          };
+          if (isGameInstalled(game)) {
+            if (b.installed) applyPin();                       // already on this build
+            else showUninstallPrompt(game.appid, applyPin);    // confirm uninstall first
+          } else {
+            showPinRestartPrompt(applyPin);                    // confirm restart first
+          }
         },
       });
       rows.push(row);
@@ -349,39 +359,49 @@
     prog.update(GU.loadChecking);
     addFromSources(appid, prog)
       .then(function (fromSource) {
-        if (fromSource) {
-          // Game added with complete keys; just apply the uploaded .lua's pin.
-          if (!hasPins) return { fromSource: true };
-          return call("ImportLuaPin", { json: JSON.stringify({ appid: appid, lua: text }) })
-            .then(function (ir) {
-              var r2 = JSON.parse(ir);
-              if (!r2 || !r2.success) throw new Error((r2 && r2.error) || GU.importFail);
-              return { fromSource: true };
-            });
-        }
-        // Fallback: write the uploaded (possibly base-only) .lua directly.
-        return call("ImportLuaFull", { json: JSON.stringify({ lua: text }) })
-          .then(function (ir) {
-            var r2 = JSON.parse(ir);
-            if (!r2 || !r2.success) throw new Error((r2 && r2.error) || GU.importFail);
-            return { fromSource: false };
-          });
-      })
-      .then(function (outcome) {
         prog.close();
         reloadGameUpdates(body);
+        // applyPin writes the .lua's build pin (and, on the no-source fallback,
+        // also adds the game). Same gating as a manual pin: it runs ONLY if the
+        // user follows through the uninstall/restart the pin needs to take
+        // effect. Declining leaves no half-applied build pin — a game added from
+        // a source stays (it'll install at the latest build), nothing loops.
+        var applyPin = function () {
+          var p;
+          if (fromSource) {
+            p = hasPins
+              ? call("ImportLuaPin", { json: JSON.stringify({ appid: appid, lua: text }) })
+              : Promise.resolve('{"success":true}');
+          } else {
+            // No source had the app: ImportLuaFull writes the uploaded .lua
+            // directly (adds the game + its pins). Gated, so declining adds nothing.
+            p = call("ImportLuaFull", { json: JSON.stringify({ lua: text }) });
+          }
+          return p.then(function (ir) {
+            if (typeof ir === "string") {
+              var r2 = JSON.parse(ir);
+              if (!r2 || !r2.success) throw new Error((r2 && r2.error) || GU.importFail);
+            }
+            reloadGameUpdates(body);
+          });
+        };
         if (info.installed) {
-          // Installed at a different build: a verify won't switch it, so offer
-          // to uninstall + reinstall fresh at the pinned build.
-          showUninstallPrompt(appid);
+          // Installed at a different build: a verify won't switch it, so the pin
+          // is applied and the game uninstalled (then reinstalled fresh at the
+          // pin) only if the user proceeds.
+          showUninstallPrompt(appid, applyPin);
         } else {
           showConfirm({
             title: GU.restartTitle,
-            body: outcome.fromSource ? GU.restartBody : GU.restartBodyPartial,
+            body: fromSource ? GU.restartBody : GU.restartBodyPartial,
             confirmText: GU.restartNow,
             declineText: GU.restartLater,
             onConfirm: function () {
-              call("RestartSteam", {}).catch(function (e) { log("RestartSteam", e); });
+              Promise.resolve(applyPin())
+                .then(function () {
+                  call("RestartSteam", {}).catch(function (e) { log("RestartSteam", e); });
+                })
+                .catch(function (e) { log("ImportLuaPin", e); alert((e && e.message) || GU.importFail); });
             },
           });
         }

@@ -11,25 +11,50 @@
   var ABOUT_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zM7 4h2v2H7V4zm0 3h2v5H7V7z"/></svg>';
 
   // ── Game Updates helpers ────────────────────────────────────────────────
-  var _nameCache = {};
+  // appid -> Promise<{name, image}|null>. One store-API "basic" lookup per app,
+  // shared by the name label and the capsule fallback (the in-flight promise is
+  // cached so concurrent callers don't double-fetch).
+  var _basicCache = {};
   function capsuleUrl(appid) {
     return "https://cdn.cloudflare.steamstatic.com/steam/apps/" + appid + "/header.jpg";
   }
-  // Resolve an app name via the same Steam store API luatools.js uses. Cached;
-  // resolves to null on any failure (caller falls back to the appid).
-  function fetchAppName(appid) {
-    if (_nameCache[appid]) return Promise.resolve(_nameCache[appid]);
+  // Fetch the store's basic appdetails (name + header image), cached. Resolves
+  // to null on any failure. Same API luatools.js uses.
+  function fetchAppBasic(appid) {
+    if (_basicCache[appid]) return _basicCache[appid];
+    var p;
     try {
-      return fetch("https://store.steampowered.com/api/appdetails?appids=" + appid + "&filters=basic")
+      p = fetch("https://store.steampowered.com/api/appdetails?appids=" + appid + "&filters=basic")
         .then(function (r) { return r.json(); })
         .then(function (j) {
           var d = j && j[appid] && j[appid].success && j[appid].data;
-          var name = d && d.name ? d.name : null;
-          if (name) _nameCache[appid] = name;
-          return name;
+          if (!d) return null;
+          return { name: d.name || null, image: d.header_image || d.capsule_image || null };
         })
         .catch(function () { return null; });
-    } catch (e) { return Promise.resolve(null); }
+    } catch (e) { p = Promise.resolve(null); }
+    _basicCache[appid] = p;
+    return p;
+  }
+  // Resolve an app name; null on failure (caller falls back to the appid).
+  function fetchAppName(appid) {
+    return fetchAppBasic(appid).then(function (b) { return b && b.name ? b.name : null; });
+  }
+  // Load a game's capsule into `img`. Newer/unreleased titles don't have the
+  // legacy static /steam/apps/<id>/header.jpg (it 404s), so on error fall back
+  // to the store's own header_image (served from a different CDN path); hide the
+  // image only if that fails too.
+  function loadCapsule(appid, img) {
+    var fellBack = false;
+    img.addEventListener("error", function () {
+      if (fellBack) { img.style.visibility = "hidden"; return; }
+      fellBack = true;
+      fetchAppBasic(appid).then(function (b) {
+        if (b && b.image) img.src = b.image;
+        else img.style.visibility = "hidden";
+      });
+    });
+    img.src = capsuleUrl(appid);
   }
   // Unix seconds -> dd/mm/yyyy (UTC). 0/missing -> em dash.
   function fmtDate(unix) {
@@ -57,8 +82,15 @@
     if (all.length === 0) return null;
     // 1) Workshop content (depot id == appid) holds workshop snapshots, not game
     //    builds. The backend flags it; never use it for the game's timeline.
-    var depots = all.filter(function (d) { return !d.workshop; });
-    if (depots.length === 0) return null;
+    var nonWs = all.filter(function (d) { return !d.workshop; });
+    if (nonWs.length === 0) return null;
+    // 1b) Shared runtime depots (Steamworks Common Redistributables) carry
+    //     ancient fixed dates that aren't game builds, so using one as the base
+    //     shows a bogus build (e.g. 18/02/2013). Prefer real content depots; fall
+    //     back to the shared ones only if that's all there is, so the timeline is
+    //     never empty.
+    var depots = nonWs.filter(function (d) { return !d.shared; });
+    if (depots.length === 0) depots = nonWs;
     // 2) Prefer depots actually installed (real game content on disk). Fall back
     //    to every non-workshop depot when nothing is installed yet (e.g. added
     //    via LuaTools but not downloaded).
@@ -261,7 +293,33 @@
   // reinstall fresh. Offers Steam's own uninstall flow; the pin is already
   // saved, so a later reinstall comes down at the pinned build. Relayed into
   // SharedJSContext via injector __lumenUninstallApp.
-  function showUninstallPrompt(appid) {
+  // A non-dismissable loading modal (spinner + message) shown for `ms`, then it
+  // auto-closes and runs `cb`. Used to bridge an action whose real completion we
+  // can't observe (e.g. Steam's own native uninstall dialog) so the next modal
+  // doesn't pop instantly on top of it.
+  function showLoadingThen(message, ms, cb) {
+    injectStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var card = document.createElement("div");
+    card.className = "lumen-modal";
+    card.style.cssText = "display:flex;align-items:center;gap:14px;";
+    var sp = document.createElement("span");
+    sp.className = "lumen-spin";
+    var tx = document.createElement("div");
+    tx.className = "mb";
+    tx.style.margin = "0";
+    tx.textContent = message;
+    card.appendChild(sp); card.appendChild(tx);
+    back.appendChild(card);
+    (document.body || document.documentElement).appendChild(back);
+    setTimeout(function () {
+      if (back.parentNode) back.remove();
+      if (cb) cb();
+    }, ms || 3000);
+  }
+
+  function showUninstallPrompt(appid, applyPin) {
     var GU = I18N.en.gu;
     injectStyles();
     var back = document.createElement("div");
@@ -280,30 +338,58 @@
     var decline = document.createElement("button");
     decline.className = "lumen-mbtn";
     decline.textContent = GU.uninstallDecline;
+    // "Not now"/dismiss CANCELS the pin: applyPin is never called, so the
+    // selection stays on the previous build (no half-applied pin).
     decline.addEventListener("click", function (e) { e.stopPropagation(); close(); });
     var confirm = document.createElement("button");
     confirm.className = "lumen-mbtn primary";
     confirm.textContent = GU.uninstallConfirm;
     confirm.addEventListener("click", function (e) {
       e.stopPropagation();
-      call("__lumenUninstallApp", { appid: appid }).catch(function (err) { log("uninstall", err); });
       close();
-      // The pin only lands on a fresh reinstall AND needs Steam to re-read the
-      // pinned appinfo at startup, so guide the user to restart after the
-      // uninstall, then reinstall. RestartSteam is the plugin's own RPC.
-      showConfirm({
-        title: GU.uninstallRestartTitle, body: GU.uninstallRestartBody,
-        confirmText: GU.restartNow, declineText: GU.restartLater,
-        onConfirm: function () {
-          call("RestartSteam", {}).catch(function (err) { log("RestartSteam", err); });
-        },
-      });
+      // Only now that the user committed to uninstalling do we write the pin,
+      // then drive the uninstall + restart flow. Steam's own uninstall dialog
+      // isn't observable from here and can take a moment on a slower PC, so a
+      // short loading modal bridges to the restart prompt instead of popping it
+      // instantly over (or behind) the native dialog.
+      Promise.resolve(applyPin ? applyPin() : null).then(function () {
+        call("__lumenUninstallApp", { appid: appid }).catch(function (err) { log("uninstall", err); });
+        showLoadingThen(GU.uninstallWait, 3500, function () {
+          showConfirm({
+            title: GU.uninstallRestartTitle, body: GU.uninstallRestartBody,
+            confirmText: GU.restartNow, declineText: GU.restartLater,
+            onConfirm: function () {
+              call("RestartSteam", {}).catch(function (err) { log("RestartSteam", err); });
+            },
+          });
+        });
+      }).catch(function (err) { log("apply-before-uninstall", err); });
     });
     back.addEventListener("click", function (e) { if (e.target === back) close(); });
     row.appendChild(decline); row.appendChild(confirm);
     card.appendChild(t); card.appendChild(b); card.appendChild(row);
     back.appendChild(card);
     (document.body || document.documentElement).appendChild(back);
+  }
+
+  // Pinning a build for a NOT-installed game only takes effect after a Steam
+  // restart: the pin RPC invalidates the cached picsbuffer so SLSsteam re-renders
+  // the appinfo with the pin at startup; installing before that loops between
+  // "starting download" and "finalizing". So we GATE the pin on the restart —
+  // `applyPin` (which writes the pin + moves the selection) runs only if the
+  // user chooses to restart now; "Later"/dismiss cancels the pin entirely and
+  // the previous selection stands.
+  function showPinRestartPrompt(applyPin) {
+    var GU = I18N.en.gu;
+    showConfirm({
+      title: GU.pinRestartTitle, body: GU.pinRestartBody,
+      confirmText: GU.restartNow, declineText: GU.restartLater,
+      onConfirm: function () {
+        Promise.resolve(applyPin ? applyPin() : null).then(function () {
+          call("RestartSteam", {}).catch(function (err) { log("RestartSteam", err); });
+        }).catch(function (err) { log("apply-before-restart", err); });
+      },
+    });
   }
 
   // A game counts as installed if any of its depots has a current on-disk gid
@@ -315,10 +401,13 @@
     return game.depots.some(function (d) { return !!d.installed; });
   }
 
-  // Label a depot row: shared Steam runtimes (flagged by the backend) get a
-  // friendly name + id so their old manifest dates don't read as game builds;
-  // everything else is just "Depot <id>".
+  // Label a depot row: known Steam tool / redistributable depots get their
+  // specific friendly name (e.g. "Windows DirectX Jun 2010 Redist"); other
+  // shared-runtime depots fall back to the generic redistributables label; a
+  // game's own content depots are just "Depot <id>". The id is always shown so
+  // it stays unambiguous.
   function depotLabel(d) {
+    if (d.name) return d.name + " (" + d.depot + ")";
     if (d.shared) return I18N.en.gu.sharedRuntime + " (" + d.depot + ")";
     return I18N.en.gu.depot + " " + d.depot;
   }

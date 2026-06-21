@@ -247,6 +247,17 @@ do
   check(mp.is_shared_depot(2327721) == false, "shared: a game content depot is not shared")
 end
 
+-- ── 8e. Steam tools / runtimes / redistributables naming + detection ──────
+do
+  check(mp.is_tool(228980) == true, "tool: redistributables app is a tool")
+  check(mp.is_tool(1493710) == true, "tool: Proton Experimental is a tool")
+  check(mp.is_tool(1628350) == true, "tool: sniper runtime is a tool")
+  check(mp.is_tool(238320) == false, "tool: a real game (Outlast) is not a tool")
+  check(mp.tool_name(228990) == "Windows DirectX Jun 2010 Redist", "tool: DirectX depot name")
+  check(mp.tool_name("1628350") == "Steam Linux Runtime 3.0 (sniper)", "tool: name accepts a string id")
+  check(mp.tool_name(238320) == nil, "tool: a real game has no tool name")
+end
+
 -- ── 9. tree assembly from fixture .lua / .acf / manifests dir ──────────────
 do
   -- Build a synthetic manifest file with a given depot + creation_time.
@@ -334,6 +345,17 @@ do
   local has555 = false
   for _, gg in ipairs(games2) do if gg.appid == 555 then has555 = true end end
   check(not has555, "build: game with no archived versions is omitted")
+
+  -- Steam tools / runtimes / redistributables are NOT games: even with a .lua +
+  -- an archived manifest they must be dropped from the main list (same as the
+  -- Steamworks redistributables). Here the redistributables app (228980).
+  local lf3 = assert(io.open(stplug .. "/228980.lua", "wb"))
+  lf3:write('addappid(228980)\naddappid(228990,0,"k")\n'); lf3:close()
+  write_manifest(mans, 228990, "abc123", 123)
+  local games3 = mp.build_games(ctx)
+  local hasTool = false
+  for _, gg in ipairs(games3) do if gg.appid == 228980 then hasTool = true end end
+  check(not hasTool, "build: a Steam tool app (228980) is omitted from the list")
 
   -- locking the game must pin only real content depots, NEVER the workshop depot
   -- (its snapshots aren't game builds — pinning it would downgrade workshop).
@@ -658,7 +680,7 @@ end
 
 -- ── 17. invalidate_appinfo_cache: a pin change drops the stale provisioned
 -- appinfo buffer so SLSsteam re-renders it with the new pin on next start
--- (else the loop in manifest-pin-reconcile-RE.md §0). ──────────────────────
+-- (else the build-reconcile loop recurs). ──────────────────────
 do
   local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
   local function exists(p) local h = io.open(p, "rb"); if h then h:close(); return true end return false end
