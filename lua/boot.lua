@@ -25,6 +25,7 @@ local ALLOWLIST = {
   "HasLuaToolsForApp","OpenExternalUrl","OpenGameFolder","ReadLoadedApps",
   "RemoveApi","RenameApi","ReorderApis","RestartSteam","ToggleApi","UnFixGame",
   "StartAddViaLuaTools",
+  "StartAddViaLuaToolsSmart",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
   "DeleteManifest","ClearManifests",
 }

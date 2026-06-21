@@ -186,6 +186,123 @@
     (document.body || document.documentElement).appendChild(back);
   }
 
+  // Generic confirm/acknowledge modal, same visual as showValidatePrompt.
+  // opts: { title, body, confirmText, declineText, onConfirm }. With no
+  // declineText only the primary button shows (an acknowledgement dialog).
+  // onConfirm runs after the primary button closes the modal; the backdrop and
+  // the decline button just dismiss.
+  function showConfirm(opts) {
+    opts = opts || {};
+    injectStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var card = document.createElement("div");
+    card.className = "lumen-modal";
+    var t = document.createElement("div");
+    t.className = "mt";
+    t.textContent = opts.title || "";
+    var b = document.createElement("div");
+    b.className = "mb";
+    b.textContent = opts.body || "";
+    var row = document.createElement("div");
+    row.className = "mrow";
+    var close = function () { if (back.parentNode) back.remove(); };
+    if (opts.declineText) {
+      var decline = document.createElement("button");
+      decline.className = "lumen-mbtn";
+      decline.textContent = opts.declineText;
+      decline.addEventListener("click", function (e) { e.stopPropagation(); close(); });
+      row.appendChild(decline);
+    }
+    var confirm = document.createElement("button");
+    confirm.className = "lumen-mbtn primary";
+    confirm.textContent = opts.confirmText || "OK";
+    confirm.addEventListener("click", function (e) {
+      e.stopPropagation();
+      close();
+      if (typeof opts.onConfirm === "function") opts.onConfirm();
+    });
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    row.appendChild(confirm);
+    card.appendChild(t); card.appendChild(b); card.appendChild(row);
+    back.appendChild(card);
+    (document.body || document.documentElement).appendChild(back);
+  }
+
+  // Non-dismissable progress modal for a multi-step action (source fetch). Returns
+  // { update(msg), close() }. Same visual as the other modals, no buttons.
+  function showProgress(title) {
+    injectStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var card = document.createElement("div");
+    card.className = "lumen-modal";
+    var t = document.createElement("div");
+    t.className = "mt";
+    t.textContent = title || "";
+    var b = document.createElement("div");
+    b.className = "mb";
+    b.textContent = "";
+    card.appendChild(t);
+    card.appendChild(b);
+    back.appendChild(card);
+    (document.body || document.documentElement).appendChild(back);
+    return {
+      update: function (msg) { b.textContent = msg || ""; },
+      close: function () { if (back.parentNode) back.remove(); },
+    };
+  }
+
+  // Prompt shown when a build is pinned for an ALREADY-INSTALLED game. A verify
+  // can't switch the installed build to the pin (Steam computes a zero delta and
+  // keeps the current files), so the only reliable way is to uninstall and
+  // reinstall fresh. Offers Steam's own uninstall flow; the pin is already
+  // saved, so a later reinstall comes down at the pinned build. Relayed into
+  // SharedJSContext via injector __lumenUninstallApp.
+  function showUninstallPrompt(appid) {
+    var GU = I18N.en.gu;
+    injectStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var card = document.createElement("div");
+    card.className = "lumen-modal";
+    var t = document.createElement("div");
+    t.className = "mt";
+    t.textContent = GU.uninstallTitle;
+    var b = document.createElement("div");
+    b.className = "mb";
+    b.textContent = GU.uninstallBody;
+    var row = document.createElement("div");
+    row.className = "mrow";
+    var close = function () { if (back.parentNode) back.remove(); };
+    var decline = document.createElement("button");
+    decline.className = "lumen-mbtn";
+    decline.textContent = GU.uninstallDecline;
+    decline.addEventListener("click", function (e) { e.stopPropagation(); close(); });
+    var confirm = document.createElement("button");
+    confirm.className = "lumen-mbtn primary";
+    confirm.textContent = GU.uninstallConfirm;
+    confirm.addEventListener("click", function (e) {
+      e.stopPropagation();
+      call("__lumenUninstallApp", { appid: appid }).catch(function (err) { log("uninstall", err); });
+      close();
+    });
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    row.appendChild(decline); row.appendChild(confirm);
+    card.appendChild(t); card.appendChild(b); card.appendChild(row);
+    back.appendChild(card);
+    (document.body || document.documentElement).appendChild(back);
+  }
+
+  // A game counts as installed if any of its depots has a current on-disk gid
+  // (its appmanifest is present). Used to skip the validate prompt for a
+  // not-installed game: pinning a build you haven't downloaded has nothing to
+  // verify, so we just store the pin and let the normal install pick it up.
+  function isGameInstalled(game) {
+    if (!game || !game.depots) return false;
+    return game.depots.some(function (d) { return !!d.installed; });
+  }
+
   // Label a depot row: shared Steam runtimes (flagged by the backend) get a
   // friendly name + id so their old manifest dates don't read as game builds;
   // everything else is just "Depot <id>".

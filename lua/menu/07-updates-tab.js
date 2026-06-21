@@ -58,7 +58,7 @@
         label: GU.latest, selected: !anyPinned,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
-            .then(function () { select(latest); showValidatePrompt(game.appid); })
+            .then(function () { select(latest); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
             .catch(function (e) { log("ClearDlcPin", e); });
         },
       });
@@ -76,8 +76,10 @@
             call("SetDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot, gid: v.gid }) })
               .then(function () {
                 select(row);
-                // Already-installed gid -> lock only, no re-download, no validate.
-                if (!v.installed) showValidatePrompt(game.appid);
+                // Already-installed gid -> lock only. Not-installed game ->
+                // nothing to verify yet. Installed at a different gid -> a verify
+                // can't switch it, so offer uninstall + reinstall fresh.
+                if (isGameInstalled(game) && !v.installed) showUninstallPrompt(game.appid);
               })
               .catch(function (e) { log("SetDlcPin", e); });
           },
@@ -162,51 +164,6 @@
     });
     head.appendChild(adv);
 
-    // "Load .lua": import a lua.tools manifest .lua so the game is pinned to the
-    // exact build a fix/crack needs (its setManifestid lines). The file is read
-    // in-page (FileReader) and its text handed to the ImportLuaPin RPC; we never
-    // need a native file dialog or a filesystem path.
-    var imp = document.createElement("div");
-    imp.className = "lumen-adv lumen-import";
-    imp.textContent = "\u2191 " + GU.importLua;
-    imp.title = GU.importHint;
-    var fileIn = document.createElement("input");
-    fileIn.type = "file";
-    fileIn.accept = ".lua";
-    fileIn.style.display = "none";
-    imp.addEventListener("click", function (e) {
-      e.stopPropagation();
-      fileIn.value = "";
-      fileIn.click();
-    });
-    fileIn.addEventListener("change", function () {
-      var f = fileIn.files && fileIn.files[0];
-      if (!f) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        call("ImportLuaPin", { json: JSON.stringify({ appid: game.appid, lua: String(reader.result) }) })
-          .then(function (res) {
-            var r = JSON.parse(res);
-            if (!r || !r.success) {
-              var e2 = (r && r.error) || "";
-              var msg = /is for app/.test(e2) ? GU.importBadApp
-                      : /no setManifestid/.test(e2) ? GU.importNoPins
-                      : GU.importFail + e2;
-              throw new Error(msg);
-            }
-            setLocked(true);
-            showValidatePrompt(game.appid);
-          })
-          .catch(function (e2) {
-            log("ImportLuaPin", e2);
-            alert((e2 && e2.message) || GU.importFail);
-          });
-      };
-      reader.onerror = function () { alert(GU.importFail); };
-      reader.readAsText(f);
-    });
-    head.appendChild(imp);
-    head.appendChild(fileIn);
     wrap.appendChild(head);
     wrap.appendChild(vers);
 
@@ -225,7 +182,7 @@
       label: GU.latest, selected: !game.locked,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
-          .then(function () { select(latest); setLocked(false); showValidatePrompt(game.appid); })
+          .then(function () { select(latest); setLocked(false); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
           .catch(function (e) { log("ClearGamePin", e); });
       },
     });
@@ -243,9 +200,11 @@
           call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
             .then(function () {
               select(row); setLocked(true);
-              // Pinning the build that's already installed only locks it (no
-              // version change) — nothing to download, so skip the validate prompt.
-              if (!b.installed) showValidatePrompt(game.appid);
+              // Already-installed build -> lock only, nothing to do. Not
+              // installed -> nothing to verify yet (pin is stored, install picks
+              // it up). Installed at a DIFFERENT build -> a verify can't switch
+              // it (zero delta), so offer to uninstall + reinstall fresh.
+              if (isGameInstalled(game) && !b.installed) showUninstallPrompt(game.appid);
             })
             .catch(function (e) { log("SetGamePin", e); });
         },
@@ -279,6 +238,186 @@
   // Re-fetch + re-render the whole Game Updates list into `body`.
   function reloadGameUpdates(body) { renderGameUpdates(body); }
 
+  // Read an uploaded lua.tools .lua and import the game it describes, WITHOUT
+  // requiring it to have been added via LuaTools first. To make a game's DLCs
+  // installable we need their per-depot decryption keys; a "Manifest"-style .lua
+  // is often base-only (just the base depot key). Per-depot keys are build-
+  // independent, so we prefer the plugin's SOURCES (which ship the complete .lua
+  // with every depot key) and then re-apply the uploaded .lua's pin on top:
+  //   InspectLua (appid + installed?) ->
+  //     installed  -> reinstall-confirm modal -> runImport
+  //     not added  -> runImport
+  //   runImport: CheckApisForApp -> StartAddViaLuaToolsSmart (races sources,
+  //     picks the most COMPLETE -> every depot key) -> ImportLuaPin (apply the
+  //     uploaded .lua's pin); fall back to ImportLuaFull (the uploaded, possibly
+  //     base-only .lua) when no source has the app.
+  function importLuaFromFile(file, body) {
+    var GU = I18N.en.gu;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result);
+      call("InspectLua", { json: JSON.stringify({ lua: text }) })
+        .then(function (res) {
+          var r = JSON.parse(res);
+          if (!r || !r.success) {
+            var e2 = (r && r.error) || "";
+            var msg = /determine app id|app id from/.test(e2) ? GU.importNoApp
+                    : /is for app/.test(e2) ? GU.importBadApp
+                    : GU.importFail + e2;
+            throw new Error(msg);
+          }
+          if (r.alreadyOnBuild) {
+            // Already installed at exactly this build: nothing to change. Offer a
+            // force "apply anyway" (re-fetch + re-verify) but never auto-validate.
+            showConfirm({
+              title: GU.alreadyTitle, body: GU.alreadyBody,
+              confirmText: GU.alreadyApply, declineText: GU.alreadyCancel,
+              onConfirm: function () { runImport(r, text, body); },
+            });
+          } else if (r.installed) {
+            showConfirm({
+              title: GU.reinstallTitle, body: GU.reinstallBody,
+              confirmText: GU.reinstallConfirm, declineText: GU.reinstallCancel,
+              onConfirm: function () { runImport(r, text, body); },
+            });
+          } else {
+            runImport(r, text, body);
+          }
+        })
+        .catch(function (e) { log("InspectLua", e); alert((e && e.message) || GU.importFail); });
+    };
+    reader.onerror = function () { alert(I18N.en.gu.importFail); };
+    reader.readAsText(file);
+  }
+
+  // Poll the plugin's add status until terminal. Resolves "done" | "failed".
+  // The source package (a .lua + manifests) is small, so this settles quickly;
+  // a cap keeps a stuck backend from polling forever.
+  function pollAddStatus(appid, prog) {
+    var GU = I18N.en.gu;
+    return new Promise(function (resolve) {
+      var ticks = 0;
+      var tick = function () {
+        if (++ticks > 300) { resolve("failed"); return; }
+        call("GetAddViaLuaToolsStatus", { appid: appid })
+          .then(function (res) {
+            var p = JSON.parse(res);
+            var st = (p && p.state) || {};
+            var s = st.status;
+            if (s === "done") { resolve(st.success ? "done" : "failed"); return; }
+            if (s === "failed" || s === "cancelled") { resolve("failed"); return; }
+            if (prog) prog.update(
+              s === "downloading" ? GU.loadDownloading
+              : s === "processing" || s === "installing" ? GU.loadProcessing
+              : GU.loadChecking);
+            setTimeout(tick, 600);
+          })
+          .catch(function () { resolve("failed"); });
+      };
+      tick();
+    });
+  }
+
+  // Add the game from the plugin's sources (complete depot keys). Resolves true
+  // if a source supplied the game, false to fall back to the uploaded .lua.
+  // Uses the SMART add (StartAddViaLuaToolsSmart): it races every enabled source
+  // and picks the most COMPLETE package, so a game whose first-available source
+  // is missing DLC keys still gets them from a fuller one.
+  function addFromSources(appid, prog) {
+    var GU = I18N.en.gu;
+    return call("CheckApisForApp", { appid: appid })
+      .then(function (res) {
+        var p = JSON.parse(res);
+        var results = (p && p.results) || [];
+        var available = results.some(function (r) { return r && r.available; });
+        if (!available) return false;
+        if (prog) prog.update(GU.loadDownloading);
+        return call("StartAddViaLuaToolsSmart", { appid: appid })
+          .then(function () { return pollAddStatus(appid, prog); })
+          .then(function (outcome) { return outcome === "done"; });
+      })
+      .catch(function () { return false; });
+  }
+
+  // Add the game (preferring sources for complete keys) then apply the uploaded
+  // .lua's pin. `info` is the InspectLua result.
+  function runImport(info, text, body) {
+    var GU = I18N.en.gu;
+    var appid = info.appid;
+    var hasPins = (info.pinned || 0) > 0;
+    var prog = showProgress(GU.importLua);
+    prog.update(GU.loadChecking);
+    addFromSources(appid, prog)
+      .then(function (fromSource) {
+        if (fromSource) {
+          // Game added with complete keys; just apply the uploaded .lua's pin.
+          if (!hasPins) return { fromSource: true };
+          return call("ImportLuaPin", { json: JSON.stringify({ appid: appid, lua: text }) })
+            .then(function (ir) {
+              var r2 = JSON.parse(ir);
+              if (!r2 || !r2.success) throw new Error((r2 && r2.error) || GU.importFail);
+              return { fromSource: true };
+            });
+        }
+        // Fallback: write the uploaded (possibly base-only) .lua directly.
+        return call("ImportLuaFull", { json: JSON.stringify({ lua: text }) })
+          .then(function (ir) {
+            var r2 = JSON.parse(ir);
+            if (!r2 || !r2.success) throw new Error((r2 && r2.error) || GU.importFail);
+            return { fromSource: false };
+          });
+      })
+      .then(function (outcome) {
+        prog.close();
+        reloadGameUpdates(body);
+        if (info.installed) {
+          // Installed at a different build: a verify won't switch it, so offer
+          // to uninstall + reinstall fresh at the pinned build.
+          showUninstallPrompt(appid);
+        } else {
+          showConfirm({
+            title: GU.restartTitle,
+            body: outcome.fromSource ? GU.restartBody : GU.restartBodyPartial,
+            confirmText: GU.restartNow,
+            declineText: GU.restartLater,
+            onConfirm: function () {
+              call("RestartSteam", {}).catch(function (e) { log("RestartSteam", e); });
+            },
+          });
+        }
+      })
+      .catch(function (e) {
+        prog.close();
+        log("runImport", e);
+        alert((e && e.message) || GU.importFail);
+      });
+  }
+
+  // The single top-of-page "Load .lua" button (replaces the per-card import).
+  // Reads the file in-page (FileReader) and hands its text to importLuaFromFile;
+  // no native file dialog or filesystem path is ever needed.
+  function loadLuaButton(body) {
+    var GU = I18N.en.gu;
+    var wrap = document.createElement("div");
+    wrap.className = "lumen-gu-actions";
+    var btn = document.createElement("button");
+    btn.className = "lumen-mbtn primary lumen-load-lua";
+    btn.textContent = "\u2191 " + GU.importLua;
+    btn.title = GU.loadTopHint;
+    var fileIn = document.createElement("input");
+    fileIn.type = "file";
+    fileIn.accept = ".lua";
+    fileIn.style.display = "none";
+    btn.addEventListener("click", function () { fileIn.value = ""; fileIn.click(); });
+    fileIn.addEventListener("change", function () {
+      var f = fileIn.files && fileIn.files[0];
+      if (f) importLuaFromFile(f, body);
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(fileIn);
+    return wrap;
+  }
+
   function renderGameUpdates(body) {
     var GU = I18N.en.gu;
     body.textContent = "";
@@ -286,6 +425,8 @@
     note.className = "lumen-note";
     note.textContent = GU.note;
     body.appendChild(note);
+
+    body.appendChild(loadLuaButton(body));
 
     var search = document.createElement("input");
     search.type = "text";

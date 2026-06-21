@@ -79,6 +79,8 @@
       "border:1px solid #3d4450;border-radius:3px;padding:8px 10px;font-size:13px;",
       "font-family:inherit;margin:0 0 12px;}",
       ".lumen-gu-search:focus{outline:none;border-color:#1a9fff;}",
+      ".lumen-gu-actions{display:flex;justify-content:flex-end;margin:0 0 12px;}",
+      ".lumen-load-lua{font-size:13px;}",
       ".lumen-game{border-bottom:1px solid rgba(255,255,255,.06);}",
       ".lumen-game-head{display:flex;align-items:center;gap:12px;padding:10px 2px;cursor:pointer;}",
       ".lumen-game-head:hover{background:rgba(255,255,255,.03);}",
