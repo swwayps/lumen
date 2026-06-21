@@ -286,6 +286,16 @@
       e.stopPropagation();
       call("__lumenUninstallApp", { appid: appid }).catch(function (err) { log("uninstall", err); });
       close();
+      // The pin only lands on a fresh reinstall AND needs Steam to re-read the
+      // pinned appinfo at startup, so guide the user to restart after the
+      // uninstall, then reinstall. RestartSteam is the plugin's own RPC.
+      showConfirm({
+        title: GU.uninstallRestartTitle, body: GU.uninstallRestartBody,
+        confirmText: GU.restartNow, declineText: GU.restartLater,
+        onConfirm: function () {
+          call("RestartSteam", {}).catch(function (err) { log("RestartSteam", err); });
+        },
+      });
     });
     back.addEventListener("click", function (e) { if (e.target === back) close(); });
     row.appendChild(decline); row.appendChild(confirm);

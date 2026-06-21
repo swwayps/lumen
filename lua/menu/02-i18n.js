@@ -78,6 +78,8 @@
         uninstallBody: "This game is installed at a different build. Steam can't switch an installed game to a pinned build by verifying \u2014 it has to be reinstalled. Uninstall now, then reinstall it from your library and it'll come down at the pinned build. Your saves aren't affected.",
         uninstallConfirm: "Uninstall",
         uninstallDecline: "Not now",
+        uninstallRestartTitle: "Restart Steam, then reinstall",
+        uninstallRestartBody: "Once the uninstall finishes, restart Steam so it picks up the pinned build, then reinstall the game from your library \u2014 it will come down at the pinned build.",
       },
       keys: {
         PlayNotOwnedGames: { label: "Play not-owned games", desc: "Lets Steam launch games that aren't in your account.", info: "You don't need to turn this on. Games you add through LuaTools are injected and install either way — this switch doesn't change that." },
