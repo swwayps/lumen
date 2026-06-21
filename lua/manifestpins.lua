@@ -669,7 +669,11 @@ local function archived_versions(manifests_dir, depot)
   local names = {}
   local ok_lfs, lfs = pcall(require, "lfs")
   if ok_lfs then
-    for entry in lfs.dir(manifests_dir) do names[#names + 1] = entry end
+    -- lfs.dir throws if manifests_dir doesn't exist yet (fresh install, nothing
+    -- archived). Guard so a depot with no archived versions just returns {}.
+    pcall(function()
+      for entry in lfs.dir(manifests_dir) do names[#names + 1] = entry end
+    end)
   else
     local p = io.popen("ls -1 '" .. manifests_dir .. "' 2>/dev/null")
     if p then for line in p:lines() do names[#names + 1] = line end; p:close() end
@@ -813,7 +817,10 @@ function mp.clear_manifests(ctx)
   local names = {}
   local ok_lfs, lfs = pcall(require, "lfs")
   if ok_lfs then
-    for entry in lfs.dir(ctx.manifests_dir) do names[#names + 1] = entry end
+    -- Guard: manifests_dir may not exist yet on a fresh install.
+    pcall(function()
+      for entry in lfs.dir(ctx.manifests_dir) do names[#names + 1] = entry end
+    end)
   else
     local p = io.popen("ls -1 '" .. ctx.manifests_dir .. "' 2>/dev/null")
     if p then for line in p:lines() do names[#names + 1] = line end; p:close() end

@@ -366,6 +366,16 @@ do
   check(ok_fresh, "build: missing stplug-in dir does not throw")
   check(ok_fresh and #games_fresh == 0, "build: missing stplug-in dir yields no games")
 
+  -- Game added (stplug-in has .lua files) but nothing archived yet: the
+  -- manifests dir doesn't exist. build_games must not throw; every game has no
+  -- archived versions so the list is empty. clear_manifests must also be safe.
+  local nomans = { config_path = cfg, stplug_dir = stplug,
+                   manifests_dir = root .. "/no-manifests-here", steam_root = root }
+  local ok_nm, games_nm = pcall(mp.build_games, nomans)
+  check(ok_nm, "build: missing manifests dir does not throw")
+  check(ok_nm and #games_nm == 0, "build: missing manifests dir yields no games")
+  check(pcall(mp.clear_manifests_rpc, nomans), "clear: missing manifests dir does not throw")
+
   -- locking the game must pin only real content depots, NEVER the workshop depot
   -- (its snapshots aren't game builds — pinning it would downgrade workshop).
   local sg = json.decode(mp.set_game_pin_rpc(ctx, json.encode({ appid = 638510, date = 250 })))
