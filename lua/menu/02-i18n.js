@@ -102,6 +102,8 @@
         uninstallDecline: "Not now",
         uninstallRestartTitle: "Restart Steam, then reinstall",
         uninstallRestartBody: "Once the uninstall finishes, restart Steam so it picks up the pinned build, then reinstall the game from your library \u2014 it will come down at the pinned build.",
+        uninstallReinstallTitle: "Reinstall to apply the build",
+        uninstallReinstallBody: "Once the uninstall finishes, reinstall the game from your library \u2014 it'll come down at the pinned build. No Steam restart needed.",
         uninstallWait: "Uninstalling\u2026",
       },
       keys: {

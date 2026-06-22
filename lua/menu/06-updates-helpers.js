@@ -354,13 +354,14 @@
       // instantly over (or behind) the native dialog.
       Promise.resolve(applyPin ? applyPin() : null).then(function () {
         call("__lumenUninstallApp", { appid: appid }).catch(function (err) { log("uninstall", err); });
+        // The pin applies live (slsteam-moon's reconcile hook reads the config
+        // on the fly), so no Steam restart is needed: once the uninstall
+        // finishes, reinstalling brings the pinned build. A short loading modal
+        // bridges Steam's own (unobservable) uninstall dialog before the hint.
         showLoadingThen(GU.uninstallWait, 3500, function () {
           showConfirm({
-            title: GU.uninstallRestartTitle, body: GU.uninstallRestartBody,
-            confirmText: GU.restartNow, declineText: GU.restartLater,
-            onConfirm: function () {
-              call("RestartSteam", {}).catch(function (err) { log("RestartSteam", err); });
-            },
+            title: GU.uninstallReinstallTitle, body: GU.uninstallReinstallBody,
+            confirmText: GU.restartOk,
           });
         });
       }).catch(function (err) { log("apply-before-uninstall", err); });
@@ -372,24 +373,19 @@
     (document.body || document.documentElement).appendChild(back);
   }
 
-  // Pinning a build for a NOT-installed game only takes effect after a Steam
-  // restart: the pin RPC invalidates the cached picsbuffer so SLSsteam re-renders
-  // the appinfo with the pin at startup; installing before that loops between
-  // "starting download" and "finalizing". So we GATE the pin on the restart —
-  // `applyPin` (which writes the pin + moves the selection) runs only if the
-  // user chooses to restart now; "Later"/dismiss cancels the pin entirely and
-  // the previous selection stands.
+  // Pinning a build for a NOT-installed game now takes effect LIVE: slsteam-moon
+  // applies the pin in memory (the EvaluateConfigChanges reconcile hook reads
+  // the ManifestPins config on the fly), downstream of Steam's in-session
+  // appinfo refresh, so no restart is needed. Just write the pin (and move the
+  // selection); installing from the library then comes down at the pinned
+  // build. NOTE: this assumes the game was already added in a previous session
+  // (it's in this list, so it has a stplug .lua and was provisioned at the last
+  // boot). A game added THIS session still needs a restart before its first
+  // install (separate add-without-restart limitation) — that path keeps its own
+  // restart prompt in runImport.
   function showPinRestartPrompt(applyPin) {
-    var GU = I18N.en.gu;
-    showConfirm({
-      title: GU.pinRestartTitle, body: GU.pinRestartBody,
-      confirmText: GU.restartNow, declineText: GU.restartLater,
-      onConfirm: function () {
-        Promise.resolve(applyPin ? applyPin() : null).then(function () {
-          call("RestartSteam", {}).catch(function (err) { log("RestartSteam", err); });
-        }).catch(function (err) { log("apply-before-restart", err); });
-      },
-    });
+    Promise.resolve(applyPin ? applyPin() : null)
+      .catch(function (err) { log("apply-pin", err); });
   }
 
   // A game counts as installed if any of its depots has a current on-disk gid
