@@ -137,6 +137,21 @@ function mp.parse_lua(text)
   return out
 end
 
+-- ── Load-.lua import marker ───────────────────────────────────────────────
+-- Games added through the menu's "Load .lua" button (vs the LuaTools database)
+-- are recorded, one appid per line, in <SLSsteam>/lumen_lua_imports.txt. This is
+-- the only signal that tells the two apart on disk (both write a stplug-in
+-- <appid>.lua), and it drives the build badge text ("from .lua" vs "from
+-- LuaTools"). parse_imports is the pure reader -> a set keyed by appid.
+function mp.parse_imports(text)
+  local set = {}
+  for line in ((text or "") .. "\n"):gmatch("([^\n]*)\n") do
+    local id = math.tointeger(tonumber(line:match("^%s*(%d+)%s*$") or ""))
+    if id then set[id] = true end
+  end
+  return set
+end
+
 -- ── ManifestPins config parse / emit / splice ────────────────────────────────
 -- parse_pins(text) -> { [appid]={ locked=bool, depots={ [depot]="gid" } } }
 function mp.parse_pins(text)
@@ -295,6 +310,51 @@ function mp.add_additional_app(text, appid)
   local body = table.concat(lines, "\n")
   if #lines > 0 then body = body .. "\n" end
   return body, "added"
+end
+
+-- remove_additional_app(text, appid) -> new_text, status. Inverse of
+-- add_additional_app: drops the "- <appid>" entry from the AdditionalApps
+-- block (keeping the header even if it becomes empty). Pure text transform so a
+-- full game removal can fold it into the same atomic config write as the pin
+-- purge. status: "removed" | "not_present" | "inline_refused" | "bad_appid".
+function mp.remove_additional_app(text, appid)
+  appid = math.tointeger(tonumber(appid))
+  text = text or ""
+  if not appid then return text, "bad_appid" end
+
+  local had_trailing_nl = (#text > 0 and text:sub(-1) == "\n")
+  local lines = {}
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+  if had_trailing_nl then lines[#lines] = nil end
+
+  local header_idx
+  for i, line in ipairs(lines) do
+    if line:match("^AdditionalApps%s*:") then header_idx = i; break end
+  end
+  if not header_idx then return text, "not_present" end
+
+  -- a value after the colon (ignoring a comment) => inline list; refuse to edit.
+  local after = lines[header_idx]:match("^AdditionalApps%s*:%s*(.-)%s*$") or ""
+  if after:gsub("#.*$", ""):gsub("%s+$", "") ~= "" then return text, "inline_refused" end
+
+  local target_idx
+  for i = header_idx + 1, #lines do
+    local stripped = lines[i]:gsub("^%s+", "")
+    if stripped == "" or stripped:match("^#") then
+      -- comment/blank: belongs to whatever follows; skip
+    else
+      local _, rest = lines[i]:match("^(%s+)%-%s+(.*)$")
+      if not rest then break end  -- next top-level key ends the block
+      local id = math.tointeger(tonumber((rest:gsub("#.*$", ""):gsub("%s+$", ""))))
+      if id == appid then target_idx = i; break end
+    end
+  end
+
+  if not target_idx then return text, "not_present" end
+  table.remove(lines, target_idx)
+  local body = table.concat(lines, "\n")
+  if #lines > 0 then body = body .. "\n" end
+  return body, "removed"
 end
 
 -- ── shared-runtime depot detection ───────────────────────────────────────
@@ -513,6 +573,7 @@ function mp.default_ctx()
     stplug_dir = root and (root .. "/config/stplug-in") or nil,
     manifests_dir = (h ~= "" and (h .. "/.config/SLSsteam/manifests")) or nil,
     cache_dir = (h ~= "" and (h .. "/.config/SLSsteam/cache")) or nil,
+    imports_path = (h ~= "" and (h .. "/.config/SLSsteam/lumen_lua_imports.txt")) or nil,
     steam_root = root,
   }
 end
@@ -539,6 +600,94 @@ local function read_file(path)
   if not f then return nil end
   local d = f:read("*a"); f:close()
   return d
+end
+
+-- read_imports(path) -> set of appids marked as "added via Load .lua".
+local function read_imports(path)
+  return mp.parse_imports(read_file(path) or "")
+end
+
+-- mark_import(path, appid) -> ok, err. Adds `appid` to the imports marker file
+-- (sorted, one per line) via an atomic temp-rename. No-op success if already
+-- present. The file lives next to config.yaml, so its dir exists by the time any
+-- import runs (an import requires a readable config.yaml).
+local function mark_import(path, appid)
+  appid = math.tointeger(tonumber(appid))
+  if not path or not appid then return false, "bad args" end
+  local set = read_imports(path)
+  if set[appid] then return true end
+  set[appid] = true
+  local ids = {}
+  for k in pairs(set) do ids[#ids + 1] = k end
+  table.sort(ids)
+  local lines = {}
+  for _, id in ipairs(ids) do lines[#lines + 1] = tostring(id) end
+  local body = table.concat(lines, "\n") .. "\n"
+  local tmp = string.format("%s.tmp.lumen.%d.%d", path, os.time(), math.random(100000, 999999))
+  local w, werr = io.open(tmp, "wb")
+  if not w then return false, werr or "open failed" end
+  w:write(body); w:close()
+  local ok, rerr = os.rename(tmp, path)
+  if not ok then os.remove(tmp); return false, rerr or "rename failed" end
+  return true
+end
+
+-- unmark_import(path, appid): drop `appid` from the imports marker (used by a
+-- full game removal). Removes the file when it becomes empty. Best-effort.
+local function unmark_import(path, appid)
+  appid = math.tointeger(tonumber(appid))
+  if not path or not appid then return end
+  local set = read_imports(path)
+  if not set[appid] then return end
+  set[appid] = nil
+  local ids = {}
+  for k in pairs(set) do ids[#ids + 1] = k end
+  table.sort(ids)
+  if #ids == 0 then os.remove(path); return end
+  local lines = {}
+  for _, id in ipairs(ids) do lines[#lines + 1] = tostring(id) end
+  local body = table.concat(lines, "\n") .. "\n"
+  local tmp = string.format("%s.tmp.lumen.%d.%d", path, os.time(), math.random(100000, 999999))
+  local w = io.open(tmp, "wb"); if not w then return end
+  w:write(body); w:close()
+  if not os.rename(tmp, path) then os.remove(tmp) end
+end
+
+-- list_dir(dir) -> array of entry names (lfs when present, else a shell ls).
+local function list_dir(dir)
+  local names = {}
+  if not dir then return names end
+  local ok_lfs, lfs = pcall(require, "lfs")
+  if ok_lfs then
+    pcall(function() for e in lfs.dir(dir) do names[#names + 1] = e end end)
+  else
+    local p = io.popen("ls -1 '" .. dir .. "' 2>/dev/null")
+    if p then for line in p:lines() do names[#names + 1] = line end; p:close() end
+  end
+  return names
+end
+
+-- delete_manifests_for_ids(manifests_dir, ids) -> removed_count. Deletes every
+-- <depot>_<gid>.manifest whose depot id is in the `ids` set (used by the full
+-- removal of a load-.lua game). No-op when the dir is absent.
+local function delete_manifests_for_ids(manifests_dir, ids)
+  if not manifests_dir then return 0 end
+  local removed = 0
+  for _, name in ipairs(list_dir(manifests_dir)) do
+    local depot = name:match("^(%d+)_%d+%.manifest$")
+    if depot and ids[math.tointeger(tonumber(depot))] then
+      if os.remove(manifests_dir .. "/" .. name) then removed = removed + 1 end
+    end
+  end
+  return removed
+end
+
+-- remove_lua_files(stplug_dir, appid): delete the game's stplug-in <appid>.lua
+-- (and a .disabled sibling). Best-effort.
+local function remove_lua_files(stplug_dir, appid)
+  if not stplug_dir then return end
+  os.remove(stplug_dir .. "/" .. appid .. ".lua")
+  os.remove(stplug_dir .. "/" .. appid .. ".lua.disabled")
 end
 
 -- All Steam library roots: the primary steam_root plus every "path" listed in
@@ -695,6 +844,7 @@ end
 function mp.build_games(ctx)
   ctx = ctx or mp.default_ctx()
   local pins = mp.parse_pins(read_file(ctx.config_path) or "")
+  local imports = read_imports(ctx.imports_path)
 
   -- enumerate <appid>.lua in stplug-in
   local lua_files = {}
@@ -774,6 +924,7 @@ function mp.build_games(ctx)
           locked = appPins.locked or false,
           depots = depots,
           dlc_appids = parsed.dlc_appids,
+          fromLuaFile = imports[appid] == true,
         }
       end
     end
@@ -796,9 +947,27 @@ function mp.delete_manifest(manifests_dir, depot, gid)
   return true
 end
 
+-- game_keep_set(g) -> set keyed "<depot>_<gid>" of versions to PRESERVE when
+-- bulk-deleting a game's stored manifests: the installed build, any pinned
+-- build, and the LuaTools build (the setManifestid gid) UNLESS the game was
+-- added via Load .lua (then its .lua-named build isn't a LuaTools-managed one).
+local function game_keep_set(g)
+  local keep = {}
+  for _, dep in ipairs(g.depots or {}) do
+    for _, v in ipairs(dep.versions or {}) do
+      if v.installed or v.pinned or (v.fromLuaTools and not g.fromLuaFile) then
+        keep[dep.depot .. "_" .. v.gid] = true
+      end
+    end
+  end
+  return keep
+end
+
 -- clear_manifests(ctx) -> removed_count, freed_bytes. Deletes every archived
--- manifest EXCEPT the ones currently installed or pinned (those are still
--- needed: the pinned one backs the redirect, and we keep installed defensively).
+-- manifest EXCEPT the ones currently installed, pinned, or shipped by LuaTools
+-- (the setManifestid build of a non-Load-.lua game). Those are still needed: the
+-- pinned one backs the redirect, installed is defensive, and the LuaTools build
+-- is the game's canonical version (removable only via the LuaTools menu).
 -- Frees the rollback history without breaking the current state.
 function mp.clear_manifests(ctx)
   ctx = ctx or mp.default_ctx()
@@ -809,7 +978,9 @@ function mp.clear_manifests(ctx)
   for _, g in ipairs(games) do
     for _, dep in ipairs(g.depots) do
       for _, v in ipairs(dep.versions) do
-        if v.installed or v.pinned then keep[dep.depot .. "_" .. v.gid] = true end
+        if v.installed or v.pinned or (v.fromLuaTools and not g.fromLuaFile) then
+          keep[dep.depot .. "_" .. v.gid] = true
+        end
       end
     end
   end
@@ -1018,8 +1189,26 @@ function mp.import_lua_full_rpc(ctx, json_str)
   local cwok, cwerr = write_config_raw(ctx.config_path, newcfg)
   if not cwok then return err(cwerr) end
   mp.invalidate_appinfo_cache(ctx, appid)
+  -- Record that this game was added by loading a .lua (not the LuaTools DB) so
+  -- its build badge reads "from .lua". Best-effort: a failed mark only costs the
+  -- nicer label, never the import itself.
+  mark_import(ctx.imports_path, appid)
 
   return json.encode({ success = true, appid = appid, pinned = count, added = status })
+end
+
+-- MarkLuaImport{appid}: record `appid` as added through the menu's "Load .lua"
+-- button. Used by the from-source import path (where StartAddViaLuaToolsSmart,
+-- not ImportLuaFull, adds the game, so the auto-mark there doesn't fire).
+function mp.mark_lua_import_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or not req.appid then return err("bad request") end
+  local appid = as_int(req.appid)
+  if not appid then return err("bad appid") end
+  local mok, merr = mark_import(ctx.imports_path, appid)
+  if not mok then return err(merr) end
+  return json.encode({ success = true, appid = appid })
 end
 
 -- InspectLua{appid?, lua}: read-only pre-check for the "Load .lua" flow.
@@ -1077,6 +1266,106 @@ function mp.clear_manifests_rpc(ctx)
   return json.encode({ success = true, removed = removed, freed = freed })
 end
 
+-- DeleteBuild{appid, date|gid}: remove every archived manifest of `appid` that
+-- belongs to the same calendar day (UTC) as the selected build — i.e. all
+-- depots packaged that day — EXCEPT installed/pinned/LuaTools versions. Backs
+-- the per-build trash in the list and the advanced view. `date` is the build's
+-- creation_time (the list groups by day); `gid` is accepted as an alternative.
+function mp.delete_build_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or not req.appid then return err("bad request") end
+  local appid = as_int(req.appid)
+  local games = mp.build_games(ctx)
+  local game
+  for _, g in ipairs(games) do if g.appid == appid then game = g; break end end
+  if not game then return err("unknown app") end
+
+  local T = req.date and as_int(req.date)
+  if not T and req.gid then
+    local want = tostring(req.gid)
+    for _, dep in ipairs(game.depots) do
+      for _, v in ipairs(dep.versions) do if v.gid == want then T = v.date end end
+    end
+  end
+  if not T then return err("could not resolve build date") end
+  local lo = T - (T % 86400)        -- start of that UTC day (matches the list grouping)
+  local hi = lo + 86399
+
+  local keep = game_keep_set(game)
+  local removed = 0
+  for _, dep in ipairs(game.depots) do
+    for _, v in ipairs(dep.versions) do
+      if v.date and v.date >= lo and v.date <= hi
+         and not keep[dep.depot .. "_" .. v.gid] then
+        if mp.delete_manifest(ctx.manifests_dir, dep.depot, v.gid) then removed = removed + 1 end
+      end
+    end
+  end
+  return json.encode({ success = true, removed = removed })
+end
+
+-- DeleteAll{appid}: bulk-remove a game's stored versions from the Game Updates
+-- tab.
+--   * Load-.lua game  -> FULL removal: delete every stored manifest for the
+--     game's depots, delete its stplug-in .lua, drop it from AdditionalApps,
+--     purge its pins, clear the import marker, and invalidate its appinfo cache.
+--     (Re-addable any time via Load .lua.)
+--   * LuaTools game   -> delete every stored version EXCEPT installed/pinned and
+--     the LuaTools build(s); those stay (removable only from the LuaTools menu).
+-- Returns { success, fullRemoval, removed, kept }.
+function mp.delete_all_rpc(ctx, json_str)
+  ctx = ctx or mp.default_ctx()
+  local ok, req = pcall(json.decode, json_str)
+  if not ok or type(req) ~= "table" or not req.appid then return err("bad request") end
+  local appid = as_int(req.appid)
+  if not appid then return err("bad appid") end
+
+  local imports = read_imports(ctx.imports_path)
+  if imports[appid] then
+    -- FULL removal of a Load-.lua game.
+    local luatext = read_file((ctx.stplug_dir or "") .. "/" .. appid .. ".lua") or ""
+    local parsed = mp.parse_lua(luatext)
+    local ids = { [appid] = true }
+    if parsed.base then ids[parsed.base] = true end
+    for d in pairs(parsed.depots) do ids[d] = true end
+    for _, d in ipairs(parsed.dlc_appids) do ids[d] = true end
+
+    local removed = delete_manifests_for_ids(ctx.manifests_dir, ids)
+    remove_lua_files(ctx.stplug_dir, appid)
+
+    local cfg = read_file(ctx.config_path)
+    if cfg then
+      local newcfg = (mp.remove_additional_app(cfg, appid))
+      local pins = mp.parse_pins(newcfg)
+      mp.clear_game_pin(pins, appid)
+      newcfg = mp.splice_pins(newcfg, pins)
+      write_config_raw(ctx.config_path, newcfg)
+    end
+    unmark_import(ctx.imports_path, appid)
+    mp.invalidate_appinfo_cache(ctx, appid)
+    return json.encode({ success = true, fullRemoval = true, removed = removed, kept = 0 })
+  end
+
+  -- LuaTools game: delete everything except installed/pinned/LuaTools versions.
+  local games = mp.build_games(ctx)
+  local game
+  for _, g in ipairs(games) do if g.appid == appid then game = g; break end end
+  if not game then return err("unknown app") end
+  local keep = game_keep_set(game)
+  local removed, kept = 0, 0
+  for _, dep in ipairs(game.depots) do
+    for _, v in ipairs(dep.versions) do
+      if keep[dep.depot .. "_" .. v.gid] then
+        kept = kept + 1
+      elseif mp.delete_manifest(ctx.manifests_dir, dep.depot, v.gid) then
+        removed = removed + 1
+      end
+    end
+  end
+  return json.encode({ success = true, fullRemoval = false, removed = removed, kept = kept })
+end
+
 -- register(registry): install the five Game Updates RPCs bound to the real ctx.
 function mp.register(registry)
   registry.GetGameUpdates = function() return mp.get_game_updates(mp.default_ctx()) end
@@ -1086,8 +1375,11 @@ function mp.register(registry)
   registry.ClearDlcPin = function(j) return mp.clear_dlc_pin_rpc(mp.default_ctx(), j) end
   registry.ImportLuaPin = function(j) return mp.import_lua_pin_rpc(mp.default_ctx(), j) end
   registry.ImportLuaFull = function(j) return mp.import_lua_full_rpc(mp.default_ctx(), j) end
+  registry.MarkLuaImport = function(j) return mp.mark_lua_import_rpc(mp.default_ctx(), j) end
   registry.InspectLua = function(j) return mp.inspect_lua_rpc(mp.default_ctx(), j) end
   registry.DeleteManifest = function(j) return mp.delete_manifest_rpc(mp.default_ctx(), j) end
+  registry.DeleteBuild = function(j) return mp.delete_build_rpc(mp.default_ctx(), j) end
+  registry.DeleteAll = function(j) return mp.delete_all_rpc(mp.default_ctx(), j) end
   registry.ClearManifests = function() return mp.clear_manifests_rpc(mp.default_ctx()) end
   return registry
 end

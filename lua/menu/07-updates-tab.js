@@ -2,6 +2,14 @@
 // LM-FRAGMENT source fragment of lumen_menu, assembled in order into ONE IIFE
 // LM-FRAGMENT by boot.lua (read_menu_js). Not a standalone module. See 01-core.js.
 
+  // Reference to the header "Clear stored versions" button (created in the
+  // overlay fragment, 09). The advanced/Depots subpage hides it and shows its
+  // own per-game "Delete all" instead; returning to the list restores it.
+  var _guClearBtnRef = null;
+  function guShowClearBtn(show) {
+    if (_guClearBtnRef) _guClearBtnRef.style.display = show ? "" : "none";
+  }
+
   // DLC / per-component sub-page: each of the game's depots is independently
   // pinnable (SetDlcPin / ClearDlcPin). We can't map depot->DLC appid purely
   // from on-disk data, so depots are labelled by id (a best-effort name lookup
@@ -9,6 +17,9 @@
   function renderDlcSubpage(body, game, onBack) {
     var GU = I18N.en.gu;
     body.textContent = "";
+    // The per-game "Delete all" lives here; hide the header's global clear
+    // button while in this subpage so the two don't compete.
+    guShowClearBtn(false);
     var back = document.createElement("div");
     back.className = "lumen-back";
     back.innerHTML = "\u2190 ";
@@ -69,7 +80,7 @@
         var badges = [];
         if (v.pinned) badges.push({ cls: "lock", text: GU.pinned });
         if (v.installed) badges.push({ cls: "cur", text: GU.current });
-        if (v.fromLuaTools) badges.push({ cls: "lt", text: GU.fromLua });
+        if (v.fromLuaTools) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
         var row = verRow({
           label: fmtDate(v.date), gid: v.gid, selected: v.pinned, badges: badges,
           onClick: function () {
@@ -92,8 +103,9 @@
         rows.push(row);
         vers.appendChild(row);
         // Trash: drop this archived version's manifest (frees space). Not offered
-        // for installed/pinned versions — those are still needed on disk.
-        if (!v.installed && !v.pinned) {
+        // for installed/pinned versions, nor the LuaTools build (removed only via
+        // the LuaTools menu) — those are still needed on disk.
+        if (!v.installed && !v.pinned && !(v.fromLuaTools && !game.fromLuaFile)) {
           var del = document.createElement("span");
           del.className = "lumen-del";
           del.textContent = "\uD83D\uDDD1";
@@ -109,6 +121,36 @@
       });
       body.appendChild(vers);
     });
+
+    // Per-game "Delete all", at the bottom of the subpage. Load-.lua game ->
+    // full removal (game disappears); LuaTools game -> delete extra stored
+    // versions, keep the LuaTools build and warn that full removal happens from
+    // the LuaTools menu.
+    var actions = document.createElement("div");
+    actions.className = "lumen-gu-actions lumen-del-all-row";
+    var delAll = document.createElement("button");
+    delAll.className = "lumen-mbtn lumen-del-all";
+    delAll.textContent = GU.deleteAll;
+    delAll.title = GU.deleteAllHint;
+    delAll.addEventListener("click", function () {
+      var isLua = !!game.fromLuaFile;
+      showConfirm({
+        title: isLua ? GU.delAllLuaTitle : GU.delAllLtTitle,
+        body: isLua ? GU.delAllLuaBody : GU.delAllLtBody,
+        confirmText: GU.deleteConfirm, declineText: GU.deleteCancel,
+        onConfirm: function () {
+          call("DeleteAll", { json: JSON.stringify({ appid: game.appid }) })
+            .then(function (res) {
+              var r = JSON.parse(res);
+              if (!r || !r.success) throw new Error((r && r.error) || GU.delFail);
+              onBack();  // back to the list (the game may be gone now)
+            })
+            .catch(function (e) { log("DeleteAll", e); alert((e && e.message) || GU.delFail); });
+        },
+      });
+    });
+    actions.appendChild(delAll);
+    body.appendChild(actions);
   }
 
   // One game card: capsule + name + a subtle "Advanced" link. The build
@@ -205,7 +247,7 @@
     builds.forEach(function (b, idx) {
       var badges = [];
       if (b.installed) badges.push({ cls: "cur", text: GU.current });
-      if (b.fromLua) badges.push({ cls: "lt", text: GU.fromLua });
+      if (b.fromLua) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
       var row = verRow({
         label: fmtDate(b.date), selected: game.locked && b.pinned, badges: badges,
         onClick: function () {
@@ -228,6 +270,22 @@
       rows.push(row);
       if (idx >= DEFAULT_SHOWN) { row.style.display = "none"; extra.push(row); }
       vers.appendChild(row);
+      // Per-build trash (hover, far right): delete this build's stored manifests
+      // across every depot of that day. Hidden for installed/pinned builds and
+      // the LuaTools build (those are kept / removed via the LuaTools menu).
+      if (!b.installed && !b.pinned && !(b.fromLua && !game.fromLuaFile)) {
+        var bdel = document.createElement("span");
+        bdel.className = "lumen-del";
+        bdel.textContent = "\uD83D\uDDD1";
+        bdel.title = GU.delBuildTitle;
+        bdel.addEventListener("click", function (e) {
+          e.stopPropagation();
+          call("DeleteBuild", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
+            .then(function () { reloadGameUpdates(vers.__bodyRef); })
+            .catch(function (er) { log("DeleteBuild", er); });
+        });
+        row.appendChild(bdel);
+      }
     });
     if (extra.length > 0) {
       var more = document.createElement("div");
@@ -366,7 +424,17 @@
     addFromSources(appid, prog)
       .then(function (fromSource) {
         prog.close();
-        reloadGameUpdates(body);
+        // A from-source add (StartAddViaLuaToolsSmart) doesn't go through
+        // ImportLuaFull, so mark it here as added via "Load .lua" (the no-source
+        // path is auto-marked by ImportLuaFull). Sequence the reload after the
+        // mark persists so the build badge picks up "from .lua" on first render.
+        if (fromSource) {
+          call("MarkLuaImport", { appid: appid })
+            .catch(function (e) { log("MarkLuaImport", e); })
+            .then(function () { reloadGameUpdates(body); });
+        } else {
+          reloadGameUpdates(body);
+        }
         // applyPin writes the .lua's build pin (and, on the no-source fallback,
         // also adds the game). Same gating as a manual pin: it runs ONLY if the
         // user follows through the uninstall/restart the pin needs to take
@@ -446,6 +514,8 @@
 
   function renderGameUpdates(body) {
     var GU = I18N.en.gu;
+    // Returning to the list (or first render): the global clear button applies.
+    guShowClearBtn(true);
     body.textContent = "";
     var note = document.createElement("div");
     note.className = "lumen-note";

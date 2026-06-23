@@ -36,8 +36,8 @@
       ".lumen-ctop{display:flex;align-items:center;padding:24px 24px 14px;}",
       ".lumen-ctop .h{flex:1;color:#fff;font-size:22px;font-weight:700;}",
       ".lumen-exp{display:inline-block;vertical-align:middle;margin-left:10px;font-size:10px;",
-      "font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#ffb84d;",
-      "background:#3a2f1a;padding:2px 8px;border-radius:10px;}",
+      "font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#c89bf2;",
+      "background:#2c2440;padding:2px 8px;border-radius:10px;}",
       ".lumen-info{display:inline-flex;vertical-align:middle;margin-left:6px;width:16px;height:16px;",
       "align-items:center;justify-content:center;font-size:11px;font-weight:700;font-style:italic;",
       "cursor:pointer;color:#8f98a0;border:1px solid #4a5663;border-radius:50%;}",
@@ -171,6 +171,9 @@
       ".lumen-mbtn:hover{color:#fff;background:rgba(255,255,255,.08);}",
       ".lumen-mbtn.primary{background:#1a9fff;border-color:#1a9fff;color:#fff;}",
       ".lumen-mbtn.primary:hover{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-del-all{border-color:rgba(236,92,92,.4);color:#e88a8a;}",
+      ".lumen-del-all:hover{background:rgba(236,92,92,.15);border-color:#ec5c5c;color:#fff;}",
+      ".lumen-del-all-row{margin-top:16px;justify-content:center;}",
     ].join("");
     (document.head || document.documentElement).appendChild(s);
   }

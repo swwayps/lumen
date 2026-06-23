@@ -734,6 +734,159 @@ do
   os.execute("rm -rf '" .. root .. "'")
 end
 
+-- ── 17. Load-.lua source marker (fromLuaFile) ─────────────────────────────
+-- A game added through the menu's "Load .lua" button is recorded in an imports
+-- marker file so its build badge reads "from .lua" instead of "from LuaTools".
+-- parse_imports is the pure reader; import_lua_full_rpc auto-marks; build_games
+-- surfaces game.fromLuaFile; MarkLuaImport is the explicit RPC (from-source path).
+do
+  -- parse_imports: one appid per line, ignores blanks/garbage.
+  local set = mp.parse_imports("700\n\n  701  \nnotanid\n700\n")
+  check(set[700] == true and set[701] == true, "imports: parses appid lines")
+  check(set["notanid"] == nil, "imports: ignores non-numeric lines")
+
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local function write_manifest(dir, depot, gid, ct)
+    local pb = "\x18" .. varint(ct)
+    local block = "\xBE\x12\x48\x1F" .. string.pack("<I4", #pb) .. pb
+    local f = assert(io.open(dir .. "/" .. depot .. "_" .. gid .. ".manifest", "wb"))
+    f:write(string.rep("\0", 64) .. block); f:close()
+  end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local stplug = root .. "/stplug-in"; local mans = root .. "/manifests"
+  mkdir(stplug); mkdir(mans); mkdir(root .. "/steamapps")
+  local cfg = root .. "/config.yaml"
+  local imports = root .. "/lumen_lua_imports.txt"
+  local cf = assert(io.open(cfg, "wb")); cf:write("AdditionalApps:\n  - 1\nLogLevel: 2\n"); cf:close()
+  local ctx = { config_path = cfg, stplug_dir = stplug, manifests_dir = mans,
+                steam_root = root, imports_path = imports }
+
+  -- An imported game (via import_lua_full_rpc) gets marked; a DB-added game
+  -- (written straight to stplug-in) does not.
+  local imported_lua = 'addappid(900)\naddappid(901,0,"k")\nsetManifestid(901,"111")\n'
+  local res = json.decode(mp.import_lua_full_rpc(ctx, json.encode({ lua = imported_lua })))
+  eq(res.success, true, "imports: import_lua_full succeeds")
+  write_manifest(mans, 901, "111", 1700000000)
+
+  -- a DB-added game: just drop its .lua + manifest, never imported.
+  local dbf = assert(io.open(stplug .. "/800.lua", "wb"))
+  dbf:write('addappid(800)\naddappid(802,0,"k")\nsetManifestid(802,"222")\n'); dbf:close()
+  write_manifest(mans, 802, "222", 1700000000)
+
+  local imp_set = mp.parse_imports(io.open(imports, "rb"):read("*a"))
+  check(imp_set[900] == true, "imports: import_lua_full marked appid 900")
+  check(imp_set[800] == nil, "imports: DB-added appid 800 not marked")
+
+  local games = mp.build_games(ctx)
+  local g900, g800
+  for _, g in ipairs(games) do
+    if g.appid == 900 then g900 = g elseif g.appid == 800 then g800 = g end
+  end
+  check(g900 and g900.fromLuaFile == true, "build: imported game has fromLuaFile=true")
+  check(g800 and g800.fromLuaFile == false, "build: DB-added game has fromLuaFile=false")
+
+  -- MarkLuaImport RPC marks a from-source add (no ImportLuaFull involved).
+  local mres = json.decode(mp.mark_lua_import_rpc(ctx, json.encode({ appid = 800 })))
+  eq(mres.success, true, "imports: MarkLuaImport succeeds")
+  local imp_set2 = mp.parse_imports(io.open(imports, "rb"):read("*a"))
+  check(imp_set2[800] == true, "imports: MarkLuaImport marked appid 800")
+  -- idempotent: marking again doesn't duplicate / error.
+  eq(json.decode(mp.mark_lua_import_rpc(ctx, json.encode({ appid = 800 }))).success, true,
+     "imports: MarkLuaImport is idempotent")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
+-- ── 18. remove_additional_app (pure inverse of add_additional_app) ─────────
+do
+  local base = "AdditionalApps:\n  - 555\n  - 700\nLogLevel: 2\n"
+  local out, st = mp.remove_additional_app(base, 555)
+  eq(st, "removed", "remove_app: status removed")
+  check(not out:find("%- 555"), "remove_app: 555 gone")
+  check(out:find("%- 700") ~= nil, "remove_app: 700 kept")
+  check(out:find("LogLevel: 2") ~= nil, "remove_app: other keys kept")
+
+  local _, st2 = mp.remove_additional_app(base, 999)
+  eq(st2, "not_present", "remove_app: absent appid -> not_present")
+
+  local _, st3 = mp.remove_additional_app("AdditionalApps: [1, 2]\n", 1)
+  eq(st3, "inline_refused", "remove_app: inline list refused")
+end
+
+-- ── 19. DeleteBuild / DeleteAll / clear keeps LuaTools build ───────────────
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local function exists(p) local h = io.open(p, "rb"); if h then h:close(); return true end return false end
+  local function write_manifest(dir, depot, gid, ct)
+    local pb = "\x18" .. varint(ct)
+    local block = "\xBE\x12\x48\x1F" .. string.pack("<I4", #pb) .. pb
+    local f = assert(io.open(dir .. "/" .. depot .. "_" .. gid .. ".manifest", "wb"))
+    f:write(string.rep("\0", 64) .. block); f:close()
+  end
+  local D1 = 1000000  -- day 1 (UTC midnight-aligned-ish; exact value irrelevant)
+  local D2 = 1000000 + 86400 * 3
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local stplug = root .. "/stplug-in"; local mans = root .. "/manifests"
+  mkdir(stplug); mkdir(mans); mkdir(root .. "/steamapps")
+  local cfg = root .. "/config.yaml"
+  local imports = root .. "/lumen_lua_imports.txt"
+  local ctx = { config_path = cfg, stplug_dir = stplug, manifests_dir = mans,
+                steam_root = root, imports_path = imports }
+
+  -- A LuaTools game (NOT load-.lua): depot 902 pins gid "100" via setManifestid.
+  local lt = assert(io.open(stplug .. "/900.lua", "wb"))
+  lt:write('addappid(900)\naddappid(902,0,"k")\nsetManifestid(902,"100")\n'); lt:close()
+  write_manifest(mans, 902, "100", D1)   -- the LuaTools build (kept)
+  write_manifest(mans, 902, "200", D2)   -- a later staged build (deletable)
+  local cf = assert(io.open(cfg, "wb")); cf:write("AdditionalApps:\n  - 900\nLogLevel: 2\n"); cf:close()
+
+  -- DeleteBuild on the LuaTools build's day is a no-op (it's protected).
+  local r1 = json.decode(mp.delete_build_rpc(ctx, json.encode({ appid = 900, date = D1 })))
+  eq(r1.removed, 0, "delbuild: LuaTools build is protected (0 removed)")
+  check(exists(mans .. "/902_100.manifest"), "delbuild: LuaTools manifest still on disk")
+
+  -- DeleteBuild on the later day removes that build.
+  local r2 = json.decode(mp.delete_build_rpc(ctx, json.encode({ appid = 900, date = D2 })))
+  eq(r2.removed, 1, "delbuild: later build removed")
+  check(not exists(mans .. "/902_200.manifest"), "delbuild: later manifest gone")
+
+  -- DeleteAll on a LuaTools game keeps the LuaTools build, deletes the rest.
+  write_manifest(mans, 902, "300", D2)   -- re-add a spare
+  local r3 = json.decode(mp.delete_all_rpc(ctx, json.encode({ appid = 900 })))
+  eq(r3.fullRemoval, false, "delall(lt): not a full removal")
+  eq(r3.kept, 1, "delall(lt): the LuaTools build is kept")
+  check(exists(mans .. "/902_100.manifest"), "delall(lt): LuaTools manifest kept")
+  check(not exists(mans .. "/902_300.manifest"), "delall(lt): spare removed")
+  check(exists(stplug .. "/900.lua"), "delall(lt): .lua kept (game stays)")
+
+  -- A Load-.lua game: full removal nukes manifests + .lua + AdditionalApps + marker.
+  local lf = assert(io.open(stplug .. "/950.lua", "wb"))
+  lf:write('addappid(950)\naddappid(951,0,"k")\nsetManifestid(951,"500")\n'); lf:close()
+  write_manifest(mans, 951, "500", D1)
+  write_manifest(mans, 951, "600", D2)
+  local cf2 = assert(io.open(cfg, "wb")); cf2:write("AdditionalApps:\n  - 900\n  - 950\nLogLevel: 2\n"); cf2:close()
+  local imf = assert(io.open(imports, "wb")); imf:write("950\n"); imf:close()
+
+  local r4 = json.decode(mp.delete_all_rpc(ctx, json.encode({ appid = 950 })))
+  eq(r4.fullRemoval, true, "delall(lua): full removal")
+  eq(r4.removed, 2, "delall(lua): both manifests removed")
+  check(not exists(mans .. "/951_500.manifest"), "delall(lua): setManifestid manifest also removed")
+  check(not exists(stplug .. "/950.lua"), "delall(lua): .lua deleted")
+  local cfg_after = io.open(cfg, "rb"):read("*a")
+  check(not cfg_after:find("%- 950"), "delall(lua): dropped from AdditionalApps")
+  check(cfg_after:find("%- 900") ~= nil, "delall(lua): other app kept in AdditionalApps")
+  check(not mp.parse_imports(io.open(imports, "rb") and io.open(imports, "rb"):read("*a") or "")[950],
+        "delall(lua): import marker cleared")
+
+  -- clear_manifests keeps the LuaTools build (902_100 survived above; re-seed a spare).
+  write_manifest(mans, 902, "700", D2)
+  local removed = select(1, mp.clear_manifests(ctx))
+  check(removed >= 1, "clear: removed at least the spare")
+  check(exists(mans .. "/902_100.manifest"), "clear: LuaTools build kept")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
 if fails == 0 then print("\ntest_manifestpins: ALL PASS") else
   print("\ntest_manifestpins: " .. fails .. " FAILED"); os.exit(1)
 end

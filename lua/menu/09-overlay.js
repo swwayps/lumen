@@ -96,6 +96,7 @@
     clearBtn.textContent = I18N.en.gu.clearManifests;
     clearBtn.title = I18N.en.gu.clearHint;
     clearBtn.style.display = "none";
+    _guClearBtnRef = clearBtn;
     var carmed = false, carmTimer = null;
     var cdisarm = function () {
       carmed = false;
