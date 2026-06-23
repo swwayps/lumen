@@ -110,7 +110,7 @@ do
   local api_body = function(url)
     -- Every repo returns v2.6 with a matching asset uploaded at 06-21.
     local name = url:find("lumen", 1, true) and "lumen-linux.zip"
-      or url:find("ltsteamplugin", 1, true) and "luatools-linux.zip"
+      or url:find("luatools-moon", 1, true) and "luatools-linux.zip"
       or "slsteam-moon-linux-2.6-lumen.zip"
     return '{"tag_name":"v2.6","assets":[{"name":"' .. name ..
       '","created_at":"2026-06-21T03:15:25Z","size":100}]}'

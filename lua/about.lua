@@ -27,7 +27,7 @@ local about = {}
 about.COMPONENTS = {
   { key = "slsteam_moon", name = "slsteam-moon",    repo = "unplausible/slsteam-moon",
     asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$" },
-  { key = "plugin",       name = "LuaTools plugin", repo = "unplausible/slsteammoon-ltsteamplugin",
+  { key = "plugin",       name = "LuaTools plugin", repo = "unplausible/luatools-moon",
     asset_pat = "^luatools%-linux%.zip$" },
   { key = "lumen",        name = "Lumen",           repo = "unplausible/lumen",
     asset_pat = "^lumen%-linux%.zip$" },
@@ -36,7 +36,7 @@ about.COMPONENTS = {
 -- The public one-liner the Update All button runs in a terminal. Raw-branch URL
 -- (not a release asset) so installer fixes go live without a rebuild.
 about.INSTALL_URL =
-  "https://codeberg.org/unplausible/slsteammoon-ltsteamplugin/raw/branch/main/install.sh"
+  "https://codeberg.org/unplausible/luatools-moon/raw/branch/main/install.sh"
 
 -- Where the installer stamps the installed release tags.
 function about.versions_path()
