@@ -185,7 +185,7 @@
   // properties. The validate is relayed into SharedJSContext (SteamClient),
   // see injector State:validate_app.
   function showValidatePrompt(appid) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     injectStyles();
     var back = document.createElement("div");
     back.className = "lumen-modal-back";
@@ -320,7 +320,7 @@
   }
 
   function showUninstallPrompt(appid, applyPin) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     injectStyles();
     var back = document.createElement("div");
     back.className = "lumen-modal-back";
@@ -404,7 +404,7 @@
   // it stays unambiguous.
   function depotLabel(d) {
     if (d.name) return d.name + " (" + d.depot + ")";
-    if (d.shared) return I18N.en.gu.sharedRuntime + " (" + d.depot + ")";
-    return I18N.en.gu.depot + " " + d.depot;
+    if (d.shared) return guStrings().sharedRuntime + " (" + d.depot + ")";
+    return guStrings().depot + " " + d.depot;
   }
 

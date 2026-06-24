@@ -37,7 +37,7 @@
       return t;
     }
     var tabSls = mkTab("slsteam-moon", MOON_SVG);
-    var tabGu = mkTab(I18N.en.gu.tab, GU_SVG);
+    var tabGu = mkTab(guStrings().tab, GU_SVG);
     var tabAbout = mkTab(((I18N[pickLang()] || I18N.en).about || I18N.en.about).tab, ABOUT_SVG);
 
     // content
@@ -93,8 +93,8 @@
     // archived manifests EXCEPT installed/pinned ones; two-click confirm.
     var clearBtn = document.createElement("div");
     clearBtn.className = "reset";
-    clearBtn.textContent = I18N.en.gu.clearManifests;
-    clearBtn.title = I18N.en.gu.clearHint;
+    clearBtn.textContent = guStrings().clearManifests;
+    clearBtn.title = guStrings().clearHint;
     clearBtn.style.display = "none";
     _guClearBtnRef = clearBtn;
     var carmed = false, carmTimer = null;
@@ -102,13 +102,13 @@
       carmed = false;
       if (carmTimer) { clearTimeout(carmTimer); carmTimer = null; }
       clearBtn.classList.remove("confirm");
-      clearBtn.textContent = I18N.en.gu.clearManifests;
+      clearBtn.textContent = guStrings().clearManifests;
     };
     clearBtn.addEventListener("click", function () {
       if (!carmed) {
         carmed = true;
         clearBtn.classList.add("confirm");
-        clearBtn.textContent = I18N.en.gu.clearConfirm;
+        clearBtn.textContent = guStrings().clearConfirm;
         carmTimer = setTimeout(cdisarm, 3000);
         return;
       }
@@ -122,7 +122,7 @@
         .catch(function (e) {
           var er = document.createElement("div");
           er.className = "lumen-err";
-          er.textContent = I18N.en.gu.clearFail + (e && e.message ? e.message : e);
+          er.textContent = guStrings().clearFail + (e && e.message ? e.message : e);
           body.appendChild(er);
         });
     });
@@ -167,16 +167,16 @@
       if (which === "gu") {
         h.textContent = "";
         var gt = document.createElement("span");
-        gt.textContent = I18N.en.gu.title;
+        gt.textContent = guStrings().title;
         h.appendChild(gt);
         var exp = document.createElement("span");
         exp.className = "lumen-exp";
-        exp.textContent = I18N.en.gu.experimental;
+        exp.textContent = guStrings().experimental;
         h.appendChild(exp);
         var info = document.createElement("span");
         info.className = "lumen-info";
         info.textContent = "i";
-        info.title = I18N.en.gu.experimentalHint;
+        info.title = guStrings().experimentalHint;
         h.appendChild(info);
         resetBtn.style.display = "none";
         clearBtn.style.display = "";

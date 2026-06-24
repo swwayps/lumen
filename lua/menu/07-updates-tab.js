@@ -15,7 +15,7 @@
   // from on-disk data, so depots are labelled by id (a best-effort name lookup
   // could be added later). master-detail: a back arrow returns to the list.
   function renderDlcSubpage(body, game, onBack) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     body.textContent = "";
     // The per-game "Delete all" lives here; hide the header's global clear
     // button while in this subpage so the two don't compete.
@@ -158,7 +158,7 @@
   // picking a version is the obvious action and "Advanced" (per-depot
   // overrides) stays low-key.
   function gameCard(game) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     var wrap = document.createElement("div");
     wrap.className = "lumen-game";
 
@@ -326,7 +326,7 @@
   //     uploaded .lua's pin); fall back to ImportLuaFull (the uploaded, possibly
   //     base-only .lua) when no source has the app.
   function importLuaFromFile(file, body) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     var reader = new FileReader();
     reader.onload = function () {
       var text = String(reader.result);
@@ -360,7 +360,7 @@
         })
         .catch(function (e) { log("InspectLua", e); alert((e && e.message) || GU.importFail); });
     };
-    reader.onerror = function () { alert(I18N.en.gu.importFail); };
+    reader.onerror = function () { alert(guStrings().importFail); };
     reader.readAsText(file);
   }
 
@@ -368,7 +368,7 @@
   // The source package (a .lua + manifests) is small, so this settles quickly;
   // a cap keeps a stuck backend from polling forever.
   function pollAddStatus(appid, prog) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     return new Promise(function (resolve) {
       var ticks = 0;
       var tick = function () {
@@ -398,7 +398,7 @@
   // and picks the most COMPLETE package, so a game whose first-available source
   // is missing DLC keys still gets them from a fuller one.
   function addFromSources(appid, prog) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     return call("CheckApisForApp", { appid: appid })
       .then(function (res) {
         var p = JSON.parse(res);
@@ -416,7 +416,7 @@
   // Add the game (preferring sources for complete keys) then apply the uploaded
   // .lua's pin. `info` is the InspectLua result.
   function runImport(info, text, body) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     var appid = info.appid;
     var hasPins = (info.pinned || 0) > 0;
     var prog = showProgress(GU.importLua);
@@ -491,7 +491,7 @@
   // Reads the file in-page (FileReader) and hands its text to importLuaFromFile;
   // no native file dialog or filesystem path is ever needed.
   function loadLuaButton(body) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     var wrap = document.createElement("div");
     wrap.className = "lumen-gu-actions";
     var btn = document.createElement("button");
@@ -513,7 +513,7 @@
   }
 
   function renderGameUpdates(body) {
-    var GU = I18N.en.gu;
+    var GU = guStrings();
     // Returning to the list (or first render): the global clear button applies.
     guShowClearBtn(true);
     body.textContent = "";
