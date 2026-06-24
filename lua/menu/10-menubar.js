@@ -4,41 +4,49 @@
 
 
   // ── menubar button ──────────────────────────────────────────────────────────
-  var MENU_LABELS = ["Steam", "View", "Friends", "Games", "Help"];
-
-  // Find the native menubar. Each label (View/Friends/Games/Help) is a leaf div
-  // wrapped in its own container, and all those wrappers share a common menubar
-  // row. So: collect the label leaves, then climb from one until we hit the
-  // lowest ancestor that contains >= 3 of them — that ancestor is the menubar.
-  // Selector-free (class names are hashed and churn across Steam updates), tuned
-  // against the live DOM on the test VM. Returns { bar, helpItem } or null.
+  // Find the native menubar WITHOUT reading the localized labels. The old code
+  // matched the English words View/Friends/Games/Help, so the button never
+  // anchored on a non-English client (e.g. pt-BR: Exibir/Amigos/Jogos/Ajuda) —
+  // findMenubar() returned null and no moon button appeared. Steam ships in ~30
+  // UI languages, so hard-coding label sets per language doesn't scale.
+  //
+  // The menubar (captured live via CDP) is a compact row whose direct children
+  // are the menu items, e.g.:
+  //   <div .menubar>
+  //     <div .item> <logo/> "Steam" </div>   <- item 0: logo + bare text node
+  //     <div .item> <div>Exibir</div> </div>
+  //     <div .item> <div>Amigos</div> </div>  ...
+  // The FIRST item's text is "Steam" in every locale (it's the brand, not a
+  // translated word), but it's NOT a leaf (it holds the logo + a bare text
+  // node), so anchoring on a "Steam" leaf finds nothing. Instead scan for the
+  // row itself: a small container (<= 12 children) whose direct children are
+  // >= 4 short-text items, ONE of which reads exactly "Steam". Language
+  // independent and selector-free (class names are hashed and churn).
+  // Returns { bar, helpItem } or null.
   function findMenubar() {
+    // A menu entry is a short, single-line element (its text is the label).
+    function isItem(node) {
+      var t = (node.textContent || "").trim();
+      return t.length > 0 && t.length <= 24 && t.indexOf("\n") === -1;
+    }
+
     var nodes = document.querySelectorAll("div,span,button,a");
-    var leaves = [];
     for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      if (el.children && el.children.length !== 0) continue; // leaf only
-      var txt = (el.textContent || "").trim();
-      if (MENU_LABELS.indexOf(txt) === -1) continue;
-      leaves.push({ txt: txt, el: el });
+      var bar = nodes[i];
+      var kids = bar.children;
+      if (!kids || kids.length < 4 || kids.length > 12) continue;
+      var items = 0, hasSteam = false;
+      for (var j = 0; j < kids.length; j++) {
+        if (!isItem(kids[j])) continue;
+        items++;
+        if ((kids[j].textContent || "").trim() === "Steam") hasSteam = true;
+      }
+      // Steam menubar = the brand item + the localized View/Friends/Games/Help.
+      if (hasSteam && items >= 4) {
+        return { bar: bar, helpItem: bar.lastElementChild };
+      }
     }
-    if (leaves.length < 3) return null;
-
-    function countIn(node) {
-      var c = 0;
-      for (var j = 0; j < leaves.length; j++) if (node.contains(leaves[j].el)) c++;
-      return c;
-    }
-    var bar = null, n = leaves[0].el.parentElement;
-    while (n) {
-      if (countIn(n) >= 3) { bar = n; break; }
-      n = n.parentElement;
-    }
-    if (!bar) return null;
-
-    var helpItem = null;
-    for (var k = 0; k < leaves.length; k++) if (leaves[k].txt === "Help") helpItem = leaves[k].el;
-    return { bar: bar, helpItem: helpItem };
+    return null;
   }
 
   function makeButton() {
@@ -56,8 +64,8 @@
     return b;
   }
 
-  // Insert the button into the menubar, after the wrapper that holds "Help"
-  // (so it sits at the end of the menu row), else appended. Idempotent.
+  // Insert the button after the menubar's last item (Help in every locale, so
+  // it sits at the end of the menu row), else appended. Idempotent.
   function ensureButton(found) {
     if (document.getElementById(BTN_ID)) return true;
     injectStyles();
@@ -84,9 +92,14 @@
     try { observer.observe(bar, { childList: true }); } catch (e) {}
   }
 
-  // Anchor with a few bounded retries (the menubar may not exist at first paint);
-  // no infinite polling — give up gracefully if never found.
+  // Anchor with retries. The menubar may not exist at first paint, and on a
+  // COLD Steam start it can take well over 30s to render/stabilize — the menu
+  // script is injected early. We retry fast for the first ~30s, then slower for
+  // a few minutes, until the menubar appears. (The old code gave up after ~30s
+  // and the re-add observer only starts AFTER a successful find, so a late
+  // menubar left the button missing — the "button gone after restart" bug.)
   var attempts = 0;
+  var MAX_ATTEMPTS = 150; // ~30s fast + ~4min slow; the shell always shows one
   function tryAnchor() {
     window.__lumenAnchorAttempts = (window.__lumenAnchorAttempts || 0) + 1;
     if (document.getElementById(BTN_ID)) return;
@@ -99,8 +112,8 @@
       return;
     }
     attempts++;
-    if (attempts <= 30) setTimeout(tryAnchor, 1000); // up to ~30s after load
-    else log("menubar not found; giving up (graceful)");
+    if (attempts <= MAX_ATTEMPTS) setTimeout(tryAnchor, attempts <= 30 ? 1000 : 2000);
+    else log("menubar not found after extended wait; giving up (graceful)");
   }
 
   // Only anchor the menubar button in the main client shell. This script is
