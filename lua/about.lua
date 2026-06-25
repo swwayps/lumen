@@ -21,22 +21,22 @@ local json = require("json")
 local about = {}
 
 -- The three stack components, in display order. `key` matches the versions.json
--- field the installer writes; `repo` is the Codeberg owner/name for the API;
+-- field the installer writes; `repo` is the GitHub owner/name for the API;
 -- `asset_pat` is a Lua pattern matching the release asset filename (so we can
 -- read THAT asset's fingerprint, not just the tag).
 about.COMPONENTS = {
-  { key = "slsteam_moon", name = "slsteam-moon",    repo = "unplausible/slsteam-moon",
+  { key = "slsteam_moon", name = "slsteam-moon",    repo = "luatools-linux/slsteam-moon",
     asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$" },
-  { key = "plugin",       name = "LuaTools plugin", repo = "unplausible/luatools-moon",
+  { key = "plugin",       name = "LuaTools plugin", repo = "luatools-linux/luatools-moon",
     asset_pat = "^luatools%-linux%.zip$" },
-  { key = "lumen",        name = "Lumen",           repo = "unplausible/lumen",
+  { key = "lumen",        name = "Lumen",           repo = "luatools-linux/lumen",
     asset_pat = "^lumen%-linux%.zip$" },
 }
 
 -- The public one-liner the Update All button runs in a terminal. Raw-branch URL
 -- (not a release asset) so installer fixes go live without a rebuild.
 about.INSTALL_URL =
-  "https://codeberg.org/unplausible/luatools-moon/raw/branch/main/install.sh"
+  "https://raw.githubusercontent.com/luatools-linux/luatools-moon/main/install.sh"
 
 -- Where the installer stamps the installed release tags.
 function about.versions_path()
@@ -124,7 +124,7 @@ end
 
 -- API URL for a repo's latest published (non-draft, non-prerelease) release.
 function about.api_url(repo)
-  return "https://codeberg.org/api/v1/repos/" .. repo .. "/releases/latest"
+  return "https://api.github.com/repos/" .. repo .. "/releases/latest"
 end
 
 -- parse_latest_info(body, asset_pat) -> { tag, asset_at, size } or nil. Pure
