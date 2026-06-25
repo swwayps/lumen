@@ -62,6 +62,16 @@ do
   assert_eq(v.LogLevel,     2,     "LogLevel read")
 end
 
+-- ── deprecated keys are still parsed but flagged hidden (not rendered) ──────
+do
+  local entry
+  for _, e in ipairs(slsconfig.SCHEMA) do
+    if e.key == "SafeMode" then entry = e end
+  end
+  assert_true(entry ~= nil, "SafeMode kept in SCHEMA (still parsed/reset)")
+  assert_eq(entry.hidden, true, "SafeMode flagged hidden (no-op toggle not shown)")
+end
+
 -- ── DisableCloud default is CloudRedirect-aware ────────────────────────────
 do
   -- has_cloudredirect(): probes ~/.local/share/CloudRedirect/cloud_redirect.so

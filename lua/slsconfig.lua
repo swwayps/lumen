@@ -20,6 +20,11 @@ local write_seq = 0
 
 -- SCHEMA drives both parsing (defaults + types) and the frontend rendering.
 -- type: "bool" | "int" | "string" | "enum". Defaults mirror config.cpp.
+-- hidden = true: still parsed/reset (so the key stays understood and a reset
+-- normalises it), but NOT rendered as a toggle. Used for deprecated keys like
+-- SafeMode, which slsteam-moon force-disables in code (a fresh client hash no
+-- longer disables it; the Steam wrapper crash-loop fail-safe covers that now),
+-- so exposing a switch that does nothing would only confuse.
 slsconfig.SCHEMA = {
   { key = "PlayNotOwnedGames",      type = "bool",   default = false, level = "info",
     label = "Play not-owned games" },
@@ -30,6 +35,7 @@ slsconfig.SCHEMA = {
   { key = "UseWhitelist",           type = "bool",   default = false, level = "danger",
     label = "Use whitelist (instead of blacklist)" },
   { key = "SafeMode",               type = "bool",   default = false, level = "advanced",
+    hidden = true,
     label = "Safe mode (disable on unknown steamclient)" },
   { key = "Notifications",          type = "bool",   default = true,  level = "normal",
     label = "Notifications (notify-send)" },

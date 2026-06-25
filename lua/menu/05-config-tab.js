@@ -79,6 +79,7 @@
     body.appendChild(note);
 
     (config.schema || []).forEach(function (entry) {
+      if (entry.hidden) return; // deprecated/no-op keys are parsed but not shown
       var current = (config.values || {})[entry.key];
       if (current === undefined) current = entry.default;
       var row = makeRow(entry, current, S, function (newVal) {
