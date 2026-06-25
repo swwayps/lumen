@@ -9,7 +9,7 @@
 -- Versions are sourced from the RELEASES, not local files: the plugin's bundled
 -- version string is unreliable, so the canonical "installed" marker is the
 -- release tag the installer stamps into versions.json at install time, compared
--- against each repo's latest published release tag (Codeberg Forgejo API). When
+-- against each repo's latest published release tag (GitHub releases API). When
 -- the stamp is absent (installs predating it) "installed" reads as unknown and
 -- the tab still shows the latest + offers Update All.
 --
