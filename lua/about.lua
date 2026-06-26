@@ -170,22 +170,27 @@ end
 function about.get_versions(opts)
   opts = opts or {}
   local http_mod = opts.http or require("http")
+  -- include_plugin defaults to true; a --noplugin install passes false so the
+  -- LuaTools plugin row is dropped from the About tab's version list.
+  local include_plugin = opts.include_plugin ~= false
   local installed = about.read_installed(
     opts.versions_path or about.versions_path(), opts.read_file)
 
   local out = {}
   for _, c in ipairs(about.COMPONENTS) do
-    local inst = about.installed_entry(installed, c.key)
-    local latest = about.fetch_latest_info(c, http_mod)
-    out[#out + 1] = {
-      key = c.key,
-      name = c.name,
-      installed = inst.tag or "",
-      latest = (latest and latest.tag) or "",
-      installedBuild = about.fmt_date(inst.asset_at),
-      latestBuild = about.fmt_date(latest and latest.asset_at),
-      state = about.compare_state(inst, latest),
-    }
+    if include_plugin or c.key ~= "plugin" then
+      local inst = about.installed_entry(installed, c.key)
+      local latest = about.fetch_latest_info(c, http_mod)
+      out[#out + 1] = {
+        key = c.key,
+        name = c.name,
+        installed = inst.tag or "",
+        latest = (latest and latest.tag) or "",
+        installedBuild = about.fmt_date(inst.asset_at),
+        latestBuild = about.fmt_date(latest and latest.asset_at),
+        state = about.compare_state(inst, latest),
+      }
+    end
   end
   return { success = true, components = out }
 end
@@ -238,14 +243,20 @@ end
 
 -- The bash script the terminal runs: the installer one-liner, then a pause so
 -- the window stays open for the user to read the result. No user-controlled
--- input is interpolated (the URL is a constant), so this is injection-safe.
-function about.update_script(install_url)
+-- input is interpolated (the URL is a constant, and `flag` is one of our own
+-- fixed option strings), so this is injection-safe. `flag` (e.g. "--noplugin")
+-- is appended after `bash -s --` so an update keeps the same install mode.
+function about.update_script(install_url, flag)
+  local run = "curl -fsSL " .. shq(install_url) .. " | bash"
+  if flag and flag ~= "" then
+    run = run .. " -s -- " .. flag
+  end
   return table.concat({
     "#!/usr/bin/env bash",
     "set -u",
     'echo "Updating slsteam-moon / Lumen / LuaTools…"',
     "echo",
-    "curl -fsSL " .. shq(install_url) .. " | bash",
+    run,
     "status=$?",
     "echo",
     'if [ "$status" -eq 0 ]; then',
@@ -271,6 +282,7 @@ end
 --   write_file : write the temp script (defaults to io)
 --   spawn      : run the detached command (defaults to os.execute)
 --   tmp_path   : override the temp script path
+--   flag       : extra installer flag to forward (e.g. "--noplugin")
 function about.update_all(opts)
   opts = opts or {}
   local which = opts.which or function(bin)
@@ -296,7 +308,7 @@ function about.update_all(opts)
   end
 
   local script = opts.tmp_path or ("/tmp/lumen-update-" .. tostring(os.time()) .. ".sh")
-  if not write_file(script, about.update_script(about.INSTALL_URL)) then
+  if not write_file(script, about.update_script(about.INSTALL_URL, opts.flag)) then
     return { success = false, error = "Could not write the update script." }
   end
 
@@ -305,11 +317,19 @@ function about.update_all(opts)
   return { success = true, terminal = term.bin }
 end
 
--- register(registry): install GetAboutVersions / UpdateAll, wrapping the
--- table-returning core in JSON encoding (the dispatch contract).
-function about.register(registry)
-  registry.GetAboutVersions = function() return json.encode(about.get_versions()) end
-  registry.UpdateAll = function() return json.encode(about.update_all()) end
+-- register(registry[, opts]): install GetAboutVersions / UpdateAll, wrapping the
+-- table-returning core in JSON encoding (the dispatch contract). opts.no_plugin
+-- (a --noplugin install) drops the LuaTools plugin from the version list and
+-- forwards --noplugin to the Update All installer run.
+function about.register(registry, opts)
+  opts = opts or {}
+  local no_plugin = opts.no_plugin and true or false
+  registry.GetAboutVersions = function()
+    return json.encode(about.get_versions({ include_plugin = not no_plugin }))
+  end
+  registry.UpdateAll = function()
+    return json.encode(about.update_all({ flag = no_plugin and "--noplugin" or nil }))
+  end
   return registry
 end
 

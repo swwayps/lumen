@@ -1,19 +1,52 @@
 -- boot: load the LuaTools backend behind the shims, then run the injector loop.
-local backend = os.getenv("LUMEN_BACKEND_DIR")
-assert(backend and backend ~= "", "LUMEN_BACKEND_DIR not set")
-package.path = backend .. "/?.lua;" .. package.path
+--
+-- The LuaTools plugin backend is OPTIONAL. A `--noplugin` install ships only the
+-- runtime stack (slsteam-moon + Lumen) and Lumen's OWN settings menu (the full-
+-- moon button: slsteam-moon config, Game Updates / manifest pins, About), with
+-- no LuaTools frontend and no plugin backend on disk. So load the backend only
+-- when it's actually present; when it isn't, run in "settings-menu only" mode
+-- instead of aborting the whole sidecar (an unguarded dofile of a missing
+-- main.lua used to kill Lumen at boot, taking the menu down with it).
+local backend = os.getenv("LUMEN_BACKEND_DIR") or ""
+local have_plugin = false
+local lifecycle
 
--- Loading main.lua defines the global RPC functions (InitApis, etc.) and returns
--- a lifecycle table { on_load, on_unload, on_frontend_loaded }. Millennium called
--- on_load after requiring the plugin; we do the same so inject_webkit_files()
--- enqueues the frontend assets and the boot-time InitApis runs.
-local lifecycle = dofile(backend .. "/main.lua")
-if type(lifecycle) == "table" and type(lifecycle.on_load) == "function" then
+if backend ~= "" then
+  package.path = backend .. "/?.lua;" .. package.path
+  local main_lua = backend .. "/main.lua"
+  local probe = io.open(main_lua, "r")
+  if probe then
+    probe:close()
+    -- Loading main.lua defines the global RPC functions (InitApis, etc.) and
+    -- returns a lifecycle table { on_load, on_unload, on_frontend_loaded }.
+    local ok, result = pcall(dofile, main_lua)
+    if ok then
+      have_plugin = true
+      lifecycle = result
+    else
+      io.stderr:write("[lumen] plugin backend failed to load; settings-menu only: "
+        .. tostring(result) .. "\n")
+    end
+  end
+end
+
+if not have_plugin then
+  io.stderr:write("[lumen] no LuaTools plugin backend present; running settings-menu only\n")
+end
+
+-- Millennium called on_load after requiring the plugin; we do the same so
+-- inject_webkit_files() enqueues the frontend assets and the boot-time InitApis
+-- runs. Only meaningful when the plugin backend is present.
+if have_plugin and type(lifecycle) == "table" and type(lifecycle.on_load) == "function" then
   local ok, err = pcall(lifecycle.on_load)
   if not ok then io.stderr:write("[lumen] on_load error: " .. tostring(err) .. "\n") end
 end
 
--- Dispatch registry: the 35 endpoints the frontend calls via callServerMethod.
+-- Dispatch registry: the plugin endpoints the frontend calls via
+-- callServerMethod. Only populated when the plugin backend loaded; in no-plugin
+-- mode the registry holds just Lumen's native menu RPCs (registered below).
+local registry = {}
+if have_plugin then
 local ALLOWLIST = {
   "AddCustomApi","ApplyGameFix","ApplySettingsChanges","CancelAddViaLuaTools",
   "CancelApplyFix","CheckApisForApp","CheckForFixes","CheckForUpdatesNow",
@@ -30,7 +63,6 @@ local ALLOWLIST = {
   "DeleteManifest","ClearManifests",
 }
 
-local registry = {}
 local present = {}
 for _, name in ipairs(ALLOWLIST) do
   if type(_G[name]) == "function" then
@@ -45,6 +77,7 @@ for k, v in pairs(_G) do
     registry[k] = v
     io.stderr:write("[lumen] note: extra endpoint exposed (not in allowlist): " .. k .. "\n")
   end
+end
 end
 
 -- Frontend assets: the millennium shim queued relative paths (e.g.
@@ -83,9 +116,11 @@ require("slsmenu").register(registry)
 -- tree from on-disk data and read/write the ManifestPins map in config.yaml.
 require("manifestpins").register(registry)
 
--- The "About" tab: report installed-vs-latest versions of the three stack
--- components (from the release tags) and open a terminal for "Update All".
-require("about").register(registry)
+-- The "About" tab: report installed-vs-latest versions of the stack components
+-- (from the release tags) and open a terminal for "Update All". In no-plugin
+-- mode the plugin row is dropped and Update All re-runs the installer with
+-- --noplugin so an update never re-adds the plugin.
+require("about").register(registry, { no_plugin = not have_plugin })
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
@@ -112,7 +147,12 @@ local function read_menu_js()
     end
     parts[#parts + 1] = chunk
   end
-  return table.concat(parts, "\n")
+  -- Tell the menu whether the LuaTools plugin is present. The fragments read
+  -- window.__lumenNoPlugin to drop plugin-only UI (the About-tab plugin row and
+  -- the Game Updates source-import path) in a --noplugin install. Set as a
+  -- separate statement BEFORE the menu IIFE so it's in scope when the IIFE runs.
+  local prefix = "window.__lumenNoPlugin=" .. (have_plugin and "false" or "true") .. ";\n"
+  return prefix .. table.concat(parts, "\n")
 end
 
 -- build_menu_assets() -> assets for the main window ("Steam"): polyfill +

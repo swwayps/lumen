@@ -170,6 +170,45 @@ do
   local s = about.update_script(about.INSTALL_URL)
   check("script has installer url", s:find(about.INSTALL_URL, 1, true) ~= nil)
   check("script pauses", s:find("Press Enter", 1, true) ~= nil)
+  check("script no flag by default", s:find("%-s %-%- ") == nil)
+end
+
+-- ── --noplugin behaviour ──────────────────────────────────────────────────────
+do
+  -- get_versions with include_plugin=false drops the LuaTools plugin row.
+  local http = { get = function() return nil, "down" end }
+  local res = about.get_versions({ http = http, include_plugin = false,
+    read_file = reader_returning("{}") })
+  check("noplugin: gv drops plugin", #res.components == 2)
+  local by = {}
+  for _, c in ipairs(res.components) do by[c.key] = c end
+  check("noplugin: gv has no plugin key", by.plugin == nil)
+  check("noplugin: gv keeps sls + lumen", by.slsteam_moon ~= nil and by.lumen ~= nil)
+end
+do
+  -- include_plugin defaults true (standard install keeps all three).
+  local http = { get = function() return nil, "down" end }
+  local res = about.get_versions({ http = http, read_file = reader_returning("{}") })
+  check("default: gv keeps all three", #res.components == 3)
+end
+do
+  -- update_script forwards a flag after `bash -s --`.
+  local s = about.update_script(about.INSTALL_URL, "--noplugin")
+  check("flagged script runs bash -s -- --noplugin",
+    s:find("| bash %-s %-%- %-%-noplugin") ~= nil)
+end
+do
+  -- update_all forwards opts.flag into the written script.
+  local wrote
+  about.update_all({
+    which = function() return true end,
+    write_file = function(_, t) wrote = t; return true end,
+    spawn = function() return true end,
+    tmp_path = "/tmp/test-update-np.sh",
+    flag = "--noplugin",
+  })
+  check("update_all writes flagged install", wrote
+    and wrote:find("%-s %-%- %-%-noplugin") ~= nil)
 end
 
 -- ── update_all orchestration (injected effects) ──────────────────────────────

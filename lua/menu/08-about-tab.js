@@ -29,6 +29,11 @@
       { key: "plugin", name: "LuaTools plugin" },
       { key: "lumen", name: "Lumen" },
     ];
+    // A --noplugin install ships no LuaTools plugin, so drop its row (boot.lua
+    // sets window.__lumenNoPlugin, and GetAboutVersions omits it too).
+    if (window.__lumenNoPlugin) {
+      COMPS = COMPS.filter(function (c) { return c.key !== "plugin"; });
+    }
     var rowsByKey = {};
     COMPS.forEach(function (c) {
       var row = versionRow(c.name, S);

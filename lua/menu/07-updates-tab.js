@@ -399,6 +399,11 @@
   // is missing DLC keys still gets them from a fuller one.
   function addFromSources(appid, prog) {
     var GU = guStrings();
+    // No LuaTools plugin (--noplugin install): there are no plugin sources to
+    // query, so skip straight to the native .lua import (ImportLuaFull). This
+    // avoids calling the plugin-only CheckApisForApp/StartAddViaLuaToolsSmart
+    // RPCs that aren't registered in this mode.
+    if (window.__lumenNoPlugin) return Promise.resolve(false);
     return call("CheckApisForApp", { appid: appid })
       .then(function (res) {
         var p = JSON.parse(res);
