@@ -32,14 +32,19 @@ function slsmenu.get(path)
 end
 
 -- Coerce a frontend value to the Lua type the key expects, so a stray string
--- "true" or a float LogLevel writes correctly.
+-- "true" or a float LogLevel writes correctly. Numeric keys are clamped to the
+-- schema's [min, max] when present, so an out-of-range value (e.g. a wallet
+-- balance past int32) can never reach slsteam-moon and abort it.
 local function coerce(entry, value)
   if entry.type == "bool" then
     if type(value) == "boolean" then return value end
     local s = tostring(value):lower()
     return s == "true" or s == "yes" or s == "1" or s == "on"
   elseif entry.type == "int" or entry.type == "enum" then
-    return math.floor(tonumber(value) or 0)
+    local n = math.floor(tonumber(value) or 0)
+    if entry.min and n < entry.min then n = entry.min end
+    if entry.max and n > entry.max then n = entry.max end
+    return n
   else
     return tostring(value)
   end

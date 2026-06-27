@@ -56,8 +56,22 @@
     } else if (entry.type === "int") {
       var ni = document.createElement("input");
       ni.type = "number";
-      ni.value = String(value != null ? value : 0);
-      ni.addEventListener("change", function () { onChange(Number(ni.value) || 0); });
+      var hasMin = typeof entry.min === "number";
+      var hasMax = typeof entry.max === "number";
+      if (hasMin) ni.min = String(entry.min);
+      if (hasMax) ni.max = String(entry.max);
+      var clampInt = function (n) {
+        n = Math.floor(Number(n) || 0);
+        if (hasMin && n < entry.min) n = entry.min;
+        if (hasMax && n > entry.max) n = entry.max;
+        return n;
+      };
+      ni.value = String(clampInt(value != null ? value : 0));
+      ni.addEventListener("change", function () {
+        var v = clampInt(ni.value);
+        ni.value = String(v); // reflect the clamp back into the box
+        onChange(v);
+      });
       ctrl.appendChild(ni);
     } else {
       var ti = document.createElement("input");

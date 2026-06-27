@@ -52,6 +52,35 @@ do
   os.remove(p)
 end
 
+-- ── set() clamps an out-of-range int to the schema's max ───────────────────
+-- A huge FakeWalletBalance used to overflow int32 in the backend and abort
+-- Steam; the schema now bounds it and the RPC layer must clamp before writing.
+do
+  local p = write_tmp("FakeWalletBalance: 0\n")
+  slsmenu.set(p, json.encode({ key = "FakeWalletBalance", value = 500000000000000000 }))
+  assert_eq(json.decode(slsmenu.get(p)).values.FakeWalletBalance, 2147483647,
+            "over-max wallet clamped to int32 max")
+  os.remove(p)
+end
+
+-- ── set() clamps a negative int to the schema's min ────────────────────────
+do
+  local p = write_tmp("FakeWalletBalance: 0\n")
+  slsmenu.set(p, json.encode({ key = "FakeWalletBalance", value = -5 }))
+  assert_eq(json.decode(slsmenu.get(p)).values.FakeWalletBalance, 0,
+            "negative wallet clamped to min 0")
+  os.remove(p)
+end
+
+-- ── an in-range int is written unchanged ───────────────────────────────────
+do
+  local p = write_tmp("FakeWalletBalance: 0\n")
+  slsmenu.set(p, json.encode({ key = "FakeWalletBalance", value = 4999 }))
+  assert_eq(json.decode(slsmenu.get(p)).values.FakeWalletBalance, 4999,
+            "in-range wallet untouched")
+  os.remove(p)
+end
+
 -- ── set() refuses an unknown key (no arbitrary writes) ─────────────────────
 do
   local p = write_tmp("LogLevel: 2\n")

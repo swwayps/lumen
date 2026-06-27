@@ -52,6 +52,7 @@ slsconfig.SCHEMA = {
   { key = "FakeEmail",              type = "string", default = "",    level = "normal",
     label = "Fake account e-mail (blank = off)" },
   { key = "FakeWalletBalance",      type = "int",    default = 0,     level = "normal",
+    min = 0, max = 2147483647,
     label = "Fake wallet balance (0 = off)" },
   { key = "LogLevel",               type = "enum",   default = 2,     level = "advanced",
     label = "Log level",
