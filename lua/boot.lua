@@ -180,6 +180,10 @@ local function build_webview_assets()
 end
 
 local loop = require("loop")
+-- One initial desktop-coverage pass per injected session (user-owned entries):
+-- heals anything Steam/the DE reverted since the last session, before the tick
+-- loop takes over the autostart watch. Best-effort.
+pcall(function() require("deskcover").run("--user") end)
 -- Injection channels:
 --   * web views (store/community)  -> luatools.js + lumen_menu.js
 --   * the main client window ("Steam")  -> lumen_menu.js (carries the menubar
