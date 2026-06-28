@@ -5,6 +5,7 @@ local socket = require("socket")
 local injector = require("injector")
 local lifecycle = require("lifecycle")
 local proc = require("proc")
+local deskcover = require("deskcover")
 
 local loop = {}
 
@@ -30,6 +31,10 @@ function loop.run(opts)
   local watcher = lifecycle.new_watcher()
   local CHECK_EVERY = 3          -- seconds between /proc liveness checks
   local next_check = 0
+  -- Re-assert user-owned desktop coverage when the autostart entry appears or
+  -- changes (the user toggling "run on startup" mid-session). Cheap: one stat of
+  -- the autostart path per tick; see deskcover.
+  local dc_tick = deskcover.new_tick({ interval = CHECK_EVERY })
   while true do
     local fds = inj:fds()
     if #fds > 0 then
@@ -42,7 +47,12 @@ function loop.run(opts)
     local now = os.time()
     if now >= next_check then
       next_check = now + CHECK_EVERY
+      if dc_tick:should_repatch(now, deskcover.stat_autostart()) then
+        log("autostart entry changed/vanilla -> re-asserting desktop coverage")
+        deskcover.run("--user")
+      end
       if watcher:should_exit(now, proc.is_alive("steam")) then
+        deskcover.run("--user")        -- final heal before we stop
         log("Steam closed -> Lumen exiting")
         os.exit(0)
       end
