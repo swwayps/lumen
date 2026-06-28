@@ -135,10 +135,20 @@
     }
 
     function fill(c) {
-      var inst = c.installed && c.installed !== "" ? c.installed : S.unknown;
-      var latest = c.latest && c.latest !== "" ? c.latest : S.unknown;
-      if (c.installedBuild) inst += " (" + c.installedBuild + ")";
-      if (c.latestBuild) latest += " (" + c.latestBuild + ")";
+      // Each side reads "<tag> (<build date> · <asset #id>)". The asset id is
+      // the canonical per-upload identifier, so when a release is re-cut under
+      // the SAME tag (date unchanged too) the ids still differ — making the
+      // "update available" pill explainable instead of "v2.6 vs v2.6, why?".
+      var side = function (tag, build, asset) {
+        var s = tag && tag !== "" ? tag : S.unknown;
+        var paren = [];
+        if (build) paren.push(build);
+        if (asset) paren.push(asset);
+        if (paren.length) s += " (" + paren.join(" \u00b7 ") + ")";
+        return s;
+      };
+      var inst = side(c.installed, c.installedBuild, c.installedAsset);
+      var latest = side(c.latest, c.latestBuild, c.latestAsset);
       vv.textContent = S.installed + ": " + inst + "  \u00b7  " + S.latest + ": " + latest;
       setPill(c.state);
     }

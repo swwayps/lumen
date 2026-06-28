@@ -54,15 +54,51 @@ check("compare no latest -> unknown", about.compare_state({ tag = "v2.6" }, nil)
 check("compare no installed tag (legacy) -> unknown", about.compare_state(
   {}, { tag = "v2.6" }) == "unknown")
 
+-- ── compare_state (asset id, the canonical per-upload identifier) ─────────────
+-- Same tag, same asset id -> current (id wins over a noisy asset_at/size).
+check("compare same id -> current", about.compare_state(
+  { tag = "v2.6", id = 100, asset_at = "a", size = 1 },
+  { tag = "v2.6", id = 100, asset_at = "b", size = 2 }) == "current")
+-- Same tag, different asset id (re-upload) -> update.
+check("compare diff id -> update", about.compare_state(
+  { tag = "v2.6", id = 100 }, { tag = "v2.6", id = 200 }) == "update")
+-- id compared as a string so a number/string mix from mixed decoders still matches.
+check("compare id num/str equal -> current", about.compare_state(
+  { tag = "v2.6", id = "100" }, { tag = "v2.6", id = 100 }) == "current")
+
+-- ── installed_entry null-fingerprint normalization (out-of-band install) ──────
+-- A manual install (no install.sh stamping) writes {tag, asset_at:null, size:null}.
+-- json.decode renders null as a TRUTHY sentinel, which used to read as a
+-- present-but-different fingerprint and produce a bogus "update". The entry must
+-- degrade to tag-only so it compares as "current" against a matching tag.
+do
+  local sentinel = setmetatable({}, {})  -- stand-in for cjson's null userdata
+  local t = { c = { tag = "v2.6", asset_at = sentinel, size = sentinel, id = sentinel } }
+  local e = about.installed_entry(t, "c")
+  check("installed null asset_at -> nil", e.asset_at == nil)
+  check("installed null size -> nil", e.size == nil)
+  check("installed null id -> nil", e.id == nil)
+  check("installed keeps tag", e.tag == "v2.6")
+  check("installed null fingerprint compares current",
+    about.compare_state(e, { tag = "v2.6", asset_at = "x", size = 1, id = 9 }) == "current")
+end
+
+-- ── fmt_asset ─────────────────────────────────────────────────────────────────
+check("fmt_asset number", about.fmt_asset(248139923) == "#248139923")
+check("fmt_asset string", about.fmt_asset("42") == "#42")
+check("fmt_asset nil", about.fmt_asset(nil) == "")
+check("fmt_asset empty string", about.fmt_asset("") == "")
+
 -- ── parse_latest_info ─────────────────────────────────────────────────────────
 do
   local body = '{"tag_name":"v2.6","assets":[' ..
     '{"name":"other.zip","created_at":"2026-01-01T00:00:00Z","size":1},' ..
-    '{"name":"lumen-linux.zip","created_at":"2026-06-21T03:15:25Z","size":2614842}]}'
+    '{"name":"lumen-linux.zip","id":251004412,"created_at":"2026-06-21T03:15:25Z","size":2614842}]}'
   local info = about.parse_latest_info(body, "^lumen%-linux%.zip$")
   check("parse tag", info and info.tag == "v2.6")
   check("parse matched asset_at", info.asset_at == "2026-06-21T03:15:25Z")
   check("parse matched size", info.size == 2614842)
+  check("parse matched id", info.id == 251004412)
 end
 check("parse no matching asset -> tag only",
   (function() local i = about.parse_latest_info('{"tag_name":"v2.6","assets":[]}', "^x$")
@@ -113,7 +149,7 @@ do
       or url:find("luatools-moon", 1, true) and "luatools-linux.zip"
       or "slsteam-moon-linux-2.6-lumen.zip"
     return '{"tag_name":"v2.6","assets":[{"name":"' .. name ..
-      '","created_at":"2026-06-21T03:15:25Z","size":100}]}'
+      '","id":100,"created_at":"2026-06-21T03:15:25Z","size":100}]}'
   end
   local http = { get = function(url) return { status = 200, body = api_body(url) }, nil end }
   local res = about.get_versions({
@@ -129,6 +165,7 @@ do
   check("gv plugin update (asset re-uploaded, same tag)", by.plugin.state == "update")
   check("gv plugin shows build dates", by.plugin.installedBuild == "17/06/2026"
     and by.plugin.latestBuild == "21/06/2026")
+  check("gv plugin shows latest asset id", by.plugin.latestAsset == "#100")
   check("gv lumen unknown (no installed entry)", by.lumen.state == "unknown")
 end
 do

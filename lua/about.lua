@@ -58,13 +58,25 @@ function about.read_installed(path, read_file)
   return data
 end
 
--- installed_entry(installed, key) -> { tag, asset_at, size } for one component,
--- tolerating both the rich object shape the installer now writes
--- ({tag, asset_at, size}) and the legacy flat-string shape ("v2.6", tag only).
+-- installed_entry(installed, key) -> { tag, asset_at, size, id } for one
+-- component, tolerating both the rich object shape the installer now writes
+-- ({tag, asset_at, size, id}) and the legacy flat-string shape ("v2.6", tag only).
+--
+-- json.decode renders a JSON `null` as a truthy sentinel (NOT nil), so a stamp
+-- like {asset_at:null,size:null,id:null} — written when the forge didn't return
+-- those fields at install time — would otherwise read as a present-but-different
+-- fingerprint and trigger a bogus "update". Each field is therefore accepted
+-- only when it has its expected concrete type; anything else (sentinel, missing)
+-- collapses to nil so the entry degrades cleanly to a tag-only legacy stamp.
 function about.installed_entry(installed, key)
   local v = installed and installed[key]
   if type(v) == "table" then
-    return { tag = v.tag, asset_at = v.asset_at, size = v.size }
+    return {
+      tag      = (type(v.tag) == "string" and v.tag ~= "" and v.tag) or nil,
+      asset_at = (type(v.asset_at) == "string" and v.asset_at ~= "" and v.asset_at) or nil,
+      size     = (type(v.size) == "number" and v.size) or nil,
+      id       = ((type(v.id) == "number" or type(v.id) == "string") and v.id) or nil,
+    }
   elseif type(v) == "string" and v ~= "" then
     return { tag = v }  -- legacy: tag only, no asset fingerprint
   end
@@ -91,25 +103,46 @@ function about.fmt_date(iso)
   return d .. "/" .. m .. "/" .. y
 end
 
+-- fmt_asset(id) -> "#<id>" or "". GitHub's asset id is the unique identifier of
+-- a SPECIFIC uploaded file: re-uploading the asset (even under the same release
+-- tag) yields a brand-new id. Showing it next to the version makes an
+-- asset-only update legible ("#248139923 vs #251004412") instead of the
+-- confusing "v2.6 vs v2.6, why update?". Non-id values (sentinel/missing) -> "".
+function about.fmt_asset(id)
+  if type(id) == "number" then
+    return "#" .. string.format("%d", id)
+  elseif type(id) == "string" and id ~= "" then
+    return "#" .. id
+  end
+  return ""
+end
+
 -- compare_state(inst, latest) -> "current" | "update" | "unknown", where inst
--- and latest are { tag, asset_at, size } tables. An update is reported when
--- EITHER signal changed, so both release workflows are covered:
+-- and latest are { tag, asset_at, size, id } tables. An update is reported when
+-- ANY signal changed, so both release workflows are covered:
 --   * tag bump (e.g. v2.6 -> v2.7)                                   -> update
---   * SAME tag, asset re-uploaded (different upload time/size)       -> update
--- When there's no asset fingerprint to compare (legacy tag-only stamp) it falls
--- back to a tag comparison. No latest, or no installed identity at all -> unknown.
+--   * SAME tag, asset re-uploaded (new asset id / upload time / size) -> update
+-- The asset id is the canonical per-upload identifier (a re-upload always gets a
+-- fresh one), so it's preferred when both sides carry it; the asset_at+size
+-- fingerprint is the fallback for stamps written before ids were recorded, and a
+-- bare tag comparison is the last resort for legacy tag-only stamps. No latest,
+-- or no installed identity at all -> unknown.
 function about.compare_state(inst, latest)
   inst = inst or {}
   latest = latest or {}
   local lt = about.norm_tag(latest.tag)
   if not lt then return "unknown" end
   local it = about.norm_tag(inst.tag)
-  -- No installed identity (neither tag nor asset) -> can't tell.
-  if not it and not inst.asset_at then return "unknown" end
+  -- No installed identity (no tag, no asset fingerprint at all) -> can't tell.
+  if not it and not inst.asset_at and inst.id == nil then return "unknown" end
   -- 1) Tag changed -> update (caught even if we can't compare assets).
   if it and it ~= lt then return "update" end
-  -- 2) Same (or unknown) tag: compare the asset fingerprint so a re-upload under
-  --    the same tag is still detected.
+  -- 2) Same (or unknown) tag: the asset id is the most precise signal.
+  if inst.id ~= nil and latest.id ~= nil then
+    if tostring(inst.id) ~= tostring(latest.id) then return "update" end
+    return "current"
+  end
+  -- 3) No id on one side: compare the upload-time + size fingerprint.
   if inst.asset_at and latest.asset_at then
     if inst.asset_at ~= latest.asset_at
         or tostring(inst.size or "") ~= tostring(latest.size or "") then
@@ -117,7 +150,7 @@ function about.compare_state(inst, latest)
     end
     return "current"
   end
-  -- 3) No asset fingerprint to compare (legacy stamp): tags match -> current.
+  -- 4) No asset fingerprint to compare (legacy stamp): tags match -> current.
   if it and it == lt then return "current" end
   return "unknown"
 end
@@ -127,9 +160,9 @@ function about.api_url(repo)
   return "https://api.github.com/repos/" .. repo .. "/releases/latest"
 end
 
--- parse_latest_info(body, asset_pat) -> { tag, asset_at, size } or nil. Pure
+-- parse_latest_info(body, asset_pat) -> { tag, asset_at, size, id } or nil. Pure
 -- (decode only). Finds the asset whose name matches `asset_pat` and returns its
--- upload fingerprint alongside the release tag.
+-- upload fingerprint (id + created_at + size) alongside the release tag.
 function about.parse_latest_info(body, asset_pat)
   if type(body) ~= "string" or body == "" then return nil end
   local ok, data = pcall(json.decode, body)
@@ -142,8 +175,9 @@ function about.parse_latest_info(body, asset_pat)
     for _, a in ipairs(assets) do
       if type(a) == "table" and type(a.name) == "string"
           and a.name:match(asset_pat) then
-        info.asset_at = a.created_at
-        info.size = a.size
+        info.asset_at = (type(a.created_at) == "string" and a.created_at) or nil
+        info.size = (type(a.size) == "number" and a.size) or nil
+        info.id = ((type(a.id) == "number" or type(a.id) == "string") and a.id) or nil
         break
       end
     end
@@ -188,6 +222,8 @@ function about.get_versions(opts)
         latest = (latest and latest.tag) or "",
         installedBuild = about.fmt_date(inst.asset_at),
         latestBuild = about.fmt_date(latest and latest.asset_at),
+        installedAsset = about.fmt_asset(inst.id),
+        latestAsset = about.fmt_asset(latest and latest.id),
         state = about.compare_state(inst, latest),
       }
     end
