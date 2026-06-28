@@ -25,4 +25,11 @@ ok(w:should_repatch(9, { exists = false, mtime = 0, patched = false }) == false,
 ok(w:should_repatch(10, { exists = true, mtime = 400, patched = false }) == false,
    "within interval -> rate-limited skip")
 
+-- path helpers derive from $HOME
+local home = os.getenv("HOME") or ""
+ok(deskcover.autostart_path() == home .. "/.config/autostart/steam.desktop",
+   "autostart path")
+ok(deskcover.cli_path() == home .. "/.local/share/SLSsteam/ensure-desktop-coverage.sh",
+   "cli path")
+
 print("test_deskcover: ALL PASS")
