@@ -25,18 +25,18 @@ local about = {}
 -- `asset_pat` is a Lua pattern matching the release asset filename (so we can
 -- read THAT asset's fingerprint, not just the tag).
 about.COMPONENTS = {
-  { key = "slsteam_moon", name = "slsteam-moon",    repo = "luatools-linux/slsteam-moon",
+  { key = "slsteam_moon", name = "slsteam-moon",    repo = "swwayps/slsteam-moon",
     asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$" },
-  { key = "plugin",       name = "LuaTools plugin", repo = "luatools-linux/luatools-moon",
+  { key = "plugin",       name = "LuaTools plugin", repo = "swwayps/luatools-moon",
     asset_pat = "^luatools%-linux%.zip$" },
-  { key = "lumen",        name = "Lumen",           repo = "luatools-linux/lumen",
+  { key = "lumen",        name = "Lumen",           repo = "swwayps/lumen",
     asset_pat = "^lumen%-linux%.zip$" },
 }
 
 -- The public one-liner the Update All button runs in a terminal. Raw-branch URL
 -- (not a release asset) so installer fixes go live without a rebuild.
 about.INSTALL_URL =
-  "https://raw.githubusercontent.com/luatools-linux/luatools-moon/main/install.sh"
+  "https://raw.githubusercontent.com/swwayps/luatools-moon/main/install.sh"
 
 -- Where the installer stamps the installed release tags.
 function about.versions_path()
