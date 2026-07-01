@@ -107,4 +107,70 @@
       });
       body.appendChild(row);
     });
+
+    renderPluginSection(body);
+  }
+
+  // A "Plugin" section appended below the slsteam-moon options: Lumen-level
+  // plugin toggles (not part of slsteam-moon's config.yaml). Currently a single
+  // switch to show/hide the library-page Fixes Menu. Reads/writes the pref via
+  // the LumenGetPluginPrefs / LumenSetPluginPref backend RPCs and applies the
+  // change live (the fixes-menu fragment honours window.__lumenFixesMenuEnabled).
+  function renderPluginSection(body) {
+    var P = (I18N[pickLang()] || I18N.en).plugin || I18N.en.plugin;
+
+    var title = document.createElement("div");
+    title.className = "lumen-sub-title";
+    title.style.marginTop = "24px";
+    title.textContent = P.title;
+    body.appendChild(title);
+
+    var row = document.createElement("div");
+    row.className = "lumen-row";
+    var wrap = document.createElement("div");
+    wrap.className = "lumen-lblwrap";
+    var lbl = document.createElement("div");
+    lbl.className = "lbl";
+    lbl.textContent = P.fixesLabel;
+    var d = document.createElement("div");
+    d.className = "lumen-desc";
+    d.textContent = P.fixesDesc;
+    wrap.appendChild(lbl);
+    wrap.appendChild(d);
+    row.appendChild(wrap);
+
+    var ctrl = document.createElement("span");
+    ctrl.className = "lumen-ctrl";
+    var sw = document.createElement("label");
+    sw.className = "lumen-sw";
+    var cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = window.__lumenFixesMenuEnabled !== false; // optimistic; refined below
+    var sl = document.createElement("span");
+    sl.className = "sl";
+    cb.addEventListener("change", function () {
+      var on = cb.checked;
+      call("LumenSetPluginPref", { key: "fixes_menu_enabled", value: on }).catch(function () {});
+      try {
+        window.__lumenFixesMenuEnabled = on;
+        if (!on) {
+          if (typeof window.__lumenRemoveFixesButton === "function") window.__lumenRemoveFixesButton();
+          else { var b = document.getElementById("lumen-fixes-btn"); if (b) b.remove(); }
+        }
+      } catch (e) {}
+    });
+    sw.appendChild(cb); sw.appendChild(sl); ctrl.appendChild(sw);
+    row.appendChild(ctrl);
+    body.appendChild(row);
+
+    // Reflect the stored value.
+    call("LumenGetPluginPrefs", {})
+      .then(function (res) {
+        var p; try { p = JSON.parse(res); } catch (e) {}
+        if (p && p.success && p.prefs) {
+          cb.checked = p.prefs.fixes_menu_enabled !== false;
+          try { window.__lumenFixesMenuEnabled = cb.checked; } catch (e) {}
+        }
+      })
+      .catch(function () {});
   }

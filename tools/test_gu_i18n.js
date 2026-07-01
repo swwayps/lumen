@@ -11,7 +11,7 @@ const MENU_DIR = path.join(__dirname, "..", "lua", "menu");
 const PARTS = [
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
-  "08-about-tab.js", "09-overlay.js", "10-menubar.js",
+  "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "11-menubar.js",
 ];
 const SOURCE = PARTS.map((p) => fs.readFileSync(path.join(MENU_DIR, p), "utf8")).join("\n");
 

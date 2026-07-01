@@ -122,6 +122,11 @@ require("manifestpins").register(registry)
 -- --noplugin so an update never re-adds the plugin.
 require("about").register(registry, { no_plugin = not have_plugin })
 
+-- The library-page "Fixes Menu" (menu/10-fixes-menu.js): one context RPC
+-- (install path + name + Proton-effective) so the menu can reuse the existing
+-- LuaTools fix RPCs on a game's library page.
+require("fixesmenu").register(registry)
+
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
@@ -130,11 +135,12 @@ local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 -- state), so they must be injected as one unit: we concatenate them in order
 -- into one string and inject that with a single Runtime.evaluate. The assembled
 -- output is behaviourally identical to the old single file. ORDER MATTERS:
--- 01-core opens the IIFE; 09-menubar runs the bootstrap and closes it.
+-- 01-core opens the IIFE; 11-menubar runs the bootstrap and closes it. The
+-- fixes-menu fragment (10) must come BEFORE 11-menubar (the IIFE closer).
 local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
-  "08-about-tab.js", "09-overlay.js", "10-menubar.js",
+  "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "11-menubar.js",
 }
 
 local function read_menu_js()
