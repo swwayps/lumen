@@ -6,6 +6,7 @@
   // overlay fragment, 09). The advanced/Depots subpage hides it and shows its
   // own per-game "Delete all" instead; returning to the list restores it.
   var _guClearBtnRef = null;
+  var _providersOffline = false;
   function guShowClearBtn(show) {
     if (_guClearBtnRef) _guClearBtnRef.style.display = show ? "" : "none";
   }
@@ -60,13 +61,15 @@
       var vers = document.createElement("div");
       vers.className = "lumen-vers";
       var anyPinned = d.versions.some(function (v) { return v.pinned; });
+      var hasInstalled = d.versions.some(function (v) { return v.installed; });
       var rows = [];
       var select = function (target) {
         rows.forEach(function (r) { r.classList.toggle("sel", r === target); });
       };
 
       var latest = verRow({
-        label: GU.latest, selected: !anyPinned,
+        label: GU.latest, selected: !anyPinned && !_providersOffline,
+        disabled: _providersOffline,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
             .then(function () { select(latest); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
@@ -81,8 +84,9 @@
         if (v.pinned) badges.push({ cls: "lock", text: GU.pinned });
         if (v.installed) badges.push({ cls: "cur", text: GU.current });
         if (v.fromLuaTools) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
+        var isSelected = v.pinned || (_providersOffline && !anyPinned && (v.installed || (!hasInstalled && v.fromLuaTools)));
         var row = verRow({
-          label: fmtDate(v.date), gid: v.gid, selected: v.pinned, badges: badges,
+          label: fmtDate(v.date), gid: v.gid, selected: isSelected, badges: badges,
           onClick: function () {
             // Write the pin (and move the selection) ONLY if the user follows
             // through the modal; "Not now"/"Later"/dismiss cancels it and the
@@ -227,13 +231,15 @@
     var DEFAULT_SHOWN = 3;
     var builds = gameBuilds(game);
     markLuaToolsBuild(builds);
+    var hasInstalledBuild = builds.some(function (b) { return b.installed; });
     var rows = [];
     var select = function (target) {
       rows.forEach(function (r) { r.classList.toggle("sel", r === target); });
     };
 
     var latest = verRow({
-      label: GU.latest, selected: !game.locked,
+      label: GU.latest, selected: !game.locked && !_providersOffline,
+      disabled: _providersOffline,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
           .then(function () { select(latest); setLocked(false); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
@@ -248,8 +254,9 @@
       var badges = [];
       if (b.installed) badges.push({ cls: "cur", text: GU.current });
       if (b.fromLua) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
+      var isSelected = (game.locked && b.pinned) || (_providersOffline && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
       var row = verRow({
-        label: fmtDate(b.date), selected: game.locked && b.pinned, badges: badges,
+        label: fmtDate(b.date), selected: isSelected, badges: badges,
         onClick: function () {
           // Write the pin (and lock/move the selection) ONLY if the user follows
           // through the modal; "Not now"/"Later"/dismiss cancels it and the
@@ -543,6 +550,7 @@
       .then(function (res) {
         var data = JSON.parse(res);
         if (!data || !data.success) throw new Error((data && data.error) || "load failed");
+        _providersOffline = !!data.providers_offline;
         // Lua serializes an empty array as {} (an object), so coerce every list
         // back to an array before we filter/iterate, and drop games that ended
         // up with no archived versions (e.g. after a manifest purge).

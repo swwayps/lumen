@@ -549,6 +549,18 @@ end
 -- ── IO layer ────────────────────────────────────────────────────────────────
 local function home() return os.getenv("HOME") or "" end
 
+local function is_providers_offline()
+  local h = home()
+  if h == "" then return false end
+  local p = h .. "/.config/SLSsteam/offline"
+  local f = io.open(p, "rb")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
 local function steam_root_guess()
   local h = home()
   if h == "" then return nil end
@@ -1020,7 +1032,8 @@ function mp.get_game_updates(ctx)
   ctx = ctx or mp.default_ctx()
   local ok, games = pcall(mp.build_games, ctx)
   if not ok then return err(games) end
-  return json.encode({ success = true, games = games })
+  local offline = is_providers_offline()
+  return json.encode({ success = true, games = games, providers_offline = offline })
 end
 
 -- SetGamePin{appid, gid|date}: pin every depot of the app to its newest

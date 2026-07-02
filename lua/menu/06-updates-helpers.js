@@ -157,6 +157,9 @@
   function verRow(opts) {
     var row = document.createElement("div");
     row.className = "lumen-ver" + (opts.selected ? " sel" : "");
+    if (opts.disabled) {
+      row.classList.add("disabled");
+    }
     var dot = document.createElement("span");
     dot.className = "dot";
     row.appendChild(dot);
@@ -175,7 +178,33 @@
       s.textContent = b.text;
       row.appendChild(s);
     });
-    row.addEventListener("click", opts.onClick);
+    if (opts.disabled) {
+      var GU = guStrings();
+      var badge = document.createElement("span");
+      badge.className = "lumen-badge err";
+      badge.style.cursor = "pointer";
+      badge.textContent = GU.offlineBadge;
+      badge.title = GU.offlineBody;
+
+      var infoSpan = document.createElement("span");
+      infoSpan.className = "info";
+      infoSpan.textContent = "i";
+      badge.appendChild(infoSpan);
+
+      row.appendChild(badge);
+
+      var showWarn = function (e) {
+        e.stopPropagation();
+        showConfirm({
+          title: GU.offlineTitle,
+          body: GU.offlineBody,
+          confirmText: GU.ok
+        });
+      };
+      badge.addEventListener("click", showWarn);
+    } else {
+      row.addEventListener("click", opts.onClick);
+    }
     return row;
   }
 
