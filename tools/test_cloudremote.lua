@@ -85,6 +85,8 @@ do
         return { status = 200, body = json.encode({ files = {
           { id = "x", name = "220200", mimeType = "application/vnd.google-apps.folder" },
           { id = "y", name = "413150", mimeType = "application/vnd.google-apps.folder" },
+          -- the account-scope folder (appId 0) must be excluded, not shown
+          { id = "z", name = "0", mimeType = "application/vnd.google-apps.folder" },
         } }) }
       end
       return { status = 404, body = "{}" }
@@ -93,6 +95,7 @@ do
   local appids, err = cr.list_appids("gdrive", "RTgd", 1052518393, { http = fake })
   ok(appids, "gdrive list_appids returned (" .. tostring(err) .. ")")
   ok(has(appids, 220200) and has(appids, 413150), "gdrive remote appids enumerated")
+  ok(not has(appids, 0), "account-scope appid 0 excluded")
 end
 
 -- ── onedrive end-to-end flow ────────────────────────────────────────────────

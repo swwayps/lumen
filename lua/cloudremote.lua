@@ -207,7 +207,9 @@ function cloudremote.list_appids(provider, refresh_token, account_id, deps)
   local appids = {}
   for _, n in ipairs(names) do
     local id = math.tointeger(tonumber(n))
-    if id then appids[#appids + 1] = id end
+    -- Skip the account-scope folder (appId 0), where the hook stores account-
+    -- wide data (stats.json) rather than a real game's saves.
+    if id and id ~= 0 then appids[#appids + 1] = id end
   end
   return appids
 end
