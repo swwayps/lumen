@@ -188,6 +188,8 @@
       ".lumen-capsule-badge.b-local{background:#2b303a;color:#9fb3c4;}",
       ".lumen-capsule-badge.b-cloud{background:#14283a;color:#66c0f4;}",
       ".lumen-capsule-badge.b-synced{background:#15321f;color:#6fd08c;}",
+      ".lumen-capsule-badge.b-checking{background:#2b303a;color:#8f98a0;}",
+      ".lumen-capsule-badge .lumen-spin{width:11px;height:11px;border-width:2px;}",
       // loading spinner (version line + state pill while versions are fetched)
       ".lumen-spin{display:inline-block;width:14px;height:14px;box-sizing:border-box;",
       "border:2px solid rgba(255,255,255,.16);border-top-color:#9aa3ab;border-radius:50%;",

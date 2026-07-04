@@ -167,11 +167,20 @@
     return (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + " " + u[i];
   }
 
-  // Location/sync badge for a game card. Phase 1 apps are all local; remote and
-  // "synced" (in both) light up once the remote listing lands.
-  function cloudBadge(S, app) {
+  // Location/sync badge for a game card. While the remote listing for the
+  // account is still being fetched (`resolved` false), show a spinner instead
+  // of a premature "On this PC" — the card only settles to local/cloud/synced
+  // once we actually know the remote state.
+  function cloudBadge(S, app, resolved) {
     var b = document.createElement("span");
     b.className = "lumen-capsule-badge";
+    if (!resolved) {
+      b.classList.add("b-checking");
+      var sp = document.createElement("span"); sp.className = "lumen-spin";
+      var ct = document.createElement("span"); ct.textContent = S.badgeChecking;
+      b.appendChild(sp); b.appendChild(ct);
+      return b;
+    }
     var dot = document.createElement("span"); dot.className = "d";
     var txt = document.createElement("span");
     var loc = app.local && app.remote ? "synced" : (app.remote ? "cloud" : "local");
@@ -182,7 +191,7 @@
     return b;
   }
 
-  function cloudAppCard(S, app) {
+  function cloudAppCard(S, app, resolved) {
     var card = document.createElement("div");
     card.className = "lumen-game";
     var head = document.createElement("div");
@@ -206,7 +215,7 @@
     meta.appendChild(nm); meta.appendChild(sub);
 
     head.appendChild(cap); head.appendChild(meta);
-    head.appendChild(cloudBadge(S, app));
+    head.appendChild(cloudBadge(S, app, resolved));
     card.appendChild(head);
 
     // Resolve the real name (store API), like the Game Updates tab.
@@ -285,6 +294,10 @@
 
     function draw() {
       var q = (search.value || "").trim().toLowerCase();
+      // Remote state for the selected account is "resolved" once its fetch has
+      // completed (remoteSets[account] set, even to an empty set). Until then the
+      // cards show a spinner instead of a premature location badge.
+      var resolved = currentAccount != null && remoteSets[currentAccount] !== undefined;
       list.textContent = "";
       var shown = mergedApps().filter(function (a) {
         // Hide empty local-only entries (an app folder CloudRedirect created but
@@ -305,7 +318,7 @@
         list.appendChild(empty);
         return;
       }
-      shown.forEach(function (a) { list.appendChild(cloudAppCard(S, a)); });
+      shown.forEach(function (a) { list.appendChild(cloudAppCard(S, a, resolved)); });
     }
 
     // Fetch remote appids for an account once (cached), then redraw. Failures

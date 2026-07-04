@@ -225,6 +225,7 @@
         badgeLocal: "On this PC",
         badgeCloud: "In cloud",
         badgeSynced: "Synced",
+        badgeChecking: "Checking\u2026",
       },
     },
     "pt-BR": {
@@ -445,6 +446,7 @@
         badgeLocal: "Neste PC",
         badgeCloud: "Na nuvem",
         badgeSynced: "Sincronizado",
+        badgeChecking: "Verificando\u2026",
       },
     },
   };
