@@ -127,6 +127,18 @@ require("about").register(registry, { no_plugin = not have_plugin })
 -- LuaTools fix RPCs on a game's library page.
 require("fixesmenu").register(registry)
 
+-- The "Cloud Saves" tab (menu/12-cloud-tab.js): set up CloudRedirect cloud
+-- saves (provider, OAuth sign-in, stats toggles) directly against the hook's
+-- ~/.config/CloudRedirect file contract — no flatpak, no background process.
+-- Gated on CloudRedirect actually being installed (its .so on disk): without
+-- it there's nothing to configure, so we DON'T register the cloud RPCs and the
+-- menu hides the tab (window.__lumenCloud=false) — zero cost for users who
+-- don't use cloud saves. Single file-stat, decided once here at boot.
+local have_cloudredirect = require("slsconfig").has_cloudredirect()
+if have_cloudredirect then
+  require("cloudsettings").register(registry)
+end
+
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
@@ -140,7 +152,8 @@ local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
-  "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "11-menubar.js",
+  "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "12-cloud-tab.js",
+  "11-menubar.js",
 }
 
 local function read_menu_js()
@@ -158,6 +171,7 @@ local function read_menu_js()
   -- the Game Updates source-import path) in a --noplugin install. Set as a
   -- separate statement BEFORE the menu IIFE so it's in scope when the IIFE runs.
   local prefix = "window.__lumenNoPlugin=" .. (have_plugin and "false" or "true") .. ";\n"
+    .. "window.__lumenCloud=" .. (have_cloudredirect and "true" or "false") .. ";\n"
   return prefix .. table.concat(parts, "\n")
 end
 

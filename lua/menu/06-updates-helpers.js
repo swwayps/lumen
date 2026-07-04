@@ -9,6 +9,8 @@
   var GU_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 1a1 1 0 0 1 1 1v6.6l2-2 1.4 1.4L8 12.4 3.6 8 5 6.6l2 2V2a1 1 0 0 1 1-1zM3 13h10v2H3z"/></svg>';
   // Info icon for the About tab.
   var ABOUT_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zM7 4h2v2H7V4zm0 3h2v5H7V7z"/></svg>';
+  // Cloud icon for the Cloud Saves tab.
+  var CLOUD_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M12.2 6.5A4 4 0 0 0 4.5 6 3 3 0 0 0 4 12h8a2.75 2.75 0 0 0 .2-5.5z"/></svg>';
 
   // ── Game Updates helpers ────────────────────────────────────────────────
   // appid -> Promise<{name, image}|null>. One store-API "basic" lookup per app,

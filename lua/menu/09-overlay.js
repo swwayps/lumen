@@ -38,6 +38,9 @@
     }
     var tabSls = mkTab("slsteam-moon", MOON_SVG);
     var tabGu = mkTab(guStrings().tab, GU_SVG);
+    // Cloud Saves tab only when CloudRedirect is installed (window.__lumenCloud,
+    // set by boot.lua). Absent -> the tab isn't created and nothing cloud runs.
+    var tabCloud = window.__lumenCloud ? mkTab(cloudStrings().tab, CLOUD_SVG) : null;
     var tabAbout = mkTab(((I18N[pickLang()] || I18N.en).about || I18N.en.about).tab, ABOUT_SVG);
 
     // content
@@ -163,6 +166,7 @@
       cdisarm();
       tabSls.classList.toggle("active", which === "sls");
       tabGu.classList.toggle("active", which === "gu");
+      if (tabCloud) tabCloud.classList.toggle("active", which === "cloud");
       tabAbout.classList.toggle("active", which === "about");
       if (which === "gu") {
         h.textContent = "";
@@ -181,6 +185,11 @@
         resetBtn.style.display = "none";
         clearBtn.style.display = "";
         renderGameUpdates(body);
+      } else if (which === "cloud") {
+        h.textContent = cloudStrings().title;
+        resetBtn.style.display = "none";
+        clearBtn.style.display = "none";
+        renderCloud(body);
       } else if (which === "about") {
         h.textContent = ((I18N[pickLang()] || I18N.en).about || I18N.en.about).title;
         resetBtn.style.display = "none";
@@ -195,6 +204,7 @@
     }
     tabSls.addEventListener("click", function () { selectTab("sls"); });
     tabGu.addEventListener("click", function () { selectTab("gu"); });
+    if (tabCloud) tabCloud.addEventListener("click", function () { selectTab("cloud"); });
     tabAbout.addEventListener("click", function () { selectTab("about"); });
     selectTab("sls");
 

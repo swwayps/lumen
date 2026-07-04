@@ -189,6 +189,43 @@
         fixesLabel: "Fixes Menu",
         fixesDesc: "Show the Fixes Menu button on a game's library page (apply crack / online / all-in-one fixes).",
       },
+      cloud: {
+        tab: "Cloud Saves",
+        title: "Cloud Saves",
+        intro: "Sync your game saves to your own cloud storage. Sign in once; saves are then redirected to your account.",
+        provider: "Storage provider",
+        providerNone: "None (local only)",
+        providerGdrive: "Google Drive",
+        providerOnedrive: "OneDrive",
+        statusSignedIn: "Signed in",
+        statusNotSignedIn: "Not signed in",
+        signIn: "Sign in",
+        signOut: "Sign out",
+        signingIn: "Complete the sign-in in your browser\u2026",
+        signInDone: "Signed in successfully.",
+        signInFail: "Sign-in failed: ",
+        signInTimeout: "Sign-in timed out \u2014 try again.",
+        localNote: "Local only \u2014 saves are kept on this PC and not synced to the cloud. Pick a provider above to sign in.",
+        statsTitle: "Stats sync",
+        syncAchievements: "Sync achievements",
+        syncAchievementsDesc: "Also sync native Steam achievements to your cloud storage. Takes effect after you restart Steam.",
+        syncPlaytime: "Sync playtime",
+        syncPlaytimeDesc: "Also sync playtime to your cloud storage. Takes effect after you restart Steam.",
+        syncRestartTitle: "Restart Steam to apply",
+        syncRestartBody: "This setting only takes effect the next time you start Steam. After that, syncing runs when you close a game.",
+        syncRestartOk: "Got it",
+        loadFail: "Couldn't load cloud settings: ",
+        saveFail: "Couldn't save: ",
+        appsTitle: "Your games",
+        appsLoading: "Loading games\u2026",
+        appsNone: "No cloud saves yet. Launch a game with Steam Cloud enabled and it'll show up here.",
+        appsSearch: "Search games\u2026",
+        appsFiles: "file(s)",
+        appsLoadFail: "Couldn't load games: ",
+        badgeLocal: "On this PC",
+        badgeCloud: "In cloud",
+        badgeSynced: "Synced",
+      },
     },
     "pt-BR": {
       note: "As mudanças são salvas na hora. O slsteam-moon recarrega a config ao vivo; algumas opções só valem depois de reiniciar a Steam.",
@@ -372,6 +409,43 @@
         fixesLabel: "Menu de Correções",
         fixesDesc: "Mostra o botão Menu de Correções na página do jogo na biblioteca (aplica crack / online / all-in-one).",
       },
+      cloud: {
+        tab: "Saves na Nuvem",
+        title: "Saves na Nuvem",
+        intro: "Sincronize os saves dos seus jogos no seu próprio armazenamento na nuvem. Entre uma vez; os saves passam a ser redirecionados para a sua conta.",
+        provider: "Provedor de armazenamento",
+        providerNone: "Nenhum (somente local)",
+        providerGdrive: "Google Drive",
+        providerOnedrive: "OneDrive",
+        statusSignedIn: "Conectado",
+        statusNotSignedIn: "Não conectado",
+        signIn: "Entrar",
+        signOut: "Sair",
+        signingIn: "Conclua o login no seu navegador\u2026",
+        signInDone: "Login realizado com sucesso.",
+        signInFail: "Falha no login: ",
+        signInTimeout: "O login expirou \u2014 tente de novo.",
+        localNote: "Somente local \u2014 os saves ficam neste PC e não são sincronizados na nuvem. Escolha um provedor acima para entrar.",
+        statsTitle: "Sincronização de estatísticas",
+        syncAchievements: "Sincronizar conquistas",
+        syncAchievementsDesc: "Também sincroniza as conquistas nativas da Steam no seu armazenamento na nuvem. Só tem efeito após reiniciar a Steam.",
+        syncPlaytime: "Sincronizar tempo de jogo",
+        syncPlaytimeDesc: "Também sincroniza o tempo de jogo no seu armazenamento na nuvem. Só tem efeito após reiniciar a Steam.",
+        syncRestartTitle: "Reinicie a Steam para aplicar",
+        syncRestartBody: "Esta opção só passa a valer na próxima vez que você abrir a Steam. Depois disso, a sincronização acontece quando você fecha um jogo.",
+        syncRestartOk: "Entendi",
+        loadFail: "Não foi possível carregar as configurações de nuvem: ",
+        saveFail: "Não foi possível salvar: ",
+        appsTitle: "Seus jogos",
+        appsLoading: "Carregando jogos\u2026",
+        appsNone: "Nenhum save na nuvem ainda. Abra um jogo com a Steam Cloud ativada e ele aparecerá aqui.",
+        appsSearch: "Buscar jogos\u2026",
+        appsFiles: "arquivo(s)",
+        appsLoadFail: "Não foi possível carregar os jogos: ",
+        badgeLocal: "Neste PC",
+        badgeCloud: "Na nuvem",
+        badgeSynced: "Sincronizado",
+      },
     },
   };
 
@@ -401,5 +475,15 @@
     return (L && L.fixes) || I18N.en.fixes;
   }
 
+  // The "Cloud Saves" strings for the user's language, en fallback.
+  function cloudStrings() {
+    var L = I18N[pickLang()];
+    return (L && L.cloud) || I18N.en.cloud;
+  }
+
   // Debug aids, live-introspectable over CDP like the other window.__lumen*.
-  try { window.__lumenI18n = I18N; window.__lumenGuStrings = guStrings; } catch (e) {}
+  try {
+    window.__lumenI18n = I18N;
+    window.__lumenGuStrings = guStrings;
+    window.__lumenCloudStrings = cloudStrings;
+  } catch (e) {}

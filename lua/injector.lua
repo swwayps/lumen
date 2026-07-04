@@ -58,6 +58,25 @@ function injector.open_library_app_expr(appid)
     .. "return false;}catch(e){return false;}})()"
 end
 
+-- Open an external URL in the user's default browser via Steam's OWN handler,
+-- relayed into SharedJSContext (the only context with SteamClient). This is the
+-- key to the browser actually coming to the foreground: a bare xdg-open from the
+-- Lumen sidecar (a background process) has no focus-activation token, so under
+-- Wayland the OAuth tab opens behind Steam. Steam is the focused GUI app, so
+-- routing the open through it raises the browser like any in-client external
+-- link. Tries SteamClient.System.OpenInSystemBrowser (raw URL), then falls back
+-- to ExecuteSteamURL('steam://openurl_external/…'). `url` is emitted as a JS
+-- string literal (json.encode) so quotes/percent/ampersands can't break out.
+function injector.open_external_url_expr(url)
+  local lit = json.encode(tostring(url or ""))
+  return "(function(){try{var u=" .. lit .. ";if(window.SteamClient){"
+    .. "if(SteamClient.System&&typeof SteamClient.System.OpenInSystemBrowser==='function'){"
+    .. "SteamClient.System.OpenInSystemBrowser(u);return true;}"
+    .. "if(SteamClient.URL&&typeof SteamClient.URL.ExecuteSteamURL==='function'){"
+    .. "SteamClient.URL.ExecuteSteamURL('steam://openurl_external/'+u);return true;}}"
+    .. "return false;}catch(e){return false;}})()"
+end
+
 -- Look up `fn_name` in the dispatch registry and run it (Millennium-style: an
 -- args object is mapped to alphabetical positional args by rpc.dispatch).
 -- Returns the result as a JSON string, or a {success=false} JSON string for an
@@ -315,6 +334,17 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
+  elseif req.fn == "__lumenOpenExternalUrl" then
+    -- Open an external URL (the Cloud Saves OAuth page) in the default browser
+    -- via Steam's own handler so it comes to the foreground. SteamClient lives
+    -- only in SharedJSContext. ok:false when no such conn exists -> the caller
+    -- falls back to a backend xdg-open.
+    local a = req.args or {}
+    if a.url and self.manager and self.manager:open_external_url(tostring(a.url)) then
+      result = '{"ok":true}'
+    else
+      result = '{"ok":false}'
+    end
   else
     result = injector.dispatch_method(self.registry, req.fn, req.args)
   end
@@ -508,6 +538,20 @@ end
 -- library page. Fire-and-forget: returns true if a SharedJSContext conn exists.
 function State:open_library_app(appid)
   local expr = injector.open_library_app_expr(appid)
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+-- Relay an external-URL open into SharedJSContext so Steam raises the browser
+-- (see open_external_url_expr). Fire-and-forget: true if a SharedJSContext conn
+-- exists to run it on.
+function State:open_external_url(url)
+  local expr = injector.open_external_url_expr(url)
   for _, conn in pairs(self.conns) do
     if conn.sock and conn.title == "SharedJSContext" then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",

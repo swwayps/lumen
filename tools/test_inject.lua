@@ -176,6 +176,30 @@ do
     "a malformed appid coerces to 0")
 end
 
+-- 7e. open_external_url_expr(): opens an external URL (the Cloud Saves OAuth
+--     page) in the default browser via Steam's OWN handler, relayed through
+--     SharedJSContext's SteamClient — so the browser comes to the foreground
+--     (a bare sidecar xdg-open can't raise a window under Wayland). Tries
+--     OpenInSystemBrowser, falls back to steam://openurl_external. The URL is a
+--     JS string literal so it can't break out of the expression.
+do
+  assert_true(type(injector.open_external_url_expr) == "function",
+    "injector exposes open_external_url_expr for testing")
+  local expr = injector.open_external_url_expr("https://accounts.google.com/o/oauth2/v2/auth?x=1&y=2")
+  assert_true(expr:find("OpenInSystemBrowser", 1, true) ~= nil,
+    "prefers SteamClient.System.OpenInSystemBrowser")
+  assert_true(expr:find("steam://openurl_external/", 1, true) ~= nil,
+    "falls back to steam://openurl_external")
+  assert_true(expr:find("accounts.google.com", 1, true) ~= nil, "carries the URL")
+  assert_true(expr:find("try", 1, true) ~= nil and expr:find("catch", 1, true) ~= nil,
+    "wrapped in try/catch so a missing API can't throw")
+  -- The URL is emitted as a JS string literal; a quote in it must be escaped,
+  -- not able to break out and inject code.
+  local inj = injector.open_external_url_expr("https://x/\"); alert(1); //")
+  assert_true(inj:find("alert(1)", 1, true) == nil or inj:find('\\"', 1, true) ~= nil,
+    "a quote in the URL is escaped, not interpolated raw")
+end
+
 -- 8. dispatch_method(): the binding handler's registry lookup. A regression
 --    here (dropping the registry lookup) makes EVERY backend RPC come back as
 --    "unknown method", which is exactly what broke the menu once.
