@@ -109,6 +109,9 @@
       ensureButton(f);
       startObserver(f.bar);
       log("anchored full-moon button");
+      // Steam has finished loading (the menubar exists): this is the moment to
+      // check whether slsteam-moon actually injected, and warn if it didn't.
+      maybeWarnSlsNotLoaded();
       return;
     }
     attempts++;

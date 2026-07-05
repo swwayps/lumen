@@ -23,7 +23,7 @@ const PARTS = [
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
   "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "12-cloud-tab.js",
-  "11-menubar.js",
+  "13-sls-check.js", "11-menubar.js",
 ];
 const SOURCE = PARTS.map((p) => fs.readFileSync(path.join(MENU_DIR, p), "utf8")).join("\n");
 

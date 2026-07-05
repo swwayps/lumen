@@ -127,6 +127,13 @@ require("about").register(registry, { no_plugin = not have_plugin })
 -- LuaTools fix RPCs on a game's library page.
 require("fixesmenu").register(registry)
 
+-- The "slsteam-moon not loaded" warning (menu/13-sls-check.js): detect whether
+-- SLSsteam.so is actually injected into the running Steam client, and if not,
+-- offer an auto-fix that re-installs the latest slsteam-moon, repairs the
+-- *steam*.desktop launchers and relaunches Steam injected. Always registered
+-- (the check is a cheap /proc scan; it's meaningful in every mode).
+require("slscheck").register(registry)
+
 -- The "Cloud Saves" tab (menu/12-cloud-tab.js): set up CloudRedirect cloud
 -- saves (provider, OAuth sign-in, stats toggles) directly against the hook's
 -- ~/.config/CloudRedirect file contract — no flatpak, no background process.
@@ -153,7 +160,7 @@ local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
   "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "12-cloud-tab.js",
-  "11-menubar.js",
+  "13-sls-check.js", "11-menubar.js",
 }
 
 local function read_menu_js()

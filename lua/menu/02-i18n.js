@@ -227,6 +227,18 @@
         badgeSynced: "Synced",
         badgeChecking: "Checking\u2026",
       },
+      sls: {
+        title: "slsteam-moon didn't load",
+        body1: "slsteam-moon isn't active in this Steam session. Games you added through LuaTools show a \u201CBuy\u201D button instead of Install/Play, and installing or launching them won't work until it's loaded.",
+        body2: "You can try the auto-fix below \u2014 it reinstalls the latest slsteam-moon, repairs every Steam launcher shortcut on your system, and restarts Steam with slsteam-moon active.",
+        autofix: "Auto-fix",
+        ignore: "Ignore",
+        openedTitle: "Running the auto-fix",
+        openedBody: "A terminal window opened and is running the fix. It may ask for your password to repair the system Steam shortcuts. When it finishes, Steam restarts on its own with slsteam-moon active.",
+        noTerm: "No terminal emulator was found. Open a terminal and run:\n\ncurl -fsSL https://raw.githubusercontent.com/swwayps/slsteam-moon/slsteam-moon/autofix.sh | bash",
+        fail: "Couldn't start the auto-fix: ",
+        ok: "OK",
+      },
     },
     "pt-BR": {
       note: "As mudanças são salvas na hora. O slsteam-moon recarrega a config ao vivo; algumas opções só valem depois de reiniciar a Steam.",
@@ -448,6 +460,18 @@
         badgeSynced: "Sincronizado",
         badgeChecking: "Verificando\u2026",
       },
+      sls: {
+        title: "O slsteam-moon não carregou",
+        body1: "O slsteam-moon não está ativo nesta sessão da Steam. Os jogos que você adicionou pelo LuaTools mostram um botão \u201CComprar\u201D em vez de Instalar/Jogar, e não vai dar para instalar nem abrir esses jogos enquanto ele não carregar.",
+        body2: "Você pode tentar a auto-correção abaixo \u2014 ela reinstala o slsteam-moon mais recente, conserta todos os atalhos da Steam no seu sistema e reinicia a Steam com o slsteam-moon ativo.",
+        autofix: "Auto correção",
+        ignore: "Ignorar",
+        openedTitle: "Rodando a auto-correção",
+        openedBody: "Uma janela de terminal abriu e está rodando a correção. Ela pode pedir sua senha para consertar os atalhos da Steam do sistema. Quando terminar, a Steam reinicia sozinha com o slsteam-moon ativo.",
+        noTerm: "Nenhum terminal foi encontrado. Abra um terminal e rode:\n\ncurl -fsSL https://raw.githubusercontent.com/swwayps/slsteam-moon/slsteam-moon/autofix.sh | bash",
+        fail: "Não foi possível iniciar a auto-correção: ",
+        ok: "OK",
+      },
     },
   };
 
@@ -481,6 +505,13 @@
   function cloudStrings() {
     var L = I18N[pickLang()];
     return (L && L.cloud) || I18N.en.cloud;
+  }
+
+  // The "slsteam-moon not loaded" warning strings for the user's language, en
+  // fallback.
+  function slsStrings() {
+    var L = I18N[pickLang()];
+    return (L && L.sls) || I18N.en.sls;
   }
 
   // Debug aids, live-introspectable over CDP like the other window.__lumen*.

@@ -34,4 +34,41 @@ function proc.is_alive(comm, root)
   return found
 end
 
+-- lib_mapped(comm, needle, root) -> boolean. True if any process whose
+-- <root>/<pid>/comm equals `comm` has `needle` (a plain substring, e.g. a
+-- shared-library basename) somewhere in its <root>/<pid>/maps. Used to detect
+-- whether slsteam-moon (SLSsteam.so) is actually injected into the running
+-- Steam client — a direct runtime signal, unlike the CEF-port contract (which
+-- Decky's 8080 sharing defeats) or the log file (which goes stale). Same-uid
+-- processes' maps are readable without ptrace, so this needs no privileges for
+-- the user's own Steam. Best-effort: any IO failure yields false for that pid.
+function proc.lib_mapped(comm, needle, root)
+  root = root or "/proc"
+  if not comm or not needle or needle == "" then return false end
+  local ok, iter, dir_obj = pcall(lfs.dir, root)
+  if not ok then return false end
+  local found = false
+  for entry in iter, dir_obj do
+    if entry:match("^%d+$") then
+      local cf = io.open(root .. "/" .. entry .. "/comm", "r")
+      if cf then
+        local name = cf:read("l")
+        cf:close()
+        if name == comm then
+          local mf = io.open(root .. "/" .. entry .. "/maps", "r")
+          if mf then
+            for line in mf:lines() do
+              if line:find(needle, 1, true) then found = true; break end
+            end
+            mf:close()
+          end
+          if found then break end
+        end
+      end
+    end
+  end
+  if dir_obj then pcall(function() dir_obj:close() end) end
+  return found
+end
+
 return proc

@@ -290,6 +290,12 @@ function Conn:_on_binding(payload_str)
   if req.fn == "__lumenOpen" or req.fn == "__lumenClose" then
     if self.manager then self.manager:broadcast_overlay(req.fn == "__lumenOpen") end
     result = '{"ok":true}'
+  elseif req.fn == "__lumenSlsWarn" then
+    -- Show the "slsteam-moon not loaded" warning in the on-top context (store
+    -- web view when it's composited above the shell). Triggered from the shell
+    -- after the loaded-check; broadcasting picks the visible view.
+    if self.manager then self.manager:broadcast_sls_warn() end
+    result = '{"ok":true}'
   elseif req.fn == "__lumenSetLaunchOptions" then
     -- Relay: set a game's launch options. SteamClient lives only in
     -- SharedJSContext, not the store web view where the online-fix flow runs.
@@ -570,10 +576,14 @@ end
 -- web view conn can linger briefly after you navigate away (its socket isn't
 -- detected closed yet), and targeting that stale conn would render into a dead
 -- view. Close always goes to every context so nothing is left open behind.
-function State:broadcast_overlay(open)
-  local fn = open and "__lumenOpenOverlay" or "__lumenCloseOverlay"
-  local expr = "window." .. fn .. "&&window." .. fn .. "()"
-
+-- Evaluate `expr` in whichever context is currently ON TOP: the active store/
+-- community web view if one is the current page (it composites above the shell,
+-- so a shell-only render would sit hidden behind it), else the shell window.
+-- "Current" is decided from a fresh /json target list, NOT from self.conns (a
+-- web-view conn can linger briefly after navigating away). Shared by the
+-- overlay open and the slsteam-moon warning so both surface where the user can
+-- see them.
+function State:_fire_on_top(expr)
   local function fire(conn)
     if conn and conn.sock then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",
@@ -581,12 +591,6 @@ function State:broadcast_overlay(open)
     end
   end
 
-  if not open then
-    for _, conn in pairs(self.conns) do fire(conn) end
-    return
-  end
-
-  -- Which web-view targets exist RIGHT NOW (the active store/community page)?
   local live_webview_ws = {}
   local targets = list_all_targets()
   if targets then
@@ -608,6 +612,28 @@ function State:broadcast_overlay(open)
       if conn.sock and conn.title == "Steam" then fire(conn) end
     end
   end
+end
+
+function State:broadcast_overlay(open)
+  if not open then
+    -- Close goes to EVERY context so nothing is left open behind a hidden view.
+    local expr = "window.__lumenCloseOverlay&&window.__lumenCloseOverlay()"
+    for _, conn in pairs(self.conns) do
+      if conn and conn.sock then
+        send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+          { expression = expr, returnByValue = true })
+      end
+    end
+    return
+  end
+  self:_fire_on_top("window.__lumenOpenOverlay&&window.__lumenOpenOverlay()")
+end
+
+-- Show the "slsteam-moon not loaded" warning in whichever view is on top, so it
+-- renders in front of the store/community web view when one is composited above
+-- the shell (otherwise it would be hidden behind it — the store-in-front bug).
+function State:broadcast_sls_warn()
+  self:_fire_on_top("window.__lumenShowSlsWarn&&window.__lumenShowSlsWarn()")
 end
 
 -- tick(): connect to new targets, drain existing ones, drop closed ones.
