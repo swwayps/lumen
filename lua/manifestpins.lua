@@ -297,7 +297,13 @@ function mp.add_additional_app(text, appid)
     if stripped == "" or stripped:match("^#") then
       -- comment/blank: belongs to whatever follows; skip
     else
-      local entry_indent, rest = lines[i]:match("^(%s+)%-%s+(.*)$")
+      -- %s* (not %s+): block-sequence items may sit at ZERO indentation
+      -- ("- 123" flush-left is valid YAML under a mapping key). Requiring a
+      -- leading space here made a zero-indent list break the loop immediately,
+      -- so the new entry was inserted at the fallback 2-space indent right
+      -- after the header -> mixed indentation that yaml-cpp rejects, bricking
+      -- Steam at startup (see .kiro/config_parse_abort_analysis.md).
+      local entry_indent, rest = lines[i]:match("^(%s*)%-%s+(.*)$")
       if not entry_indent then break end  -- next top-level key ends the block
       indent = entry_indent
       last_entry_idx = i
@@ -343,7 +349,10 @@ function mp.remove_additional_app(text, appid)
     if stripped == "" or stripped:match("^#") then
       -- comment/blank: belongs to whatever follows; skip
     else
-      local _, rest = lines[i]:match("^(%s+)%-%s+(.*)$")
+      -- %s* (not %s+): match flush-left "- 123" items too (valid YAML). The
+      -- old %s+ made a zero-indent list break the loop on its first item, so
+      -- removal silently failed (reported not_present, left the id in place).
+      local _, rest = lines[i]:match("^(%s*)%-%s+(.*)$")
       if not rest then break end  -- next top-level key ends the block
       local id = math.tointeger(tonumber((rest:gsub("#.*$", ""):gsub("%s+$", ""))))
       if id == appid then target_idx = i; break end

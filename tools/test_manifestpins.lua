@@ -557,6 +557,22 @@ do
 
   local _, st4 = mp.add_additional_app("AdditionalApps: [1, 2]\n", 444)
   eq(st4, "inline_refused", "add_app: refuses inline-list form")
+
+  -- Regression (config_parse_abort_analysis.md): a list whose items sit at
+  -- ZERO indentation (valid YAML) must NOT get the new entry inserted at a
+  -- 2-space indent -- that mixed indentation makes yaml-cpp reject the whole
+  -- config and can brick Steam at startup. The new entry must match the
+  -- existing items' indentation.
+  local z, zs = mp.add_additional_app("AdditionalApps:\n- 111\n- 222\nLogLevel: 2\n", 333)
+  eq(zs, "added", "add_app(zero-indent): reports added")
+  check(z:find("\n- 333\n", 1, true) ~= nil,
+    "add_app(zero-indent): new entry inserted at 0 indent (matches the list)")
+  check(z:find("  - 333", 1, true) == nil,
+    "add_app(zero-indent): NOT inserted at 2-space indent (no mixed indentation)")
+  check(z:find("- 111", 1, true) ~= nil and z:find("- 222", 1, true) ~= nil,
+    "add_app(zero-indent): existing entries preserved")
+  local _, zdup = mp.add_additional_app(z, 111)
+  eq(zdup, "already_present", "add_app(zero-indent): idempotent on an existing 0-indent id")
 end
 
 -- ── 14. ImportLuaFull: load a .lua for a game NOT added via LuaTools ───────
@@ -811,6 +827,16 @@ do
 
   local _, st3 = mp.remove_additional_app("AdditionalApps: [1, 2]\n", 1)
   eq(st3, "inline_refused", "remove_app: inline list refused")
+
+  -- Regression: a ZERO-indent list ("- 555" flush-left) must still be
+  -- editable. The old %s+ matcher broke the loop on the first item, so removal
+  -- silently reported not_present and left the id in place.
+  local zbase = "AdditionalApps:\n- 555\n- 700\nLogLevel: 2\n"
+  local zout, zst = mp.remove_additional_app(zbase, 555)
+  eq(zst, "removed", "remove_app(zero-indent): status removed")
+  check(not zout:find("%- 555"), "remove_app(zero-indent): 555 gone")
+  check(zout:find("\n- 700\n") ~= nil, "remove_app(zero-indent): sibling kept")
+  check(zout:find("LogLevel: 2") ~= nil, "remove_app(zero-indent): other keys kept")
 end
 
 -- ── 19. DeleteBuild / DeleteAll / clear keeps LuaTools build ───────────────
