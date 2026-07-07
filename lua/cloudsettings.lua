@@ -574,7 +574,8 @@ function cloudsettings.list_apps(storage_root, account_names_override)
     if a.appid ~= b.appid then return a.appid < b.appid end
     return a.account < b.account
   end)
-  return json.encode({ success = true, accounts = accounts, apps = apps })
+  return json.encode({ success = true, accounts = json.array(accounts),
+                       apps = json.array(apps) })
 end
 
 -- Read the stored refresh token for a provider (nil if absent/empty).
@@ -598,7 +599,7 @@ function cloudsettings.remote_appids(config_path, account, deps)
   local cfg = cloudsettings.read_config(config_path)
   local provider = cfg.provider or "local"
   if provider ~= "gdrive" and provider ~= "onedrive" then
-    return json.encode({ success = true, appids = {}, provider = provider, reason = "local" })
+    return json.encode({ success = true, appids = json.array({}), provider = provider, reason = "local" })
   end
   local rt = read_refresh_token(config_path, provider, cfg)
   if not rt then
@@ -610,7 +611,7 @@ function cloudsettings.remote_appids(config_path, account, deps)
   if not ok then return json.encode({ success = false, error = "cloudremote unavailable" }) end
   local appids, err = cr.list_appids(provider, rt, acct, deps)
   if not appids then return json.encode({ success = false, error = tostring(err), provider = provider }) end
-  return json.encode({ success = true, appids = appids, provider = provider })
+  return json.encode({ success = true, appids = json.array(appids), provider = provider })
 end
 
 -- ── registration ────────────────────────────────────────────────────────────

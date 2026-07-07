@@ -24,6 +24,10 @@ if ok then
   return {
     encode = cjson.encode,
     decode = function(s) return normalize(cjson.decode(s)) end,
+    -- Mark a table so it always encodes as a JSON array `[]`, even when empty.
+    -- cjson otherwise encodes an empty Lua table as an object `{}`, which breaks
+    -- JS consumers that expect an array (`.filter`, `.length`, …).
+    array = function(t) return setmetatable(t or {}, cjson.array_mt) end,
   }
 end
 
@@ -140,4 +144,7 @@ end
 
 json.encode = encode
 json.decode = decode
+-- The pure encoder already emits `[]` for empty and sequence tables (keys 1..n),
+-- so array-marking is a no-op here; provided for API parity with the cjson path.
+json.array = function(t) return t or {} end
 return json

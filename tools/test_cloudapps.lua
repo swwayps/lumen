@@ -111,5 +111,17 @@ eq(empty.success, true, "missing root still succeeds")
 eq(#empty.apps, 0, "missing root -> no apps")
 eq(#empty.accounts, 0, "missing root + no loginusers -> no accounts")
 
+-- The frontend does `allApps = r.apps || []` then `allApps.filter(...)`. An
+-- empty apps/accounts list MUST serialize as a JSON array `[]`, not an object
+-- `{}` — under cjson an empty Lua table encodes as `{}` by default, which makes
+-- the JS `.filter`/`.length`/default-account logic break ("allApps.filter is
+-- not a function") on a clean machine with no local saves. Assert the raw
+-- STRING (round-tripping through json.decode hides this).
+do
+  local raw = cs.list_apps(root .. "/nope", {})
+  ok(raw:find('"apps"%s*:%s*%[%]'), "empty apps serializes as [] not {} (got: " .. raw .. ")")
+  ok(raw:find('"accounts"%s*:%s*%[%]'), "empty accounts serializes as [] not {} (got: " .. raw .. ")")
+end
+
 os.execute("rm -rf '" .. root .. "'")
 print("test_cloudapps: ALL PASS")
