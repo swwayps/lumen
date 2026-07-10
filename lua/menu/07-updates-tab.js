@@ -238,8 +238,8 @@
     };
 
     var latest = verRow({
-      label: GU.latest, selected: !game.locked && !_providersOffline,
-      disabled: _providersOffline,
+      label: GU.latest, selected: !game.locked && !_providersOffline && !game.offline,
+      disabled: _providersOffline || game.offline,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
           .then(function () { select(latest); setLocked(false); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
@@ -254,7 +254,7 @@
       var badges = [];
       if (b.installed) badges.push({ cls: "cur", text: GU.current });
       if (b.fromLua) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
-      var isSelected = (game.locked && b.pinned) || (_providersOffline && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
+      var isSelected = (game.locked && b.pinned) || ((_providersOffline || game.offline) && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
       var row = verRow({
         label: fmtDate(b.date), selected: isSelected, badges: badges,
         onClick: function () {

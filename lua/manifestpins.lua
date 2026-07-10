@@ -570,6 +570,18 @@ local function is_providers_offline()
   return false
 end
 
+local function is_game_offline(appid)
+  local h = home()
+  if h == "" then return false end
+  local p = h .. "/.config/SLSsteam/offline_" .. tostring(appid)
+  local f = io.open(p, "rb")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
 local function steam_root_guess()
   local h = home()
   if h == "" then return nil end
@@ -943,6 +955,7 @@ function mp.build_games(ctx)
         games[#games + 1] = {
           appid = appid,
           locked = appPins.locked or false,
+          offline = is_game_offline(appid),
           depots = depots,
           dlc_appids = parsed.dlc_appids,
           fromLuaFile = imports[appid] == true,
