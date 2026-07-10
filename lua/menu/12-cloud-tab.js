@@ -6,8 +6,7 @@
 // in (OAuth in the backend, browser-driven), toggle the two stats switches. All
 // state lives in the hook's ~/.config/CloudRedirect file contract; this tab
 // only drives the LumenCloud* backend RPCs. No folder picker (the local path is
-// fixed) and no schema toggle (it's a technical prerequisite, kept on) — see
-// the design doc §4/§5.
+// fixed) and no schema toggle (it's a technical prerequisite, kept on).
 
   // Poll handle for an in-flight sign-in, so switching tabs / re-rendering
   // cancels it instead of leaking a timer.

@@ -232,7 +232,7 @@ end
 
 -- set_toggle(config_path, key, value) -> {success[,error]}. Only the two user
 -- stats switches are writable; schema_fetch and the master stats_sync_enabled
--- keep their hook defaults (see the design doc §5).
+-- keep their hook defaults.
 function cloudsettings.set_toggle(config_path, key, value)
   if key ~= "sync_achievements" and key ~= "sync_playtime" then
     return json.encode({ success = false, error = "unknown toggle" })

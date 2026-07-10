@@ -1,5 +1,4 @@
 -- manifestpins: backend for the Lumen settings menu's "Game Updates" tab
--- (game-updates-pinning design §5).
 --
 -- Assembles the per-game version tree from on-disk data ONLY (no PICS / binary
 -- product-info parsing) and reads/writes the `ManifestPins:` map in
@@ -301,8 +300,8 @@ function mp.add_additional_app(text, appid)
       -- ("- 123" flush-left is valid YAML under a mapping key). Requiring a
       -- leading space here made a zero-indent list break the loop immediately,
       -- so the new entry was inserted at the fallback 2-space indent right
-      -- after the header -> mixed indentation that yaml-cpp rejects, bricking
-      -- Steam at startup (see .kiro/config_parse_abort_analysis.md).
+      -- after the header -> mixed indentation that yaml-cpp rejects, causing
+      -- parser failures.
       local entry_indent, rest = lines[i]:match("^(%s*)%-%s+(.*)$")
       if not entry_indent then break end  -- next top-level key ends the block
       indent = entry_indent
@@ -537,7 +536,7 @@ end
 
 -- drop_installed_depot(acf_text, depot) -> new_text, removed_bool. Removes the
 -- "<depot>" { ... } entry from an appmanifest's InstalledDepots block so Steam
--- replans a FRESH install of that depot at the pinned gid (Approach A). Pure,
+-- replans a FRESH install of that depot at the pinned gid. Pure,
 -- brace-balanced VDF edit; no-op (text unchanged, false) when the depot isn't
 -- listed. The id is matched quoted so a shorter id can't match a longer one.
 -- Callers must only apply this with Steam closed (editing a live .acf is racy).
@@ -872,7 +871,7 @@ local function archived_versions(manifests_dir, depot)
   return versions
 end
 
--- build_games(ctx) -> array of games (design §5 GetGameUpdates payload).
+-- build_games(ctx) -> array of games.
 -- ctx: { config_path, stplug_dir, manifests_dir, steam_root }.
 function mp.build_games(ctx)
   ctx = ctx or mp.default_ctx()

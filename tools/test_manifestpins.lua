@@ -612,7 +612,7 @@ do
   eq(pins[3357650].depots[3357651], "2417499809052404547", "full: depot pinned")
 
   -- a .lua with NO setManifestid still imports the game (pinned=0, unlocked):
-  -- the §3.3 "not installed yet" path installs at latest.
+  -- the fallback path installs at latest.
   local lua2 = "addappid(777)\naddappid(778,1,\"k\")\n"
   local res2 = json.decode(mp.import_lua_full_rpc(ctx, json.encode({ lua = lua2 })))
   eq(res2.success, true, "full: no-pin .lua still imports")
@@ -674,10 +674,9 @@ do
   os.execute("rm -rf '" .. root .. "'")
 end
 
--- ── 16. drop_installed_depot (Approach A: pure appmanifest .acf transform) ──
+-- ── 16. drop_installed_depot (pure appmanifest .acf transform) ──
 -- Removing the base content depot from InstalledDepots makes Steam plan a FRESH
--- install of that depot at the pinned gid (the content mechanism a pin alone
--- can't provide, per HANDOFF v2 §8/§9). Pure text transform only; whether/how to
+-- install of that depot at the pinned gid. Pure text transform only; whether/how to
 -- flip StateFlags and the live download behavior (delta vs full ~35 GB) are
 -- validated separately on a real install — this never edits a live .acf itself.
 do
