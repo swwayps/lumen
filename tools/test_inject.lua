@@ -12,6 +12,230 @@ local injector = require("injector")
 
 local function assert_true(c, m) if not c then error("FAIL: " .. (m or "")) end end
 
+do
+  local file = assert(io.open("lua/boot.lua", "r"))
+  local source = file:read("*a"); file:close()
+  assert_true(source:find("delete window.__lumenThemePaletteSeed", 1, true),
+    "disabling themes clears the cross-context palette seed")
+  assert_true(source:find('os.getenv("LUMEN_THEME_PRELOAD_ONLY") == "1"', 1, true)
+      and source:find('early_preload.stage(early_runtime)', 1, true)
+      and source:find('early_preload.sync(nil)', 1, true)
+      and source:find("os.exit(early_runtime and 10 or 0)", 1, true),
+    "preflight cleans the verified index and stages helpers outside SteamUI")
+  assert_true(source:find('os.getenv("LUMEN_THEME_PRELOAD_ACTIVE") == "1"', 1, true),
+    "CDP is skipped only when the launcher also enabled Steam's loose-file override")
+  assert_true(source:find('local themepreload = require("themepreload")', 1, true)
+      and source:find("themepreload.stage(runtime)", 1, true)
+      and source:find("if preload_ok and clean_previous then", 1, true),
+    "boot stages initial helpers and commits only during an in-session reload")
+  assert_true(source:find("if not preloaded then", 1, true)
+      and source:find("js={runtime.popup_guard_hook},", 1, true)
+      and source:find("deferred_js={runtime.popup_hook}", 1, true),
+    "CDP retains an ordered fallback only when the file preloader is unavailable")
+  assert_true(source:find("login_browser_gateway=true", 1, true)
+      and source:find("login_guard_source=runtime.popup_guard_hook", 1, true)
+      and source:find("login_theme_source=runtime.popup_hook", 1, true),
+    "cold boot exposes both ordered hooks to the manual browser observer")
+  assert_true(source:find("js={runtime.popup_hook}", 1, true),
+    "normal SharedJSContext routing installs the complete popup theme hook")
+end
+
+-- A cold-boot theme hook must reach SharedJSContext before Steam creates its
+-- first popup, without enabling the heavier Page/binding/ready-probe machinery
+-- that previously stalled or blanked startup. Once the shell is ready the
+-- connection is replaced by the normal full channel.
+do
+  assert_true(type(injector.connection_plan) == "function",
+    "injector exposes the connection plan used by CDP connections")
+  local early = injector.connection_plan(true)
+  assert_true(early.runtime == true and early.inject_immediately == true
+      and early.reinject_immediately == true,
+    "early connection evaluates its hook immediately, including after recreation")
+  assert_true(not early.page and not early.binding and not early.ready_probe
+      and not early.visibility_probe and not early.fetch,
+    "early connection does not activate heavyweight boot-time CDP domains")
+  local full = injector.connection_plan(false)
+  assert_true(full.runtime and full.page and full.binding and full.ready_probe,
+    "normal connection retains the complete injector setup")
+  local themed_full = injector.connection_plan(false, true)
+  assert_true(themed_full.bypass_csp == true,
+    "a themed connection enables CSP bypass before loading theme JavaScript")
+  assert_true(not injector.connection_plan(false, false).bypass_csp,
+    "an ordinary connection does not weaken CSP")
+  assert_true(type(injector.discovery_retry_delay) == "function"
+      and injector.discovery_retry_delay(false, 15) <= 0.25,
+    "cold boot polls fast enough to observe SharedJSContext before first paint")
+end
+
+-- Changing account restarts steamwebhelper: the SharedJSContext websocket gets
+-- a new identity, then the login popup is created roughly one second later.
+-- A manager that stays latched in full/UI-ready mode misses that pre-paint
+-- window and applies the theme several seconds after the default UI is shown.
+-- A new SharedJSContext generation must therefore return discovery to the
+-- lightweight early-hook phase and discard connections from the dead helper.
+do
+  local state = injector.new({channels={}, registry={}})
+  local stale_closed = false
+  state.ui_ready = true
+  state.shared_ws_url = "ws://localhost:8080/devtools/page/OLD"
+  state.early_grace_deadline = 99
+  state.theme_reload_pending = true
+  state.theme_reload_deadline = 99
+  state.conns[state.shared_ws_url] = { close=function() stale_closed=true end }
+  assert_true(type(state.observe_shared_generation) == "function",
+    "injector state exposes SharedJSContext generation tracking")
+  local changed = state:observe_shared_generation({{
+    title="SharedJSContext",
+    webSocketDebuggerUrl="ws://localhost:9090/devtools/page/NEW",
+  }})
+  assert_true(changed == true, "a replaced SharedJSContext is a new bootstrap generation")
+  assert_true(state.ui_ready == false,
+    "new SharedJSContext returns discovery to the early-hook phase")
+  assert_true(stale_closed and next(state.conns) == nil,
+    "connections owned by the dead webhelper generation are discarded")
+  assert_true(state.early_grace_deadline == nil and state.theme_reload_pending == nil,
+    "old generation timing gates cannot delay the new early hook")
+end
+
+-- Steam replaces the renderer context of pre-created popup targets during
+-- boot. Every target-scoped CDP domain required by theme delivery must be
+-- restored before links are injected into that new context; otherwise the
+-- virtual stylesheet requests fail until Lumen itself is restarted.
+do
+  assert_true(type(injector.recreation_plan) == "function",
+    "injector exposes its renderer-recreation plan")
+  local themed = injector.recreation_plan(false, true, true)
+  assert_true(themed.page and themed.fetch and themed.binding and themed.ready_probe
+      and themed.bypass_csp,
+    "themed renderer recreation restores CSP/Fetch before reinjection")
+  local ordinary = injector.recreation_plan(false, false)
+  assert_true(ordinary.page and not ordinary.fetch and ordinary.binding,
+    "ordinary renderer recreation avoids an unnecessary Fetch domain")
+  local early = injector.recreation_plan(true, true)
+  assert_true(early.reinject_immediately and not early.fetch and not early.binding,
+    "early popup hook remains lightweight during recreation")
+end
+
+do
+  local expr = injector.theme_transition_expr()
+  assert_true(expr:find("lumen%-theme%-transition") ~= nil,
+    "theme reload transition has a stable cleanup id")
+  assert_true(expr:find("8s", 1, true) ~= nil and expr:find("@keyframes", 1, true) ~= nil,
+    "theme reload transition has a fail-safe timeout")
+end
+
+-- Theme delivery must be installed on the browser-level CDP endpoint before
+-- Steam creates any renderer target. This is what makes virtual font/image
+-- requests available to login popups and lets the SharedJSContext hook enter
+-- the document before the first themed window can paint. With no active theme
+-- there is no gateway config (and therefore no browser Fetch overhead).
+do
+  local provider = function() return "asset", "font/woff2" end
+  local themed = {{all=true, compose=true, assets={
+    browser_gateway=true,
+    virtual_provider=provider,
+    document_bootstrap_url="https://lumen-theme.local/T/V/__lumen_bootstrap.js",
+    document_bootstrap_source="/* popup hook */",
+  }}}
+  assert_true(type(injector.theme_gateway_config) == "function",
+    "injector exposes browser theme-gateway selection")
+  local gateway = injector.theme_gateway_config(themed)
+  assert_true(gateway and gateway.virtual_provider == provider,
+    "active theme exposes its virtual provider to the browser gateway")
+  assert_true(gateway.bypass_csp == false,
+    "theme JavaScript CSP bypass is opt-in in the channel assets")
+  assert_true(type(gateway.document_bootstrap_source) == "string"
+      and gateway.document_bootstrap_source:find("popup hook", 1, true),
+    "active theme exposes its pre-document bootstrap source")
+  assert_true(injector.theme_gateway_config({{assets={js={"ordinary"}}}}) == nil,
+    "ordinary Lumen channels do not activate browser Fetch")
+  assert_true(injector.theme_gateway_config({{assets={
+      virtual_provider=provider,
+      document_bootstrap_source="hook",
+    }}}) == nil,
+    "theme assets do not activate experimental browser auto-attach without opt-in")
+
+  local login_channels = {{assets={
+    login_browser_gateway=true,
+    login_guard_source="/* tiny guard */",
+    login_theme_source="/* compiled popup theme */",
+  }}}
+  local login_gateway = injector.login_theme_gateway(login_channels, false)
+  assert_true(login_gateway and login_gateway.login_only == true
+      and login_gateway.login_guard_source:find("tiny guard", 1, true)
+      and login_gateway.login_theme_source:find("compiled popup theme", 1, true),
+    "pre-login observer exposes an ordered guard and compiled theme")
+  assert_true(injector.login_theme_gateway(login_channels, true) == nil,
+    "pre-login observer is removed after Steam's main UI is ready")
+  assert_true(injector.login_theme_gateway({{assets={js={"ordinary"}}}}, false) == nil,
+    "ordinary Lumen channels never allocate the pre-login observer")
+
+  assert_true(type(injector.browser_fetch_patterns) == "function",
+    "injector exposes browser Fetch patterns")
+  local patterns = injector.browser_fetch_patterns(gateway)
+  assert_true(#patterns == 1, "each renderer installs only the virtual-file Fetch pattern")
+  assert_true(patterns[1].urlPattern == "https://lumen-theme.local/*"
+      and patterns[1].requestStage == "Request",
+    "virtual theme files are fulfilled before network access")
+  assert_true(type(injector.browser_auto_attach_params) == "function",
+    "injector exposes the renderer startup gate")
+  local attach = injector.browser_auto_attach_params(true)
+  assert_true(attach.autoAttach == true and attach.flatten == true
+      and attach.waitForDebuggerOnStart == false,
+    "Steam CEF targets are observed without its unreliable debugger startup pause")
+  local detach = injector.browser_auto_attach_params(false)
+  assert_true(detach.autoAttach == false and detach.waitForDebuggerOnStart == false,
+    "disabling themes removes the renderer startup gate")
+  assert_true(type(injector.document_bootstrap_params) == "function",
+    "injector exposes pre-document hook registration")
+  local prepared = injector.document_bootstrap_params("new-theme", false)
+  assert_true(prepared.source == "new-theme" and prepared.runImmediately == nil,
+    "a theme switch registers the new hook without applying it to the old context")
+  local recovery = injector.document_bootstrap_params("active-theme", true)
+  assert_true(recovery.runImmediately == true,
+    "attaching to an already-running Steam context can recover its active theme")
+  assert_true(type(injector.renderer_startup_plan) == "function",
+    "injector exposes paused-renderer command ordering")
+  local fresh = injector.renderer_startup_plan(true)
+  assert_true(fresh.resume_after_queue == true and fresh.wait_for_setup_results == false,
+    "a debugger-paused renderer resumes after setup is queued, without deadlocking on replies")
+  local existing = injector.renderer_startup_plan(false)
+  assert_true(existing.resume_after_queue == false and existing.wait_for_setup_results == true,
+    "an already-running renderer may wait for setup acknowledgements")
+
+  -- Change Account reuses the already-created "Welcome to Steam" target and
+  -- navigates it to a fresh document.  Registering the bootstrap only in
+  -- SharedJSContext cannot cover that navigation: the target paints Valve's
+  -- default document and receives the theme later from the ready-state path.
+  -- Every page session owned by the browser gateway therefore needs its own
+  -- evaluate-on-new-document registration; non-page targets must stay untouched.
+  assert_true(type(injector.browser_target_setup_plan) == "function",
+    "injector exposes per-renderer browser setup planning")
+  local welcome = injector.browser_target_setup_plan(
+    {type="page", title="Welcome to Steam"}, false)
+  assert_true(welcome.bootstrap == true and welcome.run_immediately == true,
+    "an existing account target installs and immediately recovers its document bootstrap")
+  local future = injector.browser_target_setup_plan(
+    {type="page", title="Account Menu"}, false, true)
+  assert_true(future.bootstrap == true and future.run_immediately == true
+      and future.bypass_csp == true,
+    "a future popup is recovered immediately and receives the opted-in CSP bypass")
+  local worker = injector.browser_target_setup_plan({type="worker"}, true)
+  assert_true(worker.bootstrap == false,
+    "non-document targets do not receive theme document scripts")
+  assert_true(type(injector.shared_theme_target) == "function"
+      and injector.shared_theme_target({type="page", title="SharedJSContext"})
+      and injector.shared_theme_target({type="page",
+        url="https://steamloopback.host/?IN_STEAMUI_SHARED_CONTEXT=true"}),
+    "manual observer identifies SharedJSContext as soon as discovery reports it")
+  assert_true(not injector.shared_theme_target({type="page", title="Sign in to Steam"})
+      and not injector.shared_theme_target({type="worker", title="SharedJSContext"}),
+    "manual observer never attaches to visible or non-page targets")
+  assert_true(injector.browser_uses_auto_attach(login_gateway) == false
+      and injector.browser_uses_auto_attach(gateway) == true,
+    "the login observer uses manual SharedJSContext attachment, never Target.setAutoAttach")
+end
+
 local SAMPLE = {
   { title = "Steam",           url = "about:blank",                          webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/A" },
   { title = "SharedJSContext", url = "https://steamloopback.host/index.html", webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/B" },
@@ -19,6 +243,32 @@ local SAMPLE = {
   { title = "Community",       url = "https://steamcommunity.com/app/440",   webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/D" },
   { title = "Friends",         url = "https://steamcommunity.com/chat",      webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/E" },
 }
+
+-- Theme routing is staged and must not replace live channels until the reload
+-- transaction commits it. The SharedJSContext control socket survives long
+-- enough to issue RestartJSContext; themed UI sockets are closed beforehand.
+do
+  local old_channels, new_channels = {{id="old"}}, {{id="new"}}
+  local state = injector.new({channels=old_channels, registry={}})
+  local shell_closed, shared_closed = false, false
+  state.conns = {
+    shell = {title="Steam", close=function() shell_closed=true end},
+    shared = {title="SharedJSContext", assets={js={"old-theme"}},
+      close=function() shared_closed=true end},
+  }
+  state:queue_channels(new_channels)
+  assert_true(state.channels == old_channels, "staging does not alter live theme channels")
+  assert_true(state.pending_channels == new_channels, "new theme channels are staged")
+  assert_true(state:commit_pending_channels(), "staged channels commit for reload")
+  assert_true(state.channels == new_channels, "reload sees the new channels")
+  assert_true(state.theme_reload_pending == true,
+    "UI discovery is gated until the new JavaScript context exists")
+  assert_true(shell_closed, "old themed UI connection closes before reload")
+  assert_true(not shared_closed and state.conns.shared ~= nil,
+    "SharedJSContext control survives to issue reload")
+  assert_true(state.conns.shared.assets == nil,
+    "preserved control socket cannot re-inject the old theme into the new context")
+end
 
 -- select_targets(targetsList, wantedTitles, wantedUrlFragments) is the pure
 -- matcher the injector uses to decide which CEF targets receive the assets.

@@ -7,6 +7,32 @@
 -- when it's actually present; when it isn't, run in "settings-menu only" mode
 -- instead of aborting the whole sidecar (an unguarded dofile of a missing
 -- main.lua used to kill Lumen at boot, taking the menu down with it).
+--
+-- The Steam wrapper invokes this tiny mode synchronously before it starts the
+-- client. It restores the verified index and stages the compiled helpers
+-- outside Steam's tree. The native exec gate publishes them only after Steam's
+-- updater has finished and immediately before steamwebhelper starts. This path
+-- loads no plugin backend and opens no socket.
+if os.getenv("LUMEN_THEME_PRELOAD_ONLY") == "1" then
+  local early_themes = require("themes")
+  local early_runtime = require("themeengine").build(early_themes.load_config())
+  local early_preload = require("themepreload")
+  -- Restore the verified file before Steam's updater sees it. Theme helpers
+  -- are staged outside SteamUI; the native exec gate publishes them only after
+  -- verification, immediately before steamwebhelper.
+  local clean_ok, clean_err = early_preload.sync(nil)
+  local stage_ok, stage_err = early_preload.stage(early_runtime)
+  if not clean_ok or not stage_ok then
+    io.stderr:write("[lumen] theme preflight failed: " ..
+      tostring(clean_err or stage_err) .. "\n")
+    os.exit(1)
+  end
+  -- Exit 10 is a private launcher contract: the files are ready and Steam
+  -- must enable its loose SteamUI override.  Exit 0 means default/disabled,
+  -- so the launcher adds no flag and Steam keeps its packed web resources.
+  os.exit(early_runtime and 10 or 0)
+end
+
 local backend = os.getenv("LUMEN_BACKEND_DIR") or ""
 local have_plugin = false
 local lifecycle
@@ -86,6 +112,7 @@ end
 local millennium = require("millennium")
 local utils = require("utils")
 local polyfill = require("polyfill")
+local json = require("json")
 local plugin_dir = backend:gsub("/backend$", "")
 
 local function read_asset(rel)
@@ -146,6 +173,14 @@ if have_cloudredirect then
   require("cloudsettings").register(registry)
 end
 
+-- Millennium-compatible client themes. Registration is cheap and exposes the
+-- settings API; the engine itself is built only when themes are explicitly
+-- enabled and an active theme exists.
+local themes = require("themes")
+themes.register(registry)
+local themeengine = require("themeengine")
+local themepreload = require("themepreload")
+
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
@@ -160,10 +195,10 @@ local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
   "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "12-cloud-tab.js",
-  "13-sls-check.js", "11-menubar.js",
+  "13-sls-check.js", "14-themes-tab.js", "11-menubar.js",
 }
 
-local function read_menu_js()
+local function read_menu_js(shell_target, browser_target, theme_key)
   local parts = {}
   for _, name in ipairs(MENU_PARTS) do
     local chunk = utils.read_file(lua_dir .. "/menu/" .. name)
@@ -179,14 +214,17 @@ local function read_menu_js()
   -- separate statement BEFORE the menu IIFE so it's in scope when the IIFE runs.
   local prefix = "window.__lumenNoPlugin=" .. (have_plugin and "false" or "true") .. ";\n"
     .. "window.__lumenCloud=" .. (have_cloudredirect and "true" or "false") .. ";\n"
+    .. "window.__lumenShellTarget=" .. (shell_target and "true" or "false") .. ";\n"
+    .. "window.__lumenBrowserTarget=" .. (browser_target and "true" or "false") .. ";\n"
+    .. "window.__lumenConfiguredTheme=" .. json.encode(theme_key or "") .. ";\n"
   return prefix .. table.concat(parts, "\n")
 end
 
 -- build_menu_assets() -> assets for the main window ("Steam"): polyfill +
 -- lumen_menu.js (the full-moon button + settings overlay).
-local function build_menu_assets()
+local function build_menu_assets(shell_target, theme_key)
   local js = {}
-  local menu_js = read_menu_js()
+  local menu_js = read_menu_js(shell_target, false, theme_key)
   if menu_js then js[#js + 1] = menu_js end
   return { polyfill = polyfill.build(), css = {}, js = js }
 end
@@ -199,9 +237,9 @@ end
 -- couldn't receive input. lumen_menu.js adds no menubar button here (there's no
 -- menubar in a web view); it only exposes window.__lumenOpenOverlay so the
 -- sidecar can open/close it on demand. See injector State:broadcast_overlay.
-local function build_webview_assets()
+local function build_webview_assets(theme_key)
   local base = build_assets()
-  local menu_js = read_menu_js()
+  local menu_js = read_menu_js(false, true, theme_key)
   if menu_js then base.js[#base.js + 1] = menu_js end
   return base
 end
@@ -222,14 +260,96 @@ pcall(function() require("deskcover").run("--user") end)
 -- lumen_menu.js bundle is deliberately minimal and shell-safe. The menubar
 -- button broadcasts open/close to every context so the overlay renders in
 -- whichever view is currently on top (see injector State:broadcast_overlay).
+local THEME_CLEANUP_JS = [[(function(){
+  Array.from(document.querySelectorAll('[id^="lumen-theme-"]')).forEach(function(n){n.remove()});
+  var c=document.getElementById('lumen-luatools-icon-compat');if(c)c.remove();
+  var t=document.getElementById('lumen-theme-transition');if(t)t.remove();
+  var ts=document.getElementById('lumen-theme-transition-style');if(ts)ts.remove();
+  try{delete window.__lumenThemeApplied}catch(e){window.__lumenThemeApplied=undefined}
+  try{delete window.__lumenThemePaletteSeed}catch(e){window.__lumenThemePaletteSeed=undefined}
+  ['bg','panel','side','raised','text','muted','accent','border'].forEach(function(n){
+    document.documentElement.style.removeProperty('--lumen-theme-'+n);
+  });
+})()]]
+
+local function build_channels(theme_config, clean_previous)
+  local configured = theme_config or themes.load_config()
+  local theme_key = ""
+  if configured and configured.enabled == true and type(configured.active) == "string" then
+    theme_key = configured.active
+  end
+  local out = {
+    { urls = { "store.steampowered.com", "steamcommunity.com" }, browser = true,
+      assets = build_webview_assets(theme_key) },
+    -- Steam's browser view is exposed by recent clients as a data: tracking
+    -- target even while it renders Store/Community. It needs the lightweight
+    -- menu bundle so the overlay can render above that composited view.
+    { title_patterns = { "^data:text/html" }, browser = true,
+      assets = build_menu_assets(false, theme_key) },
+    -- Title can be empty for the first seconds after RestartJSContext. The
+    -- stable browserType=4 flag identifies the main client shell before React
+    -- assigns the "Steam" title, preventing a theme-only connection from
+    -- claiming it first and leaving the Lumen access button absent.
+    { titles = { ["Steam"] = true }, urls = { "browserType=4" },
+      assets = build_menu_assets(true, theme_key) },
+    { titles = { ["SharedJSContext"] = true }, control = true },
+  }
+  if clean_previous then
+    out[#out+1] = { all=true, compose=true,
+      assets={ polyfill=nil, css={}, js={THEME_CLEANUP_JS} } }
+  end
+  local runtime = themeengine.build(configured)
+  local preloaded = false
+  local native_preload = os.getenv("LUMEN_THEME_PRELOAD_ACTIVE") == "1"
+  local preload_ok, preload_state
+  if native_preload then
+    preload_ok, preload_state = themepreload.stage(runtime)
+    -- During an in-session theme switch the updater is long gone, so commit
+    -- the new staged runtime before RestartJSContext. Initial boot is committed
+    -- by the native pre-webhelper gate instead.
+    if preload_ok and clean_previous then
+      preload_ok, preload_state = themepreload.sync(runtime)
+    end
+  elseif not runtime then
+    preload_ok, preload_state = themepreload.sync(nil)
+    themepreload.stage(nil)
+  else
+    preload_ok = true
+  end
+  if preload_ok then
+    preloaded = runtime ~= nil and native_preload
+  elseif runtime then
+    io.stderr:write("[lumen] WARN: theme preloader unavailable; using CDP fallback: "
+      .. tostring(preload_state) .. "\n")
+  end
+  if runtime then
+    -- On a normal native Steam install the file preloader has already armed
+    -- PopupManager before library.js.  Keep the CDP path only as a read-only or
+    -- unknown-layout fallback; evaluating the multi-megabyte popup hook twice
+    -- stalls Steam's UI and was the remaining source of visible blinking.
+    if not preloaded then
+      out[#out+1] = { titles={ ["SharedJSContext"]=true }, compose=true, early=true,
+        assets={polyfill=nil,css={},js={runtime.popup_guard_hook},
+          deferred_js={runtime.popup_hook},login_browser_gateway=true,
+          login_guard_source=runtime.popup_guard_hook,
+          login_theme_source=runtime.popup_hook} }
+      out[#out+1] = { titles={ ["SharedJSContext"]=true }, compose=true,
+        assets={polyfill=nil,css={},js={runtime.popup_hook}} }
+    end
+    out[#out+1] = { all=true, compose=true, assets=runtime.assets }
+  end
+  return out
+end
+local channels = build_channels()
 loop.run({
   registry = registry,
-  channels = {
-    { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = build_webview_assets() },
-    { titles = { ["Steam"] = true }, assets = build_menu_assets() },
-    -- Control-only link to SharedJSContext (NO assets injected): the only context
-    -- with SteamClient. Used to relay SteamClient.Apps.SetAppLaunchOptions on
-    -- behalf of the store-page online-fix flow (which can't reach SteamClient).
-    { titles = { ["SharedJSContext"] = true }, control = true },
-  },
+  channels = channels,
+  on_injector = function(inj)
+    themes.set_apply_callback(function(cfg) inj:queue_channels(build_channels(cfg, true)) end)
+  end,
+  on_exit = function()
+    if os.getenv("LUMEN_THEME_PRELOAD_ACTIVE") == "1" then
+      themepreload.sync(nil)
+    end
+  end,
 })

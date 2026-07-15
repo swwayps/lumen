@@ -25,6 +25,7 @@ function loop.run(opts)
     assets = (not opts.channels) and opts.build_assets and opts.build_assets() or nil,
     registry = opts.registry,
   })
+  if type(opts.on_injector) == "function" then opts.on_injector(inj) end
   -- Exit when Steam is genuinely closed (don't linger as a background process),
   -- but tolerate slow boot (wait until Steam is first seen) and the restart gap
   -- (grace window). Liveness = the main `steam` client process in /proc.
@@ -38,9 +39,9 @@ function loop.run(opts)
   while true do
     local fds = inj:fds()
     if #fds > 0 then
-      socket.select(fds, nil, 1)
+      socket.select(fds, nil, inj:idle_delay())
     else
-      socket.sleep(1)   -- nothing attached yet; idle before re-discovering
+      socket.sleep(inj:idle_delay())
     end
     inj:tick()
 
@@ -53,6 +54,7 @@ function loop.run(opts)
       end
       if watcher:should_exit(now, proc.is_alive("steam")) then
         deskcover.run("--user")        -- final heal before we stop
+        if type(opts.on_exit) == "function" then pcall(opts.on_exit) end
         log("Steam closed -> Lumen exiting")
         os.exit(0)
       end

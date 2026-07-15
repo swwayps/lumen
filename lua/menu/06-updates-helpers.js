@@ -12,6 +12,10 @@
   // Cloud icon for the Cloud Saves tab.
   var CLOUD_SVG = '<svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M12.2 6.5A4 4 0 0 0 4.5 6 3 3 0 0 0 4 12h8a2.75 2.75 0 0 0 .2-5.5z"/></svg>';
 
+  // Dedicated palette icon for the Themes tab. Keep it as inline SVG instead
+  // of a font glyph so Millennium themes cannot replace its icon font.
+  var THEMES_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 1a7 7 0 0 0 0 14h.75a1.75 1.75 0 0 0 1.57-2.52 1.1 1.1 0 0 1 .98-1.6H12A3 3 0 0 0 15 8c0-3.87-3.13-7-7-7ZM5 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm3-1a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm3 1a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM4.5 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>';
+
   // ── Game Updates helpers ────────────────────────────────────────────────
   // appid -> Promise<{name, image}|null>. One store-API "basic" lookup per app,
   // shared by the name label and the capsule fallback (the in-flight promise is
@@ -438,4 +442,3 @@
     if (d.shared) return guStrings().sharedRuntime + " (" + d.depot + ")";
     return guStrings().depot + " " + d.depot;
   }
-

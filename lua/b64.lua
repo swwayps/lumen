@@ -23,4 +23,22 @@ function b64.encode(data)
   return table.concat(out)
 end
 
+function b64.decode(data)
+  if type(data) ~= "string" then return nil, "base64 must be a string" end
+  data = data:gsub("%s", "")
+  if #data % 4 ~= 0 or data:find("[^A-Za-z0-9+/=]") then return nil, "invalid base64" end
+  local rev = {}; for i = 1, #A do rev[A:sub(i,i)] = i - 1 end
+  local out = {}
+  for i = 1, #data, 4 do
+    local c1,c2,c3,c4 = data:sub(i,i),data:sub(i+1,i+1),data:sub(i+2,i+2),data:sub(i+3,i+3)
+    if not rev[c1] or not rev[c2] then return nil, "invalid base64" end
+    local n = (rev[c1] << 18) | (rev[c2] << 12) |
+      ((c3 == "=" and 0 or rev[c3] or 0) << 6) | (c4 == "=" and 0 or rev[c4] or 0)
+    out[#out+1] = string.char((n >> 16) & 255)
+    if c3 ~= "=" then out[#out+1] = string.char((n >> 8) & 255) end
+    if c4 ~= "=" then out[#out+1] = string.char(n & 255) end
+  end
+  return table.concat(out)
+end
+
 return b64

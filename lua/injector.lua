@@ -13,6 +13,7 @@ local httpresp = require("httpresp")
 local polyfill = require("polyfill")
 local rpc = require("rpc")
 local cefport = require("cefport")
+local b64 = require("b64")
 
 local injector = {}
 
@@ -92,6 +93,34 @@ function injector.dispatch_method(registry, fn_name, args)
     return (type(res) == "string") and res or json.encode(res)
   end
   return '{"success":false,"error":' .. json.encode(tostring(res)) .. '}'
+end
+
+-- CDP domains used by each connection class. Cold-boot theme hooks need to be
+-- evaluated in SharedJSContext before Steam creates the first window, but the
+-- full Page/binding/probe setup is intentionally deferred: enabling it during
+-- early client initialization has historically stalled or blanked Steam.
+function injector.connection_plan(early, bypass_csp)
+  if early then
+    return { runtime=true, inject_immediately=true, reinject_immediately=true }
+  end
+  return { runtime=true, page=true, binding=true, fetch=true,
+    ready_probe=true, visibility_probe=true, bypass_csp=bypass_csp == true }
+end
+
+function injector.recreation_plan(early, has_virtual_provider, bypass_csp)
+  if early then return { reinject_immediately=true } end
+  return { runtime=true, page=true, fetch=has_virtual_provider == true,
+    binding=true, ready_probe=true, visibility_probe=true,
+    bypass_csp=bypass_csp == true }
+end
+
+-- Before Steam's UI exists we deliberately avoid exponential backoff: the
+-- SharedJSContext-only interval can be shorter than a second, and missing it
+-- means the default UI paints before the theme hook is installed. After boot,
+-- normal bounded backoff remains appropriate for a disappeared webhelper.
+function injector.discovery_retry_delay(ui_ready, backoff)
+  if not ui_ready then return 0.1 end
+  return math.max(1, math.min(tonumber(backoff) or 1, 15))
 end
 
 local function log(msg)
@@ -174,6 +203,17 @@ local function list_all_targets()
   return targets
 end
 
+-- Browser/root CDP websocket. Fetch enabled here applies to every current and
+-- future renderer, unlike a /devtools/page connection which necessarily starts
+-- after that page already exists (and may already have painted).
+local function browser_ws_url()
+  local body = http_get("/json/version")
+  if not body then return nil end
+  local ok, version = pcall(json.decode, body)
+  if not ok or type(version) ~= "table" then return nil end
+  return version.webSocketDebuggerUrl
+end
+
 -- Is Steam's main UI up (past login + first paint)? SharedJSContext exists even
 -- at the "Sign in" screen, so attaching to ANY target before the main shell is
 -- up interferes with the client coming up (stalls boot / blanks render). We
@@ -196,15 +236,138 @@ local function ui_is_ready()
   return false
 end
 
-local function send_cmd(c, session, method, params)
-  c:send(wsframe.encode_text(session:build_command(method, params)))
+local function send_cmd(c, session, method, params, child_session)
+  local frame = wsframe.encode_text(session:build_command(method, params, child_session))
+  -- CDP sockets run non-blocking while the event loop drains them. A single
+  -- send() is not guaranteed to write a whole large frame (theme CSS responses
+  -- routinely exceed the kernel buffer); truncating it silently makes one
+  -- target miss the theme. Temporarily use a bounded blocking write and honor
+  -- LuaSocket's last-byte index until the entire RFC6455 frame is delivered.
+  c:settimeout(5)
+  local first = 1
+  while first <= #frame do
+    local sent, err, last = c:send(frame, first)
+    local upto = sent or last
+    if not upto or upto < first then c:settimeout(0); return false, err end
+    first = upto + 1
+    if err and err ~= "timeout" then c:settimeout(0); return false, err end
+  end
+  c:settimeout(0)
+  return true
+end
+
+-- Pick the one active custom-theme gateway from the composed channel set.
+-- Normal Lumen channels intentionally do not carry these fields, so disabled
+-- themes allocate no browser socket and enable no Fetch domain at all.
+function injector.theme_gateway_config(channels)
+  for _, channel in ipairs(channels or {}) do
+    local assets = channel.assets
+    if type(assets) == "table"
+        and assets.browser_gateway == true
+        and type(assets.virtual_provider) == "function"
+        and type(assets.document_bootstrap_source) == "string" then
+      return {
+        virtual_provider = assets.virtual_provider,
+        document_bootstrap_source = assets.document_bootstrap_source,
+        shared_bootstrap_source = assets.shared_bootstrap_source
+          or assets.document_bootstrap_source,
+        bypass_csp = assets.bypass_csp == true,
+      }
+    end
+  end
+  return nil
+end
+
+-- A deliberately narrower browser-level observer for the account selector.
+-- Unlike the full theme gateway it enables neither Fetch nor CSP bypass and it
+-- never pauses a renderer. Its only job is registering the already-inline
+-- popup bootstrap before the login document starts executing.
+function injector.login_theme_gateway(channels, ui_ready)
+  if ui_ready then return nil end
+  for _, channel in ipairs(channels or {}) do
+    local assets = channel.assets
+    if type(assets) == "table"
+        and assets.login_browser_gateway == true
+        and type(assets.login_guard_source) == "string"
+        and type(assets.login_theme_source) == "string" then
+      return {
+        login_only = true,
+        login_guard_source = assets.login_guard_source,
+        login_theme_source = assets.login_theme_source,
+      }
+    end
+  end
+  return nil
+end
+
+function injector.shared_theme_target(info)
+  if type(info) ~= "table" or info.type ~= "page" then return false end
+  return info.title == "SharedJSContext"
+    or tostring(info.url or ""):find("IN_STEAMUI_SHARED_CONTEXT=true", 1, true) ~= nil
+end
+
+function injector.browser_uses_auto_attach(gateway)
+  return not (gateway and gateway.login_only == true)
+end
+
+function injector.browser_fetch_patterns(gateway)
+  if not gateway then return {} end
+  return {
+    { urlPattern="https://lumen-theme.local/*", requestStage="Request" },
+  }
+end
+
+function injector.browser_auto_attach_params(enabled)
+  return {
+    autoAttach=enabled == true,
+    -- Steam's CEF 126 can leave PopupManager-owned windows permanently
+    -- suspended when this is true, even after Runtime.runIfWaitingForDebugger.
+    -- Existing/reused targets are prepared ahead of navigation; internal
+    -- popups are covered synchronously by the SharedJSContext hook.
+    waitForDebuggerOnStart=false,
+    flatten=true,
+  }
+end
+
+function injector.document_bootstrap_params(source, run_immediately)
+  local params = {source=source}
+  if run_immediately then params.runImmediately = true end
+  return params
+end
+
+function injector.renderer_startup_plan(waiting_for_debugger)
+  return {
+    -- Fetch.enable/Page.addScript commands are ordered ahead of Runtime.run on
+    -- the same flattened session. Waiting for their replies while the renderer
+    -- itself is debugger-paused deadlocks CEF, so fresh targets resume as soon
+    -- as setup has been queued. Existing targets can await acknowledgements.
+    resume_after_queue=waiting_for_debugger == true,
+    wait_for_setup_results=waiting_for_debugger ~= true,
+  }
+end
+
+function injector.theme_transition_expr()
+  return [[(function(){
+    if(document.getElementById('lumen-theme-transition'))return;
+    var style=document.createElement('style');style.id='lumen-theme-transition-style';
+    style.textContent='@keyframes lumenThemeTimeout{to{opacity:0;visibility:hidden;pointer-events:none}}'+
+      '#lumen-theme-transition{position:fixed;inset:0;z-index:2147483647;display:flex;'+
+      'align-items:center;justify-content:center;background:#101216;color:#b8bcbf;'+
+      'font:14px Arial,sans-serif;animation:lumenThemeTimeout .01s 8s forwards}'+
+      '#lumen-theme-transition:after{content:"";width:28px;height:28px;border:3px solid #59616d;'+
+      'border-top-color:#1a9fff;border-radius:50%;animation:lumenThemeSpin .7s linear infinite}'+
+      '@keyframes lumenThemeSpin{to{transform:rotate(360deg)}}';
+    var cover=document.createElement('div');cover.id='lumen-theme-transition';
+    (document.head||document.documentElement).appendChild(style);
+    (document.body||document.documentElement).appendChild(cover);
+  })()]]
 end
 
 -- ── Per-target connection object ───────────────────────────────────────────
 local Conn = {}
 Conn.__index = Conn
 
-local function conn_new(target, assets, registry, manager)
+local function conn_new(target, assets, registry, manager, browser_target, early)
   return setmetatable({
     title = target.title,
     url = target.url or "",
@@ -212,11 +375,16 @@ local function conn_new(target, assets, registry, manager)
     assets = assets,
     registry = registry,
     manager = manager,      -- the State, for control relays (view hide/show)
+    browser_target = browser_target == true,
+    early = early == true,
     sock = nil,
     session = nil,
     buf = "",
     injected = false,       -- has the first injection happened?
+    deferred_after_id = nil,-- early hook ack that releases the compiled theme
+    deferred_sent = false,
     ready_probe_id = nil,   -- cdp id of the document.readyState probe
+    visibility_probe_id = nil,
   }, Conn)
 end
 
@@ -225,6 +393,26 @@ function Conn:_probe_ready()
   self.ready_probe_id = self.session._id + 1
   send_cmd(self.sock, self.session, "Runtime.evaluate",
     { expression = "document.readyState", returnByValue = true })
+end
+
+function Conn:_probe_visibility()
+  if not self.browser_target then return end
+  self.visibility_probe_id = self.session._id + 1
+  send_cmd(self.sock, self.session, "Runtime.evaluate",
+    { expression = "!document.hidden", returnByValue = true })
+end
+
+function Conn:_enable_fetch()
+  if not (self.assets and self.assets.virtual_provider) then return end
+  -- The root gateway owns virtual requests when available. Enabling the same
+  -- Fetch pattern on a page as well would pause one request in two CDP clients.
+  if self.manager and self.manager.browser_conn
+      and self.manager.browser_conn.enabled
+      and self.manager.browser_conn.gateway
+      and type(self.manager.browser_conn.gateway.virtual_provider) == "function" then return end
+  send_cmd(self.sock, self.session, "Fetch.enable", { patterns = {
+    { urlPattern = "https://lumen-theme.local/*", requestStage = "Request" }
+  } })
 end
 
 function Conn:connect()
@@ -238,14 +426,32 @@ function Conn:connect()
   self.session = cdp.new_session()
   self.buf = ""
   self.injected = false
-  send_cmd(c, self.session, "Runtime.enable")
-  send_cmd(c, self.session, "Page.enable")
-  send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
+  self.deferred_after_id = nil
+  self.deferred_sent = false
+  local plan = injector.connection_plan(self.early,
+    self.assets and self.assets.bypass_csp)
+  if plan.runtime then send_cmd(c, self.session, "Runtime.enable") end
+  if plan.page then send_cmd(c, self.session, "Page.enable") end
+  if plan.bypass_csp then
+    send_cmd(c, self.session, "Page.setBypassCSP", { enabled=true })
+  end
+  if plan.fetch and self.assets and self.assets.virtual_provider then
+    self:_enable_fetch()
+  end
+  if plan.binding then
+    send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
+  end
+  if plan.inject_immediately then
+    self:_inject_once()
+    log("attached early: " .. self.title)
+    return true
+  end
   -- Do NOT inject yet: injecting while the UI is still initializing blanks the
   -- Steam render (Phase 4 finding). Gate the first injection on readiness —
   -- probe document.readyState now (covers the already-loaded case) and also
   -- inject on Page.loadEventFired (covers the still-loading case).
-  self:_probe_ready()
+  if plan.ready_probe then self:_probe_ready() end
+  if plan.visibility_probe then self:_probe_visibility() end
   log("attached + bound: " .. self.title)
   return true
 end
@@ -274,6 +480,24 @@ function Conn:inject()
   for _, js in ipairs(a.js or {}) do
     send_cmd(c, s, "Runtime.evaluate", { expression = js, returnByValue = true })
   end
+  -- At cold boot the first tiny script installs a synchronous PopupManager
+  -- prepaint guard.  Do not put the multi-megabyte compiled theme in that same
+  -- evaluate: wait until Chromium acknowledges the guard, then send the heavy
+  -- hook as a second command.  This preserves command ordering without using
+  -- Target.setAutoAttach (which stalls Steam's login renderer).
+  if self.early and not self.deferred_sent and #(a.deferred_js or {}) > 0 then
+    self.deferred_after_id = s._id
+  end
+end
+
+function Conn:_inject_deferred()
+  if self.deferred_sent then return end
+  self.deferred_sent = true
+  self.deferred_after_id = nil
+  for _, js in ipairs((self.assets and self.assets.deferred_js) or {}) do
+    send_cmd(self.sock, self.session, "Runtime.evaluate",
+      { expression = js, returnByValue = true })
+  end
 end
 
 -- Handle a Runtime.bindingCalled: run the backend fn and resolve the page promise.
@@ -289,6 +513,12 @@ function Conn:_on_binding(payload_str)
   -- it survives minimize/restore — unlike hiding the embedded browser view.
   if req.fn == "__lumenOpen" or req.fn == "__lumenClose" then
     if self.manager then self.manager:broadcast_overlay(req.fn == "__lumenOpen") end
+    result = '{"ok":true}'
+  elseif req.fn == "__lumenViewVisibility" then
+    if self.manager then
+      self.manager:set_view_visibility(self.ws_url,
+        req.args and req.args.visible == true)
+    end
     result = '{"ok":true}'
   elseif req.fn == "__lumenSlsWarn" then
     -- Show the "slsteam-moon not loaded" warning in the on-top context (store
@@ -351,12 +581,19 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
+  elseif req.fn == "__lumenRestartJSContext" then
+    local prepared = self.manager and self.manager:commit_pending_channels()
+    if prepared and self.manager:restart_js_context() then
+      result = '{"ok":true}'
+    else
+      result = '{"ok":false}'
+    end
   else
     result = injector.dispatch_method(self.registry, req.fn, req.args)
   end
   -- Resolve the page-side promise. id + result passed as JS string literals.
   local expr = polyfill.resolve_js(json.encode(tostring(id)), json.encode(result))
-  send_cmd(self.sock, self.session, "Runtime.evaluate", { expression = expr })
+  if self.sock then send_cmd(self.sock, self.session, "Runtime.evaluate", { expression = expr }) end
 end
 
 -- Drain available frames; handle bindingCalled + re-inject on recreation.
@@ -374,7 +611,10 @@ function Conn:drain()
     if opcode == 0x8 then return false
     elseif opcode == 0x1 then
       local m = cdp.parse_message(frame)
-      if m.kind == "result" and self.ready_probe_id and m.id == self.ready_probe_id then
+      if (m.kind == "result" or m.kind == "error")
+          and self.deferred_after_id and m.id == self.deferred_after_id then
+        self:_inject_deferred()
+      elseif m.kind == "result" and self.ready_probe_id and m.id == self.ready_probe_id then
         -- Reply to our document.readyState probe.
         self.ready_probe_id = nil
         local val = m.result and m.result.result and m.result.result.value
@@ -382,8 +622,35 @@ function Conn:drain()
           self:_inject_once()
         end
         -- If "loading"/"interactive", wait for Page.loadEventFired below.
+      elseif m.kind == "result" and self.visibility_probe_id and m.id == self.visibility_probe_id then
+        self.visibility_probe_id = nil
+        local visible = m.result and m.result.result and m.result.result.value == true
+        if self.manager and self.ws_url then
+          self.manager:set_view_visibility(self.ws_url, visible)
+        end
       elseif m.kind == "event" then
-        if m.method == "Runtime.bindingCalled" and m.params and m.params.name == BINDING then
+        if m.method == "Fetch.requestPaused" and self.assets and self.assets.virtual_provider then
+          local p = m.params or {}
+          local url = p.request and p.request.url
+          local ok_asset, bytes, mime = pcall(self.assets.virtual_provider, url)
+          if ok_asset and bytes then
+            send_cmd(c, self.session, "Fetch.fulfillRequest", {
+              requestId=p.requestId, responseCode=200,
+              responseHeaders={
+                {name="Content-Type",value=mime or "application/octet-stream"},
+                {name="Cache-Control",value="public, max-age=31536000, immutable"},
+                {name="Access-Control-Allow-Origin",value="*"},
+              },
+              body=b64.encode(bytes),
+            })
+          else
+            send_cmd(c, self.session, "Fetch.fulfillRequest", {
+              requestId=p.requestId, responseCode=404,
+              responseHeaders={{name="Content-Type",value="text/plain"}},
+              body=b64.encode("theme asset not found"),
+            })
+          end
+        elseif m.method == "Runtime.bindingCalled" and m.params and m.params.name == BINDING then
           self:_on_binding(m.params.payload)
         elseif m.method == "Page.loadEventFired" or m.method == "Page.domContentEventFired" then
           -- Page finished loading: safe to inject now.
@@ -391,13 +658,42 @@ function Conn:drain()
         elseif m.method == "Runtime.executionContextCreated" or
                m.method == "Page.frameNavigated" or
                m.method == "Runtime.executionContextsCleared" then
-          -- Context recreated (navigation / webhelper restart). Re-bind and
-          -- re-inject, but gate again on readiness so we never inject into a
-          -- still-initializing context (the boot black-screen cause).
-          log("recreation (" .. self.title .. "): " .. m.method .. " -> re-bind + re-inject (gated)")
-          send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
+          if m.method == "Runtime.executionContextCreated" and
+             self.title == "SharedJSContext" and self.manager then
+            self.manager.theme_reload_pending = false
+            self.manager.theme_reload_deadline = nil
+          end
           self.injected = false
-          self:_probe_ready()
+          self.deferred_after_id = nil
+          self.deferred_sent = false
+          if injector.connection_plan(self.early).reinject_immediately then
+            -- The early SharedJSContext connection owns only the lightweight
+            -- popup hook. Keep it alive across context replacement without
+            -- enabling Page, bindings or readiness probes during Steam boot.
+            log("recreation early (" .. self.title .. "): " .. m.method .. " -> re-inject")
+            self:_inject_once()
+          else
+            -- Steam can replace the renderer behind a still-open target. CDP
+            -- domains are target-session state, so restore all domains before
+            -- probing readiness or creating virtual theme links. In particular
+            -- Fetch.enable must precede reinjection; otherwise lumen-theme.local
+            -- requests fail and remain empty until Lumen is restarted.
+            local plan = injector.recreation_plan(false,
+              self.assets and self.assets.virtual_provider ~= nil,
+              self.assets and self.assets.bypass_csp)
+            log("recreation (" .. self.title .. "): " .. m.method .. " -> restore domains + re-inject (gated)")
+            if plan.runtime then send_cmd(c, self.session, "Runtime.enable") end
+            if plan.page then send_cmd(c, self.session, "Page.enable") end
+            if plan.bypass_csp then
+              send_cmd(c, self.session, "Page.setBypassCSP", { enabled=true })
+            end
+            if plan.fetch then self:_enable_fetch() end
+            if plan.binding then
+              send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
+            end
+            if plan.ready_probe then self:_probe_ready() end
+            if plan.visibility_probe then self:_probe_visibility() end
+          end
         end
       end
     end
@@ -406,8 +702,424 @@ function Conn:drain()
 end
 
 function Conn:close()
+  if self.manager and self.ws_url then
+    self.manager:set_view_visibility(self.ws_url, false)
+  end
   if self.sock then pcall(function() self.sock:close() end) end
   self.sock = nil
+end
+
+-- ── Browser/root theme gateway ─────────────────────────────────────────────
+-- Millennium owns Chromium's remote-debugging pipe, where Fetch is global.
+-- Lumen deliberately stays a sidecar and only has the public debugging port,
+-- so it must use the port's flattened Target sessions instead: new renderers
+-- are paused, their tiny virtual-file provider is enabled, SharedJSContext gets
+-- the PopupManager hook as an evaluate-on-new-document script, and only then is
+-- the renderer resumed. No theme/default flash can occur in that ordering.
+local BrowserConn = {}
+BrowserConn.__index = BrowserConn
+
+local function browser_conn_new(ws_url, gateway)
+  return setmetatable({
+    ws_url=ws_url,
+    gateway=gateway,
+    sock=nil,
+    session=nil,
+    buf="",
+    sessions={},
+    setup_pending={},
+    setup_counts={},
+    manual_pending={},
+    auto_attach_id=nil,
+    get_targets_id=nil,
+    attaching_targets={},
+    enabled=false,
+    enable_failed=false,
+  }, BrowserConn)
+end
+
+local function shared_target(info)
+  return injector.shared_theme_target(info)
+end
+
+-- Decide which browser-level setup a newly attached target needs.  Theme
+-- documents can navigate inside an already-created target (Change Account is
+-- the important example), so every page receives an evaluate-on-new-document
+-- hook.  Workers and other non-document targets only need to be resumed.
+function injector.browser_target_setup_plan(info, waiting, bypass_csp)
+  local page = type(info) == "table" and info.type == "page"
+  return {
+    fetch = page,
+    bootstrap = page,
+    bypass_csp = page and bypass_csp == true,
+    run_immediately = page and waiting ~= true,
+  }
+end
+
+function BrowserConn:_send_child(session_id, method, params, pending)
+  local id = self.session._id + 1
+  if not send_cmd(self.sock, self.session, method, params, session_id) then
+    return nil
+  end
+  if pending then self.setup_pending[id] = pending end
+  return id
+end
+
+function BrowserConn:_resume(session_id)
+  self:_send_child(session_id, "Runtime.runIfWaitingForDebugger", {})
+end
+
+function BrowserConn:_queue_setup(session_id, kind, method, params, extra)
+  local pending = extra or {}
+  pending.session_id = session_id
+  pending.kind = kind
+  local id = self:_send_child(session_id, method, params, pending)
+  if id then
+    self.setup_counts[session_id] = (self.setup_counts[session_id] or 0) + 1
+  end
+  return id
+end
+
+-- The login observer mirrors Millennium's safe discovery model: discover the
+-- SharedJSContext and attach to that one target explicitly.  It never pauses
+-- renderer creation and never calls Target.setAutoAttach, which CEF 126 can
+-- turn into a blank or permanently loading account selector.
+function BrowserConn:_consider_manual_target(info)
+  if not self.gateway.login_only or not shared_target(info) then return end
+  local target_id = info.targetId
+  if not target_id or self.attaching_targets[target_id] then return end
+  for _, state in pairs(self.sessions) do
+    if state.info and state.info.targetId == target_id then return end
+  end
+  local id = self.session._id + 1
+  if self:_send_child(nil, "Target.attachToTarget",
+      {targetId=target_id, flatten=true}) then
+    self.attaching_targets[target_id] = true
+    self.manual_pending[id] = {kind="attach", info=info, target_id=target_id}
+  end
+end
+
+function BrowserConn:_install_bootstrap(session_id, run_immediately)
+  local state = self.sessions[session_id]
+  if not state or state.info.type ~= "page" then return true end
+  if state.script_id then
+    self:_send_child(session_id, "Page.removeScriptToEvaluateOnNewDocument",
+      {identifier=state.script_id})
+    state.script_id = nil
+  end
+  state.bootstrap_source = nil
+  local source = state.shared and self.gateway.shared_bootstrap_source
+    or self.gateway.document_bootstrap_source
+  return self:_queue_setup(session_id, "bootstrap",
+    "Page.addScriptToEvaluateOnNewDocument",
+    injector.document_bootstrap_params(source, run_immediately),
+    {source=source}) ~= nil
+end
+
+function BrowserConn:_setup_target(session_id, info, waiting)
+  if self.sessions[session_id] then return end
+  local state = {
+    info=info or {},
+    waiting=waiting == true,
+    shared=shared_target(info),
+  }
+  self.sessions[session_id] = state
+  if state.info.type ~= "page" then
+    if state.waiting then self:_resume(session_id) end
+    return
+  end
+  if self.gateway.login_only then
+    if state.shared then
+      self:_send_child(session_id, "Runtime.enable", {})
+      local id = self.session._id + 1
+      if self:_send_child(session_id, "Runtime.evaluate", {
+          expression=self.gateway.login_guard_source, returnByValue=true }) then
+        self.manual_pending[id] = {kind="guard", session_id=session_id}
+      end
+    end
+    return
+  end
+  local setup = injector.browser_target_setup_plan(
+    state.info, state.waiting, self.gateway.bypass_csp)
+  if setup.bypass_csp then
+    self:_queue_setup(session_id, "csp", "Page.setBypassCSP", {enabled=true})
+    state.bypass_csp = true
+  end
+  if setup.fetch then
+    self:_queue_setup(session_id, "fetch", "Fetch.enable",
+      {patterns=injector.browser_fetch_patterns(self.gateway)})
+  end
+  -- Existing targets need recovery now; future targets are paused before their
+  -- first document and run the hook only as part of that new document.
+  if setup.bootstrap then
+    self:_install_bootstrap(session_id, setup.run_immediately)
+  end
+  local startup = injector.renderer_startup_plan(state.waiting)
+  if startup.resume_after_queue then
+    self:_resume(session_id)
+    state.waiting = false
+  end
+end
+
+function BrowserConn:_fulfill_virtual(params, session_id)
+  local url = params.request and params.request.url
+  local ok_asset, bytes, content_type = pcall(
+    self.gateway.virtual_provider, url)
+  if ok_asset and bytes then
+    self:_send_child(session_id, "Fetch.fulfillRequest", {
+      requestId=params.requestId,
+      responseCode=200,
+      responseHeaders={
+        {name="Content-Type",value=content_type or "application/octet-stream"},
+        {name="Cache-Control",value="public, max-age=31536000, immutable"},
+        {name="Access-Control-Allow-Origin",value="*"},
+      },
+      body=b64.encode(bytes),
+    })
+  else
+    self:_send_child(session_id, "Fetch.fulfillRequest", {
+      requestId=params.requestId,
+      responseCode=404,
+      responseHeaders={{name="Content-Type",value="text/plain"}},
+      body=b64.encode("theme asset not found"),
+    })
+  end
+end
+
+function BrowserConn:_finish_setup(message)
+  local pending = self.setup_pending[message.id]
+  if not pending then return false end
+  self.setup_pending[message.id] = nil
+  local session_id = pending.session_id
+  local state = self.sessions[session_id]
+  if state and pending.kind == "bootstrap" and message.kind == "result" then
+    state.script_id = message.result and message.result.identifier
+    state.bootstrap_source = pending.source
+  end
+  local left = math.max(0, (self.setup_counts[session_id] or 1) - 1)
+  self.setup_counts[session_id] = left > 0 and left or nil
+  return true
+end
+
+function BrowserConn:_handle_result(message)
+  local manual = self.manual_pending[message.id]
+  if manual then
+    self.manual_pending[message.id] = nil
+    if manual.kind == "attach" then
+      self.attaching_targets[manual.target_id] = nil
+      local session_id = message.result and message.result.sessionId
+      if session_id then self:_setup_target(session_id, manual.info, false) end
+    elseif manual.kind == "guard" then
+      local state = self.sessions[manual.session_id]
+      if state and state.shared then
+        state.theme_sent = true
+        self:_send_child(manual.session_id, "Runtime.evaluate", {
+          expression=self.gateway.login_theme_source, returnByValue=true })
+      end
+    end
+    return
+  end
+  if self.get_targets_id and message.id == self.get_targets_id then
+    self.get_targets_id = nil
+    for _, info in ipairs((message.result and message.result.targetInfos) or {}) do
+      self:_consider_manual_target(info)
+    end
+    return
+  end
+  if self.auto_attach_id and message.id == self.auto_attach_id then
+    self.enabled = message.kind == "result"
+    self.enable_failed = not self.enabled
+    return
+  end
+  self:_finish_setup(message)
+end
+
+function BrowserConn:_handle_event(message)
+  local params = message.params or {}
+  if (message.method == "Target.targetCreated"
+      or message.method == "Target.targetInfoChanged") and params.targetInfo then
+    self:_consider_manual_target(params.targetInfo)
+  elseif message.method == "Target.attachedToTarget" then
+    self:_setup_target(params.sessionId, params.targetInfo,
+      params.waitingForDebugger)
+  elseif message.method == "Target.detachedFromTarget" then
+    self.sessions[params.sessionId] = nil
+    self.setup_counts[params.sessionId] = nil
+  elseif message.method == "Fetch.requestPaused" and message.session_id then
+    self:_fulfill_virtual(params, message.session_id)
+  elseif self.gateway.login_only
+      and message.method == "Runtime.executionContextsCleared"
+      and message.session_id and self.sessions[message.session_id] then
+    local state = self.sessions[message.session_id]
+    state.theme_sent = false
+    self:_send_child(message.session_id, "Runtime.evaluate", {
+      expression=self.gateway.login_guard_source, returnByValue=true })
+    local id = self.session._id
+    self.manual_pending[id] = {kind="guard", session_id=message.session_id}
+  end
+end
+
+function BrowserConn:_consume(bytes)
+  if bytes and #bytes > 0 then self.buf = self.buf .. bytes end
+  while true do
+    local frame, opcode, rest, complete = wsframe.decode_frame(self.buf)
+    if not complete then break end
+    self.buf = rest
+    if opcode == 0x8 then return false end
+    if opcode == 0x1 then
+      local ok, message = pcall(cdp.parse_message, frame)
+      if ok and message then
+        if message.kind == "event" then self:_handle_event(message)
+        else self:_handle_result(message) end
+      end
+    end
+  end
+  return true
+end
+
+function BrowserConn:_pump(timeout)
+  self.sock:settimeout(timeout or 0)
+  local chunk, err, partial = self.sock:receive(8192)
+  self.sock:settimeout(0)
+  local got = chunk or partial
+  if got and #got > 0 and not self:_consume(got) then return false end
+  return err ~= "closed"
+end
+
+function BrowserConn:_wait_until(predicate, seconds)
+  local deadline = socket.gettime() + (seconds or 2)
+  while socket.gettime() < deadline do
+    if predicate() then return true end
+    if not self:_pump(math.min(0.05, deadline - socket.gettime())) then return false end
+  end
+  return predicate()
+end
+
+function BrowserConn:connect()
+  local path = ws_path(self.ws_url)
+  if not path then return false end
+  local c = socket.tcp(); c:settimeout(5)
+  if not c:connect(CEF_HOST, cef_port()) then c:close(); return false end
+  if not ws_handshake(c, path) then c:close(); return false end
+  c:settimeout(0)
+  self.sock = c
+  self.session = cdp.new_session()
+  self.buf = ""
+  send_cmd(c, self.session, "Target.setDiscoverTargets", {discover=true})
+  if not injector.browser_uses_auto_attach(self.gateway) then
+    self.get_targets_id = self.session._id + 1
+    send_cmd(c, self.session, "Target.getTargets", {})
+    self.enabled = true
+    log("manual SharedJSContext theme observer attached")
+    return true
+  end
+  self.auto_attach_id = self.session._id + 1
+  if not send_cmd(c, self.session, "Target.setAutoAttach",
+      injector.browser_auto_attach_params(true)) then
+    self:close(false)
+    return false
+  end
+  local ready = self:_wait_until(function()
+    return (self.enabled or self.enable_failed)
+      and next(self.setup_pending) == nil
+  end, 3)
+  if not ready or not self.enabled then self:close(false); return false end
+  log("browser theme gateway attached; renderer startup gate active")
+  return true
+end
+
+function BrowserConn:update_gateway(gateway)
+  local old_source = self.gateway.document_bootstrap_source
+  local old_shared_source = self.gateway.shared_bootstrap_source
+  local old_login_guard = self.gateway.login_guard_source
+  local old_login_theme = self.gateway.login_theme_source
+  local old_login_only = self.gateway.login_only
+  local old_bypass_csp = self.gateway.bypass_csp
+  self.gateway = gateway
+  if old_source == gateway.document_bootstrap_source
+      and old_shared_source == gateway.shared_bootstrap_source
+      and old_login_guard == gateway.login_guard_source
+      and old_login_theme == gateway.login_theme_source
+      and old_login_only == gateway.login_only
+      and old_bypass_csp == gateway.bypass_csp then return true end
+  if gateway.login_only then
+    for session_id, state in pairs(self.sessions) do
+      if state.shared then
+        local id = self.session._id + 1
+        if self:_send_child(session_id, "Runtime.evaluate", {
+            expression=gateway.login_guard_source, returnByValue=true }) then
+          self.manual_pending[id] = {kind="guard", session_id=session_id}
+        end
+      end
+    end
+    return true
+  end
+  for session_id, state in pairs(self.sessions) do
+    -- Prepare only. Applying in the current context would recreate the exact
+    -- live-theme race this gateway exists to remove; RestartJSContext follows
+    -- after registration is acknowledged.
+    if state.info and state.info.type == "page" and not gateway.login_only then
+      if state.bypass_csp ~= gateway.bypass_csp then
+        self:_queue_setup(session_id, "csp", "Page.setBypassCSP",
+          {enabled=gateway.bypass_csp == true})
+        state.bypass_csp = gateway.bypass_csp == true
+      end
+      self:_install_bootstrap(session_id, false)
+    end
+  end
+  return self:_wait_until(function()
+    for _, state in pairs(self.sessions) do
+      if state.info and state.info.type == "page" then
+        local desired = state.shared and gateway.shared_bootstrap_source
+          or gateway.document_bootstrap_source
+        if state.bootstrap_source ~= desired
+            or state.bypass_csp ~= (gateway.bypass_csp == true) then return false end
+      end
+    end
+    return true
+  end, 3)
+end
+
+function BrowserConn:drain()
+  local data, err, partial = self.sock:receive("*a")
+  local got = data or partial
+  if got and #got > 0 and not self:_consume(got) then return false end
+  return err ~= "closed"
+end
+
+function BrowserConn:close(disable)
+  if disable ~= false and self.sock and self.session and self.enabled then
+    for session_id, state in pairs(self.sessions) do
+      if state.waiting then self:_resume(session_id) end
+      if not self.gateway.login_only and state.info and state.info.type == "page" then
+        self:_send_child(session_id, "Fetch.disable", {})
+      end
+      if state.bypass_csp then
+        self:_send_child(session_id, "Page.setBypassCSP", {enabled=false})
+      end
+      if state.script_id then
+        self:_send_child(session_id, "Page.removeScriptToEvaluateOnNewDocument",
+          {identifier=state.script_id})
+      end
+    end
+    if injector.browser_uses_auto_attach(self.gateway) then
+      local disable_id = self.session._id + 1
+      send_cmd(self.sock, self.session, "Target.setAutoAttach",
+        injector.browser_auto_attach_params(false))
+      self:_wait_until(function()
+        -- The command id is consumed even though no special result state is kept.
+        return self.session._id >= disable_id and next(self.setup_pending) == nil
+      end, 0.25)
+    end
+  end
+  if self.sock then pcall(function() self.sock:close() end) end
+  self.sock = nil
+  self.enabled = false
+  self.sessions = {}
+  self.setup_pending = {}
+  self.setup_counts = {}
+  self.manual_pending = {}
+  self.attaching_targets = {}
 end
 
 -- ── Multi-target manager (cooperative new/fds/tick) ────────────────────────
@@ -436,52 +1148,214 @@ function injector.new(opts)
     backoff = 1,
     next_attempt = 0,
     ui_ready = false,    -- latched once Steam's main UI is up (post-login/paint)
+    visible_views = {},  -- browser ws_url -> true, reported by visibilitychange
   }, State)
+end
+
+-- Track the steamwebhelper generation through SharedJSContext's websocket
+-- identity. Change Account tears the helper down and starts a fresh one; if we
+-- keep ui_ready latched from the dead generation, the new SharedJSContext gets
+-- the full readiness-gated connection and its login window paints before the
+-- theme popup hook is installed. Resetting here makes the existing cold-boot
+-- path attach the lightweight hook immediately, before Steam creates that
+-- window. No work is added while the websocket identity remains stable.
+function State:observe_shared_generation(targets)
+  local current
+  for _, target in ipairs(targets or {}) do
+    if target.title == "SharedJSContext" and target.webSocketDebuggerUrl then
+      current = target.webSocketDebuggerUrl
+      break
+    end
+  end
+  if not current then return false end
+  if not self.shared_ws_url then
+    self.shared_ws_url = current
+    return false
+  end
+  if self.shared_ws_url == current then return false end
+
+  for _, conn in pairs(self.conns) do
+    if conn.close then conn:close() end
+  end
+  self.conns = {}
+  self.visible_views = {}
+  self.shared_ws_url = current
+  self.ui_ready = false
+  self.early_grace_deadline = nil
+  self.theme_reload_pending = nil
+  self.theme_reload_deadline = nil
+  self.backoff = 1
+  self.next_attempt = 0
+  return true
+end
+
+function State:idle_delay()
+  return self.ui_ready and 1 or injector.discovery_retry_delay(false, self.backoff)
+end
+
+-- Keep one global provider only while a custom theme is active. Switching
+-- between themes updates its provider atomically without a Fetch gap; disabling
+-- themes explicitly disables Fetch and closes the root socket before reload.
+function State:_sync_browser_gateway()
+  local desired = injector.theme_gateway_config(self.channels)
+    or injector.login_theme_gateway(self.channels, self.ui_ready)
+  if not desired then
+    if self.browser_conn then
+      self.browser_conn:close(true)
+      self.browser_conn = nil
+      log("browser theme gateway disabled")
+    end
+    return true
+  end
+  if self.browser_conn and self.browser_conn.sock and self.browser_conn.enabled then
+    return self.browser_conn:update_gateway(desired)
+  end
+  if self.browser_conn then self.browser_conn:close(false); self.browser_conn = nil end
+  local ws_url = browser_ws_url()
+  if not ws_url then return false end
+  local conn = browser_conn_new(ws_url, desired)
+  if not conn:connect() then return false end
+  self.browser_conn = conn
+  return true
 end
 
 -- fds() -> array of currently-open CDP sockets for select().
 function State:fds()
   local out = {}
+  if self.browser_conn and self.browser_conn.sock then
+    out[#out + 1] = self.browser_conn.sock
+  end
   for _, conn in pairs(self.conns) do
     if conn.sock then out[#out + 1] = conn.sock end
   end
   return out
 end
 
--- Discover wanted targets and connect to any not yet connected (backoff-gated).
-function State:_discover()
-  local now = os.time()
-  if now < self.next_attempt then return end
-  -- Hold off ALL attaching until Steam's main UI is up. Attaching to
-  -- SharedJSContext during the login/init phase stalls the client boot
-  -- (Phase 4 finding). Latch once ready so later navigations aren't gated.
-  if not self.ui_ready then
-    if ui_is_ready() then
-      self.ui_ready = true
-      log("Steam UI ready -> attaching")
+-- Replace routing after a live theme setting change. Closing the CDP sockets is
+-- intentional: rediscovery rebuilds each connection with the new composed
+-- asset set, and RestartJSContext then starts from a clean theme JS context.
+function State:set_channels(channels, preserve_control)
+  for url, conn in pairs(self.conns) do
+    if preserve_control and conn.title == "SharedJSContext" then
+      -- Keep only the transport needed to call RestartJSContext. If the old
+      -- assets remain here, its executionContextCreated handler re-injects the
+      -- previous theme into the brand-new context before rediscovery replaces
+      -- the route, producing a visible old/default/new sequence.
+      conn.assets = nil
     else
-      self.next_attempt = now + 2   -- poll readiness every 2s, no backoff
-      return
+      conn:close(); self.conns[url] = nil
     end
   end
+  self.channels = channels or {}
+  self.next_attempt = 0
+  return self:_sync_browser_gateway()
+end
+
+function State:queue_channels(channels)
+  self.pending_channels = channels
+end
+
+function State:commit_pending_channels()
+  if not self.pending_channels then return false end
+  local pending = self.pending_channels
+  self.pending_channels = nil
+  local transition = injector.theme_transition_expr()
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title ~= "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate", {expression=transition})
+    end
+  end
+  if not self:set_channels(pending, true) then
+    log("theme reload postponed: browser gateway was not ready")
+    return false
+  end
+  self.theme_reload_pending = true
+  self.theme_reload_deadline = os.time() + 5
+  return true
+end
+
+function State:_sync_targets(targets, channels, early)
+  local routed = cdp.route_targets(targets, channels)
+  for _, r in ipairs(routed) do
+    local t = r.target
+    local existing = self.conns[t.webSocketDebuggerUrl]
+    if existing then
+      local old, new = existing.assets or {}, r.assets or {}
+      local changed = #(old.js or {}) ~= #(new.js or {})
+        or #(old.css or {}) ~= #(new.css or {})
+        or #(old.deferred_js or {}) ~= #(new.deferred_js or {})
+        or (old.polyfill ~= nil) ~= (new.polyfill ~= nil)
+        or (old.virtual_provider ~= nil) ~= (new.virtual_provider ~= nil)
+        or existing.browser_target ~= (r.browser == true)
+        or existing.early ~= (early == true)
+      if changed then
+        log("routing changed: " .. tostring(existing.title) .. " -> " .. tostring(t.title))
+        existing:close(); self.conns[t.webSocketDebuggerUrl] = nil; existing = nil
+      end
+    end
+    if not existing then
+      local conn = conn_new(t, r.assets, self.registry, self, r.browser, early)
+      if conn:connect() then self.conns[t.webSocketDebuggerUrl] = conn end
+    end
+  end
+end
+
+-- Discover wanted targets and connect to any not yet connected (backoff-gated).
+function State:_discover()
+  local now = socket.gettime()
+  if self.theme_reload_pending then
+    if now < (self.theme_reload_deadline or 0) then return end
+    -- If Steam replaced the SharedJSContext socket instead of emitting its
+    -- recreation event, do not deadlock discovery indefinitely.
+    self.theme_reload_pending = false
+    self.theme_reload_deadline = nil
+  end
+  if now < self.next_attempt then return end
   local targets, err = list_all_targets()
   if not targets then
-    self.next_attempt = now + self.backoff
-    self.backoff = math.min(self.backoff * 2, 15)
+    self.next_attempt = now + injector.discovery_retry_delay(self.ui_ready, self.backoff)
+    if self.ui_ready then self.backoff = math.min(self.backoff * 2, 15)
+    else self.backoff = 1 end
     return
   end
   self.backoff = 1
   self.next_attempt = 0
+  if self:observe_shared_generation(targets) then
+    log("new SharedJSContext generation -> returning to early bootstrap")
+  end
+  if not self.ui_ready then
+    -- Always install the SharedJSContext popup hook first, even when the first
+    -- /json snapshot already contains ready markers. A short grace tick lets
+    -- its Runtime.evaluate reach CEF before full routing promotes the socket.
+    local early = {}
+    for _, ch in ipairs(self.channels) do if ch.early then early[#early+1] = ch end end
+    if #early > 0 then self:_sync_targets(targets, early, true) end
+    local ready = false
+    for _, t in ipairs(targets) do
+      local hay = (t.title or "") .. " " .. (t.url or "")
+      for _, mark in ipairs(READY_MARKERS) do
+        if hay:find(mark, 1, true) then ready = true; break end
+      end
+      if ready then break end
+    end
+    if not ready then
+      self.next_attempt = now + injector.discovery_retry_delay(false, self.backoff)
+      return
+    end
+    local have_early = false
+    for _, conn in pairs(self.conns) do if conn.early then have_early = true; break end end
+    if have_early and not self.early_grace_deadline then
+      self.early_grace_deadline = now + injector.discovery_retry_delay(false, self.backoff)
+      self.next_attempt = self.early_grace_deadline
+      return
+    end
+    self.early_grace_deadline = nil
+    self.ui_ready = true
+    log("Steam UI ready -> attaching full channel set")
+  end
   -- Route each target to its channel's assets (store web views -> luatools.js;
   -- SharedJSContext -> lumen-menu bundle). First matching channel wins.
-  local routed = cdp.route_targets(targets, self.channels)
-  for _, r in ipairs(routed) do
-    local t = r.target
-    if not self.conns[t.webSocketDebuggerUrl] then
-      local conn = conn_new(t, r.assets, self.registry, self)
-      if conn:connect() then self.conns[t.webSocketDebuggerUrl] = conn end
-    end
-  end
+  self:_sync_targets(targets, self.channels)
 end
 
 -- Open/close the Lumen overlay in every connected context that has it. The menu
@@ -567,6 +1441,22 @@ function State:open_external_url(url)
   end
   return false
 end
+
+-- Reload only Steam's JavaScript/UI contexts. Theme changes use this instead
+-- of restarting the Steam client, so downloads and running games are untouched.
+function State:restart_js_context()
+  local expr = "(function(){try{if(window.SteamClient&&SteamClient.Browser&&" ..
+    "typeof SteamClient.Browser.RestartJSContext==='function'){" ..
+    "SteamClient.Browser.RestartJSContext();return true;}return false;}catch(e){return false;}})()"
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression=expr, returnByValue=true })
+      return true
+    end
+  end
+  return false
+end
 --   * a store/community web view is the CURRENT page -> render in that web view
 --     ONLY (it composites above the shell, so the shell's own overlay would be
 --     hidden behind it / misaligned -> the "split" bug);
@@ -587,31 +1477,16 @@ function State:_fire_on_top(expr)
   local function fire(conn)
     if conn and conn.sock then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",
-        { expression = expr, returnByValue = true })
+        { expression = "(!document.hidden)&&(" .. expr .. ")", returnByValue = true })
     end
   end
-
-  local live_webview_ws = {}
-  local targets = list_all_targets()
-  if targets then
-    for _, t in ipairs(targets) do
-      local u = t.url or ""
-      if u:find("store.steampowered.com", 1, true) or u:find("steamcommunity.com", 1, true) then
-        live_webview_ws[t.webSocketDebuggerUrl] = true
-      end
-    end
-  end
-
-  local fired = false
-  for _, conn in pairs(self.conns) do
-    if conn.sock and live_webview_ws[conn.ws_url] then fire(conn); fired = true end
-  end
-  if not fired then
-    -- No active web view: the content is in the shell window itself.
-    for _, conn in pairs(self.conns) do
-      if conn.sock and conn.title == "Steam" then fire(conn) end
-    end
-  end
+  -- Hidden browser targets remain in /json after navigating back to Library,
+  -- so target presence cannot identify the composited top view. Broadcast a
+  -- visibility-guarded expression instead: hidden Store/Community documents
+  -- no-op, while the visible browser view (or the Library shell) opens it.
+  -- Opening in both a visible shell and visible composited browser is harmless:
+  -- the browser copy is physically above and receives input.
+  for _, conn in pairs(self.conns) do fire(conn) end
 end
 
 function State:broadcast_overlay(open)
@@ -626,7 +1501,34 @@ function State:broadcast_overlay(open)
     end
     return
   end
-  self:_fire_on_top("window.__lumenOpenOverlay&&window.__lumenOpenOverlay()")
+  local opened = false
+  for ws_url, visible in pairs(self.visible_views) do
+    local conn = visible and self.conns[ws_url] or nil
+    if conn and conn.sock then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        {expression="window.__lumenOpenOverlay&&window.__lumenOpenOverlay()",
+         returnByValue=true})
+      opened = true
+    end
+  end
+  if not opened then self:_open_shell_overlay() end
+end
+
+function State:set_view_visibility(ws_url, visible)
+  if visible then self.visible_views[ws_url] = true
+  else self.visible_views[ws_url] = nil end
+end
+
+function State:_open_shell_overlay()
+  local expr = "window.__lumenOpenOverlay&&window.__lumenOpenOverlay()"
+  for _, conn in pairs(self.conns) do
+    local u = conn.url or ""
+    if conn.sock and (conn.title == "Steam" or u:find("browserType=4",1,true)) then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        {expression=expr,returnByValue=true})
+      return
+    end
+  end
 end
 
 -- Show the "slsteam-moon not loaded" warning in whichever view is on top, so it
@@ -638,6 +1540,14 @@ end
 
 -- tick(): connect to new targets, drain existing ones, drop closed ones.
 function State:tick()
+  self:_sync_browser_gateway()
+  if self.browser_conn and self.browser_conn.sock then
+    if not self.browser_conn:drain() then
+      log("browser theme gateway closed (will re-attach)")
+      self.browser_conn:close(false)
+      self.browser_conn = nil
+    end
+  end
   self:_discover()
   for url, conn in pairs(self.conns) do
     if conn.sock then

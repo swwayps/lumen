@@ -5,6 +5,7 @@
   function openOverlay() {
     if (document.getElementById(OVERLAY_ID)) return;
     injectStyles();
+    applyAdaptivePalette();
     var S0 = I18N[pickLang()] || I18N.en;
 
     var overlay = document.createElement("div");
@@ -41,6 +42,7 @@
     // Cloud Saves tab only when CloudRedirect is installed (window.__lumenCloud,
     // set by boot.lua). Absent -> the tab isn't created and nothing cloud runs.
     var tabCloud = window.__lumenCloud ? mkTab(cloudStrings().tab, CLOUD_SVG) : null;
+    var tabThemes = mkTab(themeStrings().tab, THEMES_SVG);
     var tabAbout = mkTab(((I18N[pickLang()] || I18N.en).about || I18N.en.about).tab, ABOUT_SVG);
 
     // content
@@ -167,6 +169,7 @@
       tabSls.classList.toggle("active", which === "sls");
       tabGu.classList.toggle("active", which === "gu");
       if (tabCloud) tabCloud.classList.toggle("active", which === "cloud");
+      tabThemes.classList.toggle("active", which === "themes");
       tabAbout.classList.toggle("active", which === "about");
       if (which === "gu") {
         h.textContent = "";
@@ -190,6 +193,11 @@
         resetBtn.style.display = "none";
         clearBtn.style.display = "none";
         renderCloud(body);
+      } else if (which === "themes") {
+        h.textContent = themeStrings().title;
+        resetBtn.style.display = "none";
+        clearBtn.style.display = "none";
+        renderThemes(body);
       } else if (which === "about") {
         h.textContent = ((I18N[pickLang()] || I18N.en).about || I18N.en.about).title;
         resetBtn.style.display = "none";
@@ -205,8 +213,11 @@
     tabSls.addEventListener("click", function () { selectTab("sls"); });
     tabGu.addEventListener("click", function () { selectTab("gu"); });
     if (tabCloud) tabCloud.addEventListener("click", function () { selectTab("cloud"); });
+    tabThemes.addEventListener("click", function () { selectTab("themes"); });
     tabAbout.addEventListener("click", function () { selectTab("about"); });
-    selectTab("sls");
+    var returnTab = null;
+    try { returnTab = sessionStorage.getItem("lumen-return-tab"); sessionStorage.removeItem("lumen-return-tab"); } catch (e) {}
+    selectTab(returnTab === "themes" ? "themes" : "sls");
 
     var onKey = function (e) {
       if (e.key === "Escape") { requestClose(); }

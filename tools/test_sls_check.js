@@ -24,7 +24,11 @@ class El {
     this.tagName = (tag || "div").toUpperCase();
     this.childNodes = [];
     this.parentElement = null;
-    this.id = ""; this.title = ""; this._class = ""; this.style = {};
+    this.id = ""; this.title = ""; this._class = "";
+    this.style = {
+      removeProperty(name) { delete this[name]; },
+      setProperty(name, value) { this[name] = value; },
+    };
     this._listeners = {};
     const self = this;
     this.classList = {
