@@ -134,6 +134,23 @@
       ".lumen-about-ver .nm{flex:1;min-width:0;color:#dcdedf;font-size:14px;font-weight:600;}",
       ".lumen-about-ver .vv{color:#8f98a0;font-size:12px;font-family:monospace;margin-top:3px;",
       "font-weight:400;min-height:15px;}",
+      ".lumen-channel-host{min-height:25px;margin-top:7px;}",
+      ".lumen-channel{display:inline-flex;align-items:center;gap:2px;padding:2px;box-sizing:border-box;",
+      "border:1px solid var(--lumen-theme-border,rgba(255,255,255,.10));border-radius:6px;",
+      "background:var(--lumen-theme-bg,rgba(0,0,0,.16));}",
+      ".lumen-channel.single{padding:4px 8px;border-color:transparent;",
+      "background:var(--lumen-theme-raised,rgba(255,255,255,.04));",
+      "color:var(--lumen-theme-muted,#8f98a0);font-size:11px;font-weight:600;line-height:1.2;}",
+      ".lumen-channel-option{appearance:none;border:0;border-radius:4px;background:transparent;",
+      "color:var(--lumen-theme-muted,#8f98a0);cursor:pointer;font:600 11px/1.2 'Motiva Sans',Arial,sans-serif;",
+      "padding:4px 9px;transition:background .15s ease-out,color .15s ease-out;}",
+      ".lumen-channel-option:hover{color:var(--lumen-theme-text,#dcdedf);",
+      "background:var(--lumen-theme-raised,rgba(255,255,255,.06));}",
+      ".lumen-channel-option.active{color:#fff;background:var(--lumen-theme-accent,#1a9fff);}",
+      ".lumen-channel-option:focus-visible{outline:2px solid var(--lumen-theme-accent,#66c0f4);outline-offset:2px;}",
+      ".lumen-channel.busy{opacity:.65;}",
+      ".lumen-channel.busy .lumen-channel-option{cursor:wait;pointer-events:none;}",
+      ".lumen-channel-error{margin-top:4px;color:#ec5c5c;font-size:11px;line-height:1.35;}",
       ".lumen-about-state{flex:0 0 auto;font-size:11px;font-weight:700;text-transform:uppercase;",
       "letter-spacing:.4px;padding:3px 9px;border-radius:10px;white-space:nowrap;}",
       ".lumen-about-state.cur{background:#1a3a24;color:#6fd08c;}",
@@ -217,4 +234,3 @@
     ].join("");
     (document.head || document.documentElement).appendChild(s);
   }
-

@@ -4,3 +4,4 @@
 session.json
 *.log
 vendor/_src/
+/docs/superpowers/
