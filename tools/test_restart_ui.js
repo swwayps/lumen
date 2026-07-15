@@ -124,6 +124,10 @@ function run(restartResponse, options = {}) {
     "var _guClearBtnRef=null;",
     "function pickLang(){return 'en';}",
     "function injectStyles(){}",
+    "function applyAdaptivePalette(){}",
+    "var THEMES_SVG='';",
+    "function themeStrings(){return {tab:'Themes',title:'Themes'};}",
+    "function renderThemes(body){body.textContent='THEMES';}",
     "function requestClose(){}",
     "function closeOverlay(){}",
     "function guStrings(){return {tab:'Game Updates',title:'Game Updates',experimental:'Experimental',experimentalHint:'',clearManifests:'Clear',clearHint:'',clearConfirm:'Confirm',clearFail:'Failed'};}",
@@ -266,9 +270,9 @@ async function main() {
         || panels.gu.textContent || panels.about.textContent) {
       throw new Error("Cloud Saves must get background preload priority");
     }
-    for (const index of [1, 2, 3, 0, 3, 2, 1, 0]) {
+    for (const index of [1, 2, 3, 4, 0, 4, 3, 2, 1, 0]) {
       tabs[index].click();
-      const active = ["sls", "gu", "cloud", "about"][index];
+      const active = ["sls", "gu", "cloud", "themes", "about"][index];
       for (const [name, panel] of Object.entries(panels)) {
         const visible = panel.style.display !== "none";
         if (visible !== (name === active)) {

@@ -21,7 +21,7 @@ class El {
     this._text = "";
     this._listeners = {};
     this.attributes = {};
-    this.style = {};
+    this.style = { removeProperty() {}, setProperty() {} };
     this.classList = {
       add: (...names) => names.forEach((name) => {
         const set = new Set(this.className.split(/\s+/).filter(Boolean));

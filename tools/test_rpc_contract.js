@@ -51,11 +51,14 @@ const controls = new Set(matches(injector, /req\.fn\s*==\s*["']([^"']+)["']/g));
 const calls = new Set([
   ...matches(menu, /(?:^|[^.A-Za-z0-9_])call\(\s*["']([^"']+)["']/gm),
   ...matches(menu, /(?:^|[^.A-Za-z0-9_])relay\(\s*["']([^"']+)["']/gm),
+  // themeCall(name, args) is a thin wrapper over call() used by the Themes tab.
+  ...matches(menu, /(?:^|[^.A-Za-z0-9_])themeCall\(\s*["']([^"']+)["']/gm),
 ]);
 const unexpectedDynamicCalls = menu.split("\n").filter((line) =>
   /(?:^|[^.A-Za-z0-9_])call\(\s*(?!["'])/.test(line)
   && !/^\s*(?:\/\/|\/\*|\*)/.test(line)
   && !/function\s+call\s*\(/.test(line)
+  && !/function\s+themeCall\s*\(/.test(line)
   && !/call\(fn\)/.test(line),
 );
 const available = new Set([...allowlisted, ...registered, ...controls]);

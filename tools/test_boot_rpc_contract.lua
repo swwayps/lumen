@@ -30,6 +30,18 @@ package.loaded["millennium"] = {
 }
 package.loaded["utils"] = { read_file = function() return "" end }
 package.loaded["polyfill"] = {}
+-- Theme modules are inert for this contract test: boot's channel builder wires
+-- them in, but the RPC surface it exposes is what we assert here.
+package.loaded["themes"] = {
+  register = function() end,
+  load_config = function() return nil end,
+  set_apply_callback = function() end,
+}
+package.loaded["themeengine"] = { build = function() return nil end }
+package.loaded["themepreload"] = {
+  stage = function() return true end,
+  sync = function() return true end,
+}
 package.loaded["slsconfig"] = {
   default_path = function() return root .. "/config.yaml" end,
   read = function() return { DisableParentalRestrictions = false } end,

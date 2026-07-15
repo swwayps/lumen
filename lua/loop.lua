@@ -27,6 +27,9 @@ function loop.run(opts)
     assets = (not opts.channels) and opts.build_assets and opts.build_assets() or nil,
     registry = opts.registry,
   })
+  -- Let the caller wire injector-dependent callbacks (e.g. the theme apply
+  -- callback that queues a channel rebuild + RestartJSContext on a live change).
+  if type(opts.on_injector) == "function" then opts.on_injector(inj) end
   -- Exit when Steam is genuinely closed (don't linger as a background process),
   -- but tolerate slow boot (wait until Steam is first seen) and the restart gap
   -- (grace window). Liveness = the main `steam` client process in /proc.
@@ -85,6 +88,7 @@ function loop.run(opts)
       end
       if should_exit then
         deskcover.run("--user")        -- final heal before we stop
+        if type(opts.on_exit) == "function" then pcall(opts.on_exit) end
         log("Steam closed -> Lumen exiting")
         os.exit(0)
       end

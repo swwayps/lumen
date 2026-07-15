@@ -5,6 +5,7 @@
   function openOverlay() {
     if (document.getElementById(OVERLAY_ID)) return;
     injectStyles();
+    applyAdaptivePalette();
     var S0 = I18N[pickLang()] || I18N.en;
 
     var overlay = document.createElement("div");
@@ -42,6 +43,7 @@
     // set by boot.lua). Absent -> the tab isn't created and nothing cloud runs.
     var tabCloud = window.__lumenCloud ? mkTab(cloudStrings().tab, CLOUD_SVG) : null;
     var tabFixes = window.__lumenNoPlugin ? null : mkTab(luaToolsStrings().fixesTab, LUA_TOOLS_FIXES_SVG);
+    var tabThemes = mkTab(themeStrings().tab, THEMES_SVG);
     var tabAbout = mkTab(((I18N[pickLang()] || I18N.en).about || I18N.en.about).tab, ABOUT_SVG);
     var sideSpacer = document.createElement("div");
     sideSpacer.className = "lumen-side-spacer";
@@ -88,7 +90,7 @@
     x.className = "x";
     x.textContent = "\u2715";
     x.addEventListener("click", requestClose);
-    var slsBody, guBody, cloudBody, fixesBody, aboutBody, accountBody;
+    var slsBody, guBody, cloudBody, fixesBody, themesBody, aboutBody, accountBody;
 
     // Reset-to-defaults button: header-right (slsteam-moon tab only). Two-click
     // confirm so it can't fire by accident; on success the backend returns fresh
@@ -216,6 +218,7 @@
     guBody = makePanel("gu");
     cloudBody = tabCloud ? makePanel("cloud") : null;
     fixesBody = tabFixes ? makePanel("fixes") : null;
+    themesBody = makePanel("themes");
     aboutBody = makePanel("about");
     accountBody = accountEntry ? makePanel("account") : null;
     win.appendChild(side);
@@ -226,7 +229,7 @@
     // Each tab owns a persistent panel and initializes at most once. Async
     // responses can therefore finish in the background without clearing or
     // replacing whichever tab the user is currently viewing.
-    var initialized = { sls: false, gu: false, cloud: false, fixes: false, about: false, account: false };
+    var initialized = { sls: false, gu: false, cloud: false, fixes: false, themes: false, about: false, account: false };
     var preloadStarted = false;
     var currentTab = "sls";
     var accountPreviousTab = "sls";
@@ -324,6 +327,7 @@
       else if (which === "gu") loading = renderGameUpdates(guBody);
       else if (which === "cloud" && cloudBody) loading = renderCloud(cloudBody);
       else if (which === "fixes" && fixesBody) loading = renderLuaToolsFixes(fixesBody);
+      else if (which === "themes") loading = renderThemes(themesBody);
       else if (which === "about") loading = renderAbout(aboutBody);
       else if (which === "account" && accountBody) loading = renderLuaToolsAccount(accountBody, {
         onStatus: updateAccountEntry,
@@ -343,6 +347,7 @@
       tabGu.classList.toggle("active", which === "gu");
       if (tabCloud) tabCloud.classList.toggle("active", which === "cloud");
       if (tabFixes) tabFixes.classList.toggle("active", which === "fixes");
+      tabThemes.classList.toggle("active", which === "themes");
       tabAbout.classList.toggle("active", which === "about");
       if (accountEntry) accountEntry.classList.toggle("active", which === "account");
       guSetTabActive(which === "gu");
@@ -350,6 +355,7 @@
       guBody.style.display = which === "gu" ? "block" : "none";
       if (cloudBody) cloudBody.style.display = which === "cloud" ? "block" : "none";
       if (fixesBody) fixesBody.style.display = which === "fixes" ? "block" : "none";
+      if (themesBody) themesBody.style.display = which === "themes" ? "block" : "none";
       aboutBody.style.display = which === "about" ? "block" : "none";
       if (accountBody) accountBody.style.display = which === "account" ? "block" : "none";
       var warm = !!initialized[which];
@@ -374,6 +380,11 @@
         clearBtn.style.display = "none";
       } else if (which === "fixes") {
         h.textContent = luaToolsStrings().fixesTab;
+        resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
+        clearBtn.style.display = "none";
+      } else if (which === "themes") {
+        h.textContent = themeStrings().title;
         resetBtn.style.display = "none";
         restartBtn.style.display = "none";
         clearBtn.style.display = "none";
@@ -405,6 +416,7 @@
     tabGu.addEventListener("click", function () { selectTab("gu"); });
     if (tabCloud) tabCloud.addEventListener("click", function () { selectTab("cloud"); });
     if (tabFixes) tabFixes.addEventListener("click", function () { selectTab("fixes"); });
+    tabThemes.addEventListener("click", function () { selectTab("themes"); });
     tabAbout.addEventListener("click", function () { selectTab("about"); });
     if (accountEntry) accountEntry.addEventListener("click", function () {
       if (currentTab !== "account") accountPreviousTab = currentTab;
@@ -413,7 +425,12 @@
     accountBack.addEventListener("click", function () { selectTab(accountPreviousTab); });
     var requestedTab = window.__lumenSettingsInitialTab;
     window.__lumenSettingsInitialTab = null;
-    selectTab(requestedTab === "account" && accountBody ? "account" : "sls");
+    // A live theme apply restarts the JS context; sessionStorage survives it and
+    // brings the user back to the Themes tab. The account deep-link takes priority.
+    var returnTab = null;
+    try { returnTab = sessionStorage.getItem("lumen-return-tab"); sessionStorage.removeItem("lumen-return-tab"); } catch (e) {}
+    selectTab(requestedTab === "account" && accountBody ? "account"
+      : (returnTab === "themes" ? "themes" : "sls"));
     if (accountEntry) {
       call("GetLuaToolsAuthStatus", {}).then(luaToolsParse).then(updateAccountEntry).catch(function () {});
     }

@@ -6,7 +6,8 @@ local wsframe = require("wsframe")
 local cdp = require("cdp")
 local httpresp = require("httpresp")
 
-local HOST, PORT = "127.0.0.1", 8080
+local HOST = "127.0.0.1"
+local PORT = tonumber(os.getenv("LUMEN_CEF_PORT")) or 8080
 local EXPR = os.getenv("LUMEN_EVAL_EXPR") or "1+1"
 local WANT = os.getenv("LUMEN_EVAL_TARGET") or "SharedJSContext"
 
@@ -55,6 +56,10 @@ while not resp:find("\r\n\r\n", 1, true) do resp = resp .. (c:receive(1) or "") 
 assert(resp:find("101", 1, true), "ws upgrade failed")
 
 local session = cdp.new_session()
+if os.getenv("LUMEN_EVAL_RESUME") == "1" then
+  c:send(wsframe.encode_text(session:build_command(
+    "Runtime.runIfWaitingForDebugger", {})))
+end
 -- awaitPromise so promise-returning expressions resolve to their value.
 local id_cmd = session:build_command("Runtime.evaluate",
   { expression = EXPR, returnByValue = true, awaitPromise = true })
