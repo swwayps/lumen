@@ -4,6 +4,13 @@ const fs = require("fs");
 const vm = require("vm");
 const source = fs.readFileSync("lua/menu/03-styles.js", "utf8");
 
+if (!source.includes(".lumen-channel-option.active{color:#fff;background:var(--lumen-theme-accent")) {
+  throw new Error("FAIL: About channel selector does not use the adaptive theme accent");
+}
+if (!source.includes(".lumen-channel-option:hover{color:var(--lumen-theme-text")) {
+  throw new Error("FAIL: About channel selector hover state is not theme-adaptive");
+}
+
 class InlineStyle {
   constructor() { this.values = {}; }
   setProperty(name, value) { this.values[name] = String(value); }

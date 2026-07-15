@@ -5,6 +5,7 @@
 package.path = "lua/?.lua;" .. package.path
 
 local about = require("about")
+local json = require("json")
 
 local pass, fail = 0, 0
 local function check(name, cond)
@@ -123,6 +124,86 @@ check("installed missing file -> {}",
 check("installed bad json -> {}",
   next(about.read_installed("x", reader_returning("garbage"))) == nil)
 
+-- ── update channel preferences ──────────────────────────────────────────────
+local channels_ready = type(about.normalize_channels) == "function"
+  and type(about.read_channels) == "function"
+  and type(about.save_channels) == "function"
+check("exports update channel persistence", channels_ready)
+if channels_ready then
+  local defaults = about.normalize_channels(nil)
+  check("channels nil -> all stable", defaults.slsteam_moon == "stable"
+    and defaults.plugin == "stable" and defaults.lumen == "stable")
+
+  local mixed = about.normalize_channels({
+    slsteam_moon = "beta", plugin = "preview", lumen = "beta",
+  })
+  check("channels preserve supported beta", mixed.slsteam_moon == "beta"
+    and mixed.lumen == "beta")
+  check("channels reject unsupported value", mixed.plugin == "stable")
+
+  local decoded = about.read_channels("x", reader_returning(
+    '{"slsteam_moon":"stable","plugin":"beta","lumen":"beta"}'))
+  check("channels read JSON", decoded.slsteam_moon == "stable"
+    and decoded.plugin == "beta" and decoded.lumen == "beta")
+  local broken = about.read_channels("x", reader_returning("not json"))
+  check("channels malformed JSON -> defaults", broken.slsteam_moon == "stable"
+    and broken.plugin == "stable" and broken.lumen == "stable")
+end
+
+if channels_ready then
+  local writes, renamed = {}, nil
+  local ok = about.save_channels("/tmp/channels.json", {
+    slsteam_moon = "stable", plugin = "stable", lumen = "beta",
+  }, {
+    write_file = function(path, body)
+      writes[#writes + 1] = { path = path, body = body }
+      return true
+    end,
+    rename = function(from, to) renamed = { from, to }; return true end,
+  })
+  check("channels save succeeds", ok == true)
+  check("channels save writes temporary file", #writes == 1
+    and writes[1].path ~= "/tmp/channels.json")
+  local saved = json.decode(writes[1].body)
+  check("channels save normalized JSON", saved.lumen == "beta"
+    and saved.plugin == "stable")
+  check("channels save atomically renames", renamed
+    and renamed[1] == writes[1].path and renamed[2] == "/tmp/channels.json")
+end
+
+-- ── beta artifact metadata ──────────────────────────────────────────────────
+local beta_ready = type(about.beta_api_url) == "function"
+  and type(about.parse_beta_info) == "function"
+  and type(about.fetch_beta_info) == "function"
+check("exports beta artifact metadata", beta_ready)
+if beta_ready then
+  local function beta_http(status, body)
+    return { get = function() return { status = status, body = body }, nil end }
+  end
+  local component = {
+    repo = "swwayps/lumen", beta_path = "dist/lumen-linux.zip",
+  }
+  check("beta contents API URL", about.beta_api_url(component) ==
+    "https://api.github.com/repos/swwayps/lumen/contents/dist/lumen-linux.zip?ref=beta")
+  local info = about.parse_beta_info(
+    '{"sha":"0123456789abcdef","size":2733136,' ..
+    '"download_url":"https://raw.example/lumen-linux.zip"}')
+  check("parse beta tag + channel", info and info.tag == "beta"
+    and info.channel == "beta")
+  check("parse beta fingerprint", info and info.id == "0123456789abcdef"
+    and info.size == 2733136)
+  check("parse beta download URL", info
+    and info.download_url == "https://raw.example/lumen-linux.zip")
+  check("parse beta rejects missing URL", about.parse_beta_info(
+    '{"sha":"abc","size":1}') == nil)
+
+  local fetched = about.fetch_beta_info(component, beta_http(200,
+    '{"sha":"abc123","size":7,"download_url":"https://raw/x"}'))
+  check("fetch beta artifact", fetched and fetched.id == "abc123")
+  check("fetch beta missing branch", about.fetch_beta_info(component,
+    beta_http(404, "{}")) == nil)
+end
+
 -- ── fetch_latest_info (injected http) ────────────────────────────────────────
 local function http_status(status, body)
   return { get = function() return { status = status, body = body }, nil end }
@@ -179,6 +260,48 @@ do
   check("gv forge-down plugin unknown", by.plugin.state == "unknown")
 end
 
+do
+  -- Only Lumen publishes a beta artifact. A stored Lumen beta preference uses
+  -- that artifact fingerprint; the other components remain effective Stable.
+  local function release_body(url)
+    local name = url:find("/lumen/", 1, true) and "lumen-linux.zip"
+      or url:find("luatools-moon", 1, true) and "luatools-linux.zip"
+      or "slsteam-moon-linux-2.7-lumen.zip"
+    return '{"tag_name":"v2.7","assets":[{"name":"' .. name ..
+      '","id":700,"created_at":"2026-07-15T00:00:00Z","size":100}]} '
+  end
+  local http = { get = function(url)
+    if url:find("/contents/", 1, true) then
+      if url:find("/swwayps/lumen/", 1, true) then
+        return { status = 200, body =
+          '{"sha":"beta-lumen-sha","size":200,"download_url":"https://raw/beta"}' }
+      end
+      return { status = 404, body = "{}" }
+    end
+    return { status = 200, body = release_body(url) }
+  end }
+  local res = about.get_versions({
+    http = http,
+    versions_path = "/versions",
+    channels_path = "/channels",
+    read_file = function(path)
+      if path == "/channels" then
+        return '{"slsteam_moon":"beta","plugin":"stable","lumen":"beta"}'
+      end
+      return '{"lumen":{"tag":"v2.7","id":700,"channel":"stable"}}'
+    end,
+  })
+  local by = {}
+  for _, c in ipairs(res.components) do by[c.key] = c end
+  check("gv beta available only for Lumen", by.lumen.betaAvailable == true
+    and by.slsteam_moon.betaAvailable == false and by.plugin.betaAvailable == false)
+  check("gv selected Lumen beta", by.lumen.channel == "beta"
+    and by.lumen.latest == "beta" and by.lumen.latestAsset:find("beta%-lumen") ~= nil)
+  check("gv stable fallback when selected beta unavailable",
+    by.slsteam_moon.channel == "stable" and by.slsteam_moon.latest == "v2.7")
+  check("gv stable install differs from selected beta", by.lumen.state == "update")
+end
+
 -- ── terminal detection + command building ────────────────────────────────────
 do
   -- Only konsole present -> picked; x-terminal-emulator/gnome-terminal absent.
@@ -208,6 +331,49 @@ do
   check("script has installer url", s:find(about.INSTALL_URL, 1, true) ~= nil)
   check("script pauses", s:find("Press Enter", 1, true) ~= nil)
   check("script no flag by default", s:find("%-s %-%- ") == nil)
+end
+
+
+-- ── per-component channel flags ─────────────────────────────────────────────
+local flags_ready = type(about.channel_flags) == "function"
+check("exports channel flags", flags_ready)
+if flags_ready then
+  local flags = about.channel_flags({
+    slsteam_moon = "stable", plugin = "beta", lumen = "beta",
+  }, false)
+  check("channel flags deterministic", table.concat(flags, " ") ==
+    "--slsteam-channel stable --plugin-channel beta --lumen-channel beta")
+  local np = about.channel_flags({
+    slsteam_moon = "beta", plugin = "beta", lumen = "stable",
+  }, true)
+  check("noplugin omits plugin channel", table.concat(np, " ") ==
+    "--slsteam-channel beta --lumen-channel stable --noplugin")
+  local script = about.update_script(about.INSTALL_URL, flags)
+  check("update script forwards every channel", script:find(
+    "| bash %-s %-%- %-%-slsteam%-channel stable %-%-plugin%-channel beta %-%-lumen%-channel beta") ~= nil)
+end
+
+-- ── channel RPC registration ────────────────────────────────────────────────
+do
+  local registry, wrote = {}, nil
+  about.register(registry, {
+    channels_path = "/channels",
+    read_file = function() return '{"lumen":"stable"}' end,
+    channel_deps = {
+      write_file = function(_, body) wrote = body; return true end,
+      rename = function() return true end,
+    },
+  })
+  check("register exposes SetAboutChannel", type(registry.SetAboutChannel) == "function")
+  if type(registry.SetAboutChannel) == "function" then
+    local good = json.decode(registry.SetAboutChannel(
+      '{"key":"lumen","channel":"beta"}'))
+    check("channel RPC accepts known beta", good.success == true
+      and wrote and json.decode(wrote).lumen == "beta")
+    local bad = json.decode(registry.SetAboutChannel(
+      '{"key":"other","channel":"beta"}'))
+    check("channel RPC rejects unknown component", bad.success == false)
+  end
 end
 
 -- ── --noplugin behaviour ──────────────────────────────────────────────────────

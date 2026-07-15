@@ -26,11 +26,14 @@ local about = {}
 -- read THAT asset's fingerprint, not just the tag).
 about.COMPONENTS = {
   { key = "slsteam_moon", name = "slsteam-moon",    repo = "swwayps/slsteam-moon",
-    asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$" },
+    asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$",
+    beta_path = "dist/slsteam-moon-linux.zip" },
   { key = "plugin",       name = "LuaTools plugin", repo = "swwayps/luatools-moon",
-    asset_pat = "^luatools%-linux%.zip$" },
+    asset_pat = "^luatools%-linux%.zip$",
+    beta_path = "dist/luatools-linux.zip" },
   { key = "lumen",        name = "Lumen",           repo = "swwayps/lumen",
-    asset_pat = "^lumen%-linux%.zip$" },
+    asset_pat = "^lumen%-linux%.zip$",
+    beta_path = "dist/lumen-linux.zip" },
 }
 
 -- The public one-liner the Update All button runs in a terminal. Raw-branch URL
@@ -42,6 +45,75 @@ about.INSTALL_URL =
 function about.versions_path()
   local home = os.getenv("HOME") or ""
   return home .. "/.local/share/Lumen/versions.json"
+end
+
+-- Per-component update-channel preferences. Stable is the compatibility
+-- default for missing/old installs and for every malformed value.
+function about.channels_path()
+  local home = os.getenv("HOME") or ""
+  return home .. "/.local/share/Lumen/update-channels.json"
+end
+
+local CHANNEL_KEYS = { "slsteam_moon", "plugin", "lumen" }
+local function valid_channel(value)
+  return value == "beta" and "beta" or "stable"
+end
+
+function about.normalize_channels(raw)
+  raw = type(raw) == "table" and raw or {}
+  local out = {}
+  for _, key in ipairs(CHANNEL_KEYS) do out[key] = valid_channel(raw[key]) end
+  return out
+end
+
+function about.read_channels(path, read_file)
+  read_file = read_file or function(p)
+    local f = io.open(p, "rb"); if not f then return nil end
+    local d = f:read("*a"); f:close(); return d
+  end
+  local raw = read_file(path)
+  if type(raw) ~= "string" or raw == "" then
+    return about.normalize_channels(nil)
+  end
+  local ok, decoded = pcall(json.decode, raw)
+  if not ok then decoded = nil end
+  return about.normalize_channels(decoded)
+end
+
+-- Atomic save: write a complete sibling file, then replace the destination.
+-- Effects are injectable so the contract is host-testable without disk IO.
+function about.save_channels(path, channels, deps)
+  deps = deps or {}
+  local write_file = deps.write_file or function(p, body)
+    local f = io.open(p, "wb"); if not f then return false end
+    local ok = f:write(body); f:close(); return ok and true or false
+  end
+  local rename = deps.rename or os.rename
+  local remove = deps.remove or os.remove
+  local tmp = path .. ".tmp"
+  local body = json.encode(about.normalize_channels(channels))
+  if not write_file(tmp, body) then return false, "could not write channel preferences" end
+  local ok, err = rename(tmp, path)
+  if not ok then
+    pcall(remove, tmp)
+    return false, err or "could not replace channel preferences"
+  end
+  return true
+end
+
+function about.set_channel(path, key, channel, deps)
+  local known = false
+  for _, candidate in ipairs(CHANNEL_KEYS) do
+    if key == candidate then known = true; break end
+  end
+  if not known then return false, "unknown component" end
+  if channel ~= "stable" and channel ~= "beta" then
+    return false, "unknown channel"
+  end
+  local read_file = deps and deps.read_file
+  local current = about.read_channels(path, read_file)
+  current[key] = channel
+  return about.save_channels(path, current, deps)
 end
 
 -- read_installed(path[, read_file]) -> table of key->tag (empty table on any
@@ -76,9 +148,10 @@ function about.installed_entry(installed, key)
       asset_at = (type(v.asset_at) == "string" and v.asset_at ~= "" and v.asset_at) or nil,
       size     = (type(v.size) == "number" and v.size) or nil,
       id       = ((type(v.id) == "number" or type(v.id) == "string") and v.id) or nil,
+      channel  = valid_channel(v.channel),
     }
   elseif type(v) == "string" and v ~= "" then
-    return { tag = v }  -- legacy: tag only, no asset fingerprint
+    return { tag = v, channel = "stable" }  -- legacy: tag only, no asset fingerprint
   end
   return {}
 end
@@ -112,7 +185,9 @@ function about.fmt_asset(id)
   if type(id) == "number" then
     return "#" .. string.format("%d", id)
   elseif type(id) == "string" and id ~= "" then
-    return "#" .. id
+    -- Release asset ids are short numbers; beta ids are Git blob SHAs. Keep
+    -- the latter legible without letting the version line grow unpredictably.
+    return "#" .. (#id > 12 and id:sub(1, 12) or id)
   end
   return ""
 end
@@ -158,6 +233,39 @@ end
 -- API URL for a repo's latest published (non-draft, non-prerelease) release.
 function about.api_url(repo)
   return "https://api.github.com/repos/" .. repo .. "/releases/latest"
+end
+
+-- GitHub's contents endpoint returns only small metadata and proves both the
+-- beta branch and its expected dist asset exist; it never downloads the ZIP.
+function about.beta_api_url(component)
+  return "https://api.github.com/repos/" .. component.repo .. "/contents/"
+    .. component.beta_path .. "?ref=beta"
+end
+
+function about.parse_beta_info(body)
+  if type(body) ~= "string" or body == "" then return nil end
+  local ok, data = pcall(json.decode, body)
+  if not ok or type(data) ~= "table" then return nil end
+  if type(data.sha) ~= "string" or data.sha == ""
+      or type(data.download_url) ~= "string" or data.download_url == "" then
+    return nil
+  end
+  return {
+    tag = "beta",
+    channel = "beta",
+    id = data.sha,
+    size = type(data.size) == "number" and data.size or nil,
+    download_url = data.download_url,
+  }
+end
+
+function about.fetch_beta_info(component, http_mod)
+  local r, _ = http_mod.get(about.beta_api_url(component), {
+    timeout = 4,
+    headers = { ["Accept"] = "application/vnd.github+json", ["User-Agent"] = "lumen" },
+  })
+  if not r or r.status ~= 200 then return nil end
+  return about.parse_beta_info(r.body)
 end
 
 -- parse_latest_info(body, asset_pat) -> { tag, asset_at, size, id } or nil. Pure
@@ -209,15 +317,23 @@ function about.get_versions(opts)
   local include_plugin = opts.include_plugin ~= false
   local installed = about.read_installed(
     opts.versions_path or about.versions_path(), opts.read_file)
+  local channels = about.read_channels(
+    opts.channels_path or about.channels_path(), opts.read_file)
 
   local out = {}
   for _, c in ipairs(about.COMPONENTS) do
     if include_plugin or c.key ~= "plugin" then
       local inst = about.installed_entry(installed, c.key)
-      local latest = about.fetch_latest_info(c, http_mod)
+      local stable_latest = about.fetch_latest_info(c, http_mod)
+      local beta_latest = about.fetch_beta_info(c, http_mod)
+      local beta_available = beta_latest ~= nil
+      local channel = channels[c.key] == "beta" and beta_available and "beta" or "stable"
+      local latest = channel == "beta" and beta_latest or stable_latest
       out[#out + 1] = {
         key = c.key,
         name = c.name,
+        channel = channel,
+        betaAvailable = beta_available,
         installed = inst.tag or "",
         latest = (latest and latest.tag) or "",
         installedBuild = about.fmt_date(inst.asset_at),
@@ -279,13 +395,15 @@ end
 
 -- The bash script the terminal runs: the installer one-liner, then a pause so
 -- the window stays open for the user to read the result. No user-controlled
--- input is interpolated (the URL is a constant, and `flag` is one of our own
--- fixed option strings), so this is injection-safe. `flag` (e.g. "--noplugin")
--- is appended after `bash -s --` so an update keeps the same install mode.
+-- input is interpolated (the URL is a constant, and `flags` contains only our
+-- fixed option strings), so this is injection-safe. Flags are appended after
+-- `bash -s --` so an update keeps the selected channels and install mode.
 function about.update_script(install_url, flag)
   local run = "curl -fsSL " .. shq(install_url) .. " | bash"
-  if flag and flag ~= "" then
-    run = run .. " -s -- " .. flag
+  local flags = flag
+  if type(flags) == "string" then flags = flags ~= "" and { flags } or {} end
+  if type(flags) == "table" and #flags > 0 then
+    run = run .. " -s -- " .. table.concat(flags, " ")
   end
   return table.concat({
     "#!/usr/bin/env bash",
@@ -344,13 +462,32 @@ function about.update_all(opts)
   end
 
   local script = opts.tmp_path or ("/tmp/lumen-update-" .. tostring(os.time()) .. ".sh")
-  if not write_file(script, about.update_script(about.INSTALL_URL, opts.flag)) then
+  if not write_file(script, about.update_script(about.INSTALL_URL,
+      opts.flags or opts.flag)) then
     return { success = false, error = "Could not write the update script." }
   end
 
   local argv = about.launch_argv(term, script)
   spawn(about.build_command(argv))
   return { success = true, terminal = term.bin }
+end
+
+-- Deterministic installer argv for the independently selected component
+-- channels. --noplugin removes its channel entirely because that component is
+-- intentionally absent, while leaving the other two selections untouched.
+function about.channel_flags(channels, no_plugin)
+  channels = about.normalize_channels(channels)
+  local flags = {
+    "--slsteam-channel", channels.slsteam_moon,
+  }
+  if not no_plugin then
+    flags[#flags + 1] = "--plugin-channel"
+    flags[#flags + 1] = channels.plugin
+  end
+  flags[#flags + 1] = "--lumen-channel"
+  flags[#flags + 1] = channels.lumen
+  if no_plugin then flags[#flags + 1] = "--noplugin" end
+  return flags
 end
 
 -- register(registry[, opts]): install GetAboutVersions / UpdateAll, wrapping the
@@ -360,11 +497,33 @@ end
 function about.register(registry, opts)
   opts = opts or {}
   local no_plugin = opts.no_plugin and true or false
+  local channel_path = opts.channels_path or about.channels_path()
   registry.GetAboutVersions = function()
-    return json.encode(about.get_versions({ include_plugin = not no_plugin }))
+    return json.encode(about.get_versions({
+      include_plugin = not no_plugin,
+      versions_path = opts.versions_path,
+      channels_path = channel_path,
+      read_file = opts.read_file,
+      http = opts.http,
+    }))
+  end
+  registry.SetAboutChannel = function(raw)
+    local ok_decode, req = pcall(json.decode, raw or "")
+    if not ok_decode or type(req) ~= "table" then
+      return json.encode({ success = false, error = "invalid request" })
+    end
+    local deps = opts.channel_deps or {}
+    if opts.read_file and deps.read_file == nil then
+      deps.read_file = opts.read_file
+    end
+    local ok, err = about.set_channel(channel_path, req.key, req.channel, deps)
+    return json.encode({ success = ok and true or false, error = err })
   end
   registry.UpdateAll = function()
-    return json.encode(about.update_all({ flag = no_plugin and "--noplugin" or nil }))
+    local channels = about.read_channels(channel_path, opts.read_file)
+    return json.encode(about.update_all({
+      flags = about.channel_flags(channels, no_plugin),
+    }))
   end
   return registry
 end
