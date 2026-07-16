@@ -52,6 +52,18 @@ put(root .. "/1052518393/220200/saves/default/persistent.sfs", 100)
 put(root .. "/1052518393/220200/saves/default/persistent.loadmeta", 50)
 put(root .. "/1052518393/220200/file_tokens.cloudredirect", 999)
 put(root .. "/1052518393/220200/cn.cloudredirect", 3)
+put(root .. "/1052518393/220200/state.cloudredirect", 500)
+put(root .. "/1052518393/220200/manifest.1.cloudredirect", 450)
+put(root .. "/1052518393/220200/manifest.2.cloudredirect", 400)
+put(root .. "/1052518393/220200/manifest.3.cloudredirect", 350)
+put(root .. "/1052518393/220200/manifest.dat", 300)
+put(root .. "/1052518393/220200/deleted.cloudredirect", 200)
+put(root .. "/1052518393/220200/deleted.dat", 100)
+-- A game may legitimately use the same generic basename below its save tree.
+-- Only CloudRedirect bookkeeping at the app-directory root is metadata.
+mk(root .. "/1052518393/777777/saves")
+put(root .. "/1052518393/777777/saves/manifest.dat", 25)
+put(root .. "/1052518393/777777/manifest.1.cloudredirect", 500)
 -- account A, app 2057760: only metadata (0 real save files)
 mk(root .. "/1052518393/2057760")
 put(root .. "/1052518393/2057760/root_token.cloudredirect", 40)
@@ -78,14 +90,16 @@ eq(by["220200@1052518393"].size, 150, "220200@A: 150 bytes")
 ok(by["220200@720044628"], "220200 present for account B (separate entry)")
 eq(by["220200@720044628"].files, 1, "220200@B: 1 file")
 ok(by["2057760@1052518393"], "2057760 present (0 files)")
+eq(by["777777@1052518393"].files, 1, "nested manifest.dat remains save data")
+eq(by["777777@1052518393"].size, 25, "nested manifest.dat bytes remain counted")
 ok(by["650000@720044628"], "650000 present for account B")
 ok(not by["0@1052518393"], "account-scope app id 0 skipped")
 
 -- accounts list: both accounts, sorted by total save DATA desc. Account A holds
--- 150 B (real saves), account B holds 14 B, so A is the default (first).
+-- 175 B (real saves), account B holds 14 B, so A is the default (first).
 ok(type(res.accounts) == "table" and #res.accounts == 2, "two accounts listed")
 eq(res.accounts[1].id, 1052518393, "primary account (most save data) first")
-eq(res.accounts[1].size, 150, "account A total bytes")
+eq(res.accounts[1].size, 175, "account A total bytes")
 eq(res.accounts[2].id, 720044628, "second account")
 eq(res.accounts[2].size, 14, "account B total bytes (7+7)")
 
