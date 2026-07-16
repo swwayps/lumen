@@ -433,8 +433,17 @@ local STORAGE_META = {
   ["cn.cloudredirect"] = true, ["cn.dat"] = true,
   ["root_token.cloudredirect"] = true, ["root_token.dat"] = true,
   ["file_tokens.cloudredirect"] = true, ["file_tokens.dat"] = true,
-  ["manifest.cloudredirect"] = true,
+  ["manifest.cloudredirect"] = true, ["manifest.dat"] = true,
+  ["state.cloudredirect"] = true,
+  ["deleted.cloudredirect"] = true, ["deleted.dat"] = true,
 }
+
+local function is_storage_metadata(path)
+  -- CloudRedirect bookkeeping lives at the app-directory root. Do not suppress
+  -- a game's own nested file merely because it uses a generic metadata basename.
+  if path:find("/", 1, true) then return false end
+  return STORAGE_META[path] or path:match("^manifest%.%d+%.cloudredirect$") ~= nil
+end
 
 function cloudsettings.default_storage_root()
   local home = os.getenv("HOME") or ""
@@ -497,12 +506,12 @@ end
 local function scan_app_dir(dir)
   local files, size = 0, 0
   local cmd = "find '" .. dir:gsub("'", "'\\''") ..
-    "' -type f -printf '%s\\t%f\\n' 2>/dev/null"
+    "' -type f -printf '%s\\t%P\\n' 2>/dev/null"
   local p = io.popen(cmd, "r")
   if not p then return 0, 0 end
   for line in p:lines() do
-    local sz, name = line:match("^(%d+)\t(.*)$")
-    if sz and not STORAGE_META[name] then
+    local sz, path = line:match("^(%d+)\t(.*)$")
+    if sz and not is_storage_metadata(path) then
       files = files + 1
       size = size + (tonumber(sz) or 0)
     end
@@ -590,16 +599,41 @@ local function read_refresh_token(config_path, provider, cfg)
   return nil
 end
 
--- remote_appids(config_path, account[, deps]) -> JSON. Enumerates the app-id
--- folders present in the user's cloud for a Steam account (phase 2), so the
--- games list can flag remote-only / synced games. Returns success+appids, or a
--- reason ("not_authenticated" / "local") the frontend can quietly ignore. `deps`
--- forwards an injectable http to cloudremote for tests.
+-- remote_apps(config_path, account, local_appids[, deps]) -> JSON. Enumerates
+-- the app-id folders present in the user's cloud and returns logical statistics
+-- for remote-only games. Apps that already exist locally skip the metadata
+-- download because their displayed statistics come from list_apps().
+function cloudsettings.remote_apps(config_path, account, local_appids, deps)
+  local cfg = cloudsettings.read_config(config_path)
+  local provider = cfg.provider or "local"
+  if provider ~= "gdrive" and provider ~= "onedrive" then
+    return json.encode({ success = true, appids = json.array({}), apps = json.array({}),
+                         provider = provider, reason = "local" })
+  end
+  local rt = read_refresh_token(config_path, provider, cfg)
+  if not rt then
+    return json.encode({ success = false, reason = "not_authenticated", provider = provider })
+  end
+  local acct = math.tointeger(tonumber(account))
+  if not acct then return json.encode({ success = false, error = "bad account" }) end
+  local ok, cr = pcall(require, "cloudremote")
+  if not ok then return json.encode({ success = false, error = "cloudremote unavailable" }) end
+  if type(local_appids) ~= "table" then local_appids = {} end
+  local apps, err = cr.list_apps(provider, rt, acct, local_appids, deps)
+  if not apps then return json.encode({ success = false, error = tostring(err), provider = provider }) end
+  local appids = {}
+  for _, app in ipairs(apps) do appids[#appids + 1] = app.appid end
+  return json.encode({ success = true, appids = json.array(appids),
+                       apps = json.array(apps), provider = provider })
+end
+
+-- Compatibility for callers that only need presence and use the old signature.
 function cloudsettings.remote_appids(config_path, account, deps)
   local cfg = cloudsettings.read_config(config_path)
   local provider = cfg.provider or "local"
   if provider ~= "gdrive" and provider ~= "onedrive" then
-    return json.encode({ success = true, appids = json.array({}), provider = provider, reason = "local" })
+    return json.encode({ success = true, appids = json.array({}),
+                         provider = provider, reason = "local" })
   end
   local rt = read_refresh_token(config_path, provider, cfg)
   if not rt then
@@ -610,7 +644,9 @@ function cloudsettings.remote_appids(config_path, account, deps)
   local ok, cr = pcall(require, "cloudremote")
   if not ok then return json.encode({ success = false, error = "cloudremote unavailable" }) end
   local appids, err = cr.list_appids(provider, rt, acct, deps)
-  if not appids then return json.encode({ success = false, error = tostring(err), provider = provider }) end
+  if not appids then
+    return json.encode({ success = false, error = tostring(err), provider = provider })
+  end
   return json.encode({ success = true, appids = json.array(appids), provider = provider })
 end
 
@@ -651,7 +687,8 @@ function cloudsettings.register(registry, config_path)
   end
   registry.LumenCloudApps = function() return cloudsettings.list_apps() end
   registry.LumenCloudRemoteApps = function(j)
-    return cloudsettings.remote_appids(cp, decode_arg(j).account)
+    local r = decode_arg(j)
+    return cloudsettings.remote_apps(cp, r.account, r.local_appids)
   end
   return registry
 end

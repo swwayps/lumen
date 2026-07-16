@@ -35,6 +35,30 @@ do
   eq(cr.parse_access_token("garbage"), nil, "bad token body -> nil")
 end
 
+-- ── pure: logical save statistics from canonical state + legacy manifest ────
+do
+  ok(type(cr.parse_state_stats) == "function", "state stats parser is available")
+  local state = cr.parse_state_stats(json.encode({ files = {
+    ["save-a.dat"] = { size = 5423 },
+    ["save-b.dat"] = { size = 100, ps = 0 },
+    ["forgotten.dat"] = { size = 900, ps = 1 },
+    ["deleted.dat"] = { size = 800, ps = 2 },
+    ["invalid.dat"] = { size = 700, ps = "invalid" },
+  } }))
+  eq(state.files, 2, "state counts persisted files")
+  eq(state.size, 5523, "state sums persisted sizes")
+  eq(cr.parse_state_stats("garbage"), nil, "invalid state rejected")
+
+  ok(type(cr.parse_manifest_stats) == "function", "manifest stats parser is available")
+  local manifest = cr.parse_manifest_stats(json.encode({
+    ["slot1.sav"] = { size = 1200 },
+    ["slot2.sav"] = { size = 34 },
+  }))
+  eq(manifest.files, 2, "manifest counts logical files")
+  eq(manifest.size, 1234, "manifest sums logical sizes")
+  eq(cr.parse_manifest_stats("garbage"), nil, "invalid manifest rejected")
+end
+
 -- ── pure: parse Drive folder listing (folders only) ─────────────────────────
 do
   local body = json.encode({ files = {
@@ -59,6 +83,103 @@ do
   ok(has(folders, "620") and has(folders, "700"), "onedrive folder names extracted")
   ok(not has(folders, "file.sav"), "files excluded")
   eq(nextlink, "https://graph/next", "next link surfaced")
+end
+
+-- ── structured remote apps: fetch stats only for remote-only games ──────────
+do
+  ok(type(cr.list_apps) == "function", "structured remote app listing is available")
+end
+
+do
+  local calls = {}
+  local fake = {
+    post = function()
+      return { status = 200, body = '{"access_token":"ATOK","expires_in":3599}' }
+    end,
+    get = function(url, opts)
+      calls[#calls + 1] = url
+      ok(opts and opts.headers and opts.headers["Authorization"] == "Bearer ATOK",
+        "gdrive structured flow uses bearer token")
+      if url:find("STATEID", 1, true) and url:find("alt=media", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          ["remote.sav"] = { size = 5423 },
+          ["deleted.sav"] = { size = 100, ps = 2 },
+        } }) }
+      elseif url:find("REMOTEID", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          { id = "STATEID", name = "state.cloudredirect", mimeType = "application/json" },
+        } }) }
+      elseif url:find("CloudRedirect", 1, true) and url:find("root", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          { id = "ROOTID", name = "CloudRedirect",
+            mimeType = "application/vnd.google-apps.folder" },
+        } }) }
+      elseif url:find("ROOTID", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          { id = "ACCTID", name = "1052518393",
+            mimeType = "application/vnd.google-apps.folder" },
+        } }) }
+      elseif url:find("ACCTID", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          { id = "LOCALID", name = "220200",
+            mimeType = "application/vnd.google-apps.folder" },
+          { id = "REMOTEID", name = "413150",
+            mimeType = "application/vnd.google-apps.folder" },
+        } }) }
+      end
+      return { status = 404, body = "{}" }
+    end,
+  }
+  local apps, err = cr.list_apps("gdrive", "RTgd", 1052518393, { 220200 }, { http = fake })
+  ok(apps, "gdrive structured apps returned (" .. tostring(err) .. ")")
+  local by = {}
+  for _, app in ipairs(apps) do by[app.appid] = app end
+  eq(by[220200].files, 0, "local gdrive app skips remote stats")
+  eq(by[413150].files, 1, "remote-only gdrive app counts logical files")
+  eq(by[413150].size, 5423, "remote-only gdrive app sums logical bytes")
+  for _, url in ipairs(calls) do
+    ok(not url:find("LOCALID", 1, true), "local gdrive app metadata was not requested")
+  end
+end
+
+do
+  local calls = {}
+  local fake = {
+    post = function()
+      return { status = 200, body = '{"access_token":"OD","expires_in":3599}' }
+    end,
+    get = function(url, opts)
+      calls[#calls + 1] = url
+      ok(opts and opts.headers and opts.headers["Authorization"] == "Bearer OD",
+        "onedrive structured flow uses bearer token")
+      if url:find("manifest.cloudredirect:/content", 1, true) then
+        return { status = 200, body = json.encode({
+          ["slot1.sav"] = { size = 1200 },
+          ["slot2.sav"] = { size = 34 },
+        }) }
+      elseif url:find("367520:/children", 1, true) then
+        return { status = 200, body = json.encode({ value = {
+          { name = "manifest.cloudredirect", file = { mimeType = "application/json" } },
+        } }) }
+      elseif url:find("720044628:/children", 1, true) then
+        return { status = 200, body = json.encode({ value = {
+          { name = "489830", folder = {} },
+          { name = "367520", folder = {} },
+        } }) }
+      end
+      return { status = 404, body = "{}" }
+    end,
+  }
+  local apps, err = cr.list_apps("onedrive", "RTod", 720044628, { 489830 }, { http = fake })
+  ok(apps, "onedrive structured apps returned (" .. tostring(err) .. ")")
+  local by = {}
+  for _, app in ipairs(apps) do by[app.appid] = app end
+  eq(by[489830].files, 0, "local onedrive app skips remote stats")
+  eq(by[367520].files, 2, "remote-only onedrive app counts manifest files")
+  eq(by[367520].size, 1234, "remote-only onedrive app sums manifest bytes")
+  for _, url in ipairs(calls) do
+    ok(not url:find("489830:/children", 1, true), "local onedrive app metadata was not requested")
+  end
 end
 
 -- ── gdrive end-to-end flow with a fake HTTP layer ───────────────────────────

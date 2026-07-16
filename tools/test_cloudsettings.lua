@@ -313,44 +313,95 @@ do
   os.remove(p)
 end
 
--- ── remote_appids: provider/auth gating + delegation to cloudremote ─────────
+-- ── remote apps: provider/auth gating + structured cloud statistics ─────────
 do
+  ok(type(cs.remote_apps) == "function", "structured remote apps API is available")
+
   -- local provider => no remote enumeration, empty appids (quietly).
   local p = tmpfile('{"provider":"local"}')
-  local r = json.decode(cs.remote_appids(p, 1))
+  local r = json.decode(cs.remote_apps(p, 1, {}))
   eq(r.success, true, "local provider remote ok")
   eq(#r.appids, 0, "local provider has no remote appids")
+  eq(#r.apps, 0, "local provider has no structured remote apps")
   os.remove(p)
 
   -- gdrive but no token file => not_authenticated.
   local dir = os.tmpname(); os.remove(dir); assert(os.execute("mkdir -p '" .. dir .. "'"))
   local cfgp = dir .. "/config.json"
   local f = io.open(cfgp, "wb"); f:write('{"provider":"gdrive"}'); f:close()
-  local na = json.decode(cs.remote_appids(cfgp, 1052518393))
+  local na = json.decode(cs.remote_apps(cfgp, 1052518393, {}))
   eq(na.success, false, "gdrive without token fails")
   eq(na.reason, "not_authenticated", "reason is not_authenticated")
 
-  -- gdrive with a token => delegates to cloudremote (fake http returns appids).
+  -- gdrive with a token => local apps skip metadata and remote-only apps return
+  -- logical statistics from canonical state.
   local tf = io.open(dir .. "/tokens_gdrive.json", "wb")
   tf:write('{"refresh_token":"RT","access_token":"AT","expires_at":9999999999}'); tf:close()
+  local calls = {}
   local fake = {
     post = function() return { status = 200, body = '{"access_token":"ATOK","expires_in":3599}' } end,
     get = function(url)
-      if url:find("CloudRedirect", 1, true) and url:find("root", 1, true) then
-        return { status = 200, body = json.encode({ files = { { id = "R", name = "CloudRedirect",
+      calls[#calls + 1] = url
+      if url:find("STATEID", 1, true) and url:find("alt=media", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          ["remote.sav"] = { size = 5423 },
+        } }) }
+      elseif url:find("REMOTEID", 1, true) then
+        return { status = 200, body = json.encode({ files = {
+          { id = "STATEID", name = "state.cloudredirect", mimeType = "application/json" },
+        } }) }
+      elseif url:find("CloudRedirect", 1, true) and url:find("root", 1, true) then
+        return { status = 200, body = json.encode({ files = { { id = "ROOTID", name = "CloudRedirect",
           mimeType = "application/vnd.google-apps.folder" } } }) }
       elseif url:find("1052518393", 1, true) then
-        return { status = 200, body = json.encode({ files = { { id = "A", name = "1052518393",
+        return { status = 200, body = json.encode({ files = { { id = "ACCTID", name = "1052518393",
           mimeType = "application/vnd.google-apps.folder" } } }) }
-      else
+      elseif url:find("ACCTID", 1, true) then
         return { status = 200, body = json.encode({ files = {
-          { id = "x", name = "250900", mimeType = "application/vnd.google-apps.folder" } } }) }
+          { id = "LOCALID", name = "250900", mimeType = "application/vnd.google-apps.folder" },
+          { id = "REMOTEID", name = "311690", mimeType = "application/vnd.google-apps.folder" },
+        } }) }
       end
+      return { status = 404, body = "{}" }
     end,
   }
-  local rr = json.decode(cs.remote_appids(cfgp, 1052518393, { http = fake }))
+  local rr = json.decode(cs.remote_apps(cfgp, 1052518393, { 250900 }, { http = fake }))
   eq(rr.success, true, "gdrive with token succeeds")
-  ok(rr.appids[1] == 250900, "remote appid enumerated via cloudremote")
+  eq(rr.apps[1].appid, 250900, "structured local app returned")
+  eq(rr.apps[2].appid, 311690, "structured remote-only app returned")
+  eq(rr.apps[2].files, 1, "remote logical file count returned")
+  eq(rr.apps[2].size, 5423, "remote logical byte size returned")
+  eq(rr.appids[1], 250900, "compatibility local appid returned")
+  eq(rr.appids[2], 311690, "compatibility remote appid returned")
+
+  -- The old presence-only API remains cheap: it must not read per-app metadata.
+  calls = {}
+  local presence = json.decode(cs.remote_appids(cfgp, 1052518393, { http = fake }))
+  eq(presence.success, true, "presence-only compatibility API succeeds")
+  eq(presence.appids[2], 311690, "presence-only API returns remote appids")
+  for _, url in ipairs(calls) do
+    ok(not url:find("LOCALID", 1, true) and not url:find("REMOTEID", 1, true),
+      "presence-only API skips per-app metadata")
+  end
+
+  -- The registered positional RPC wrapper must decode and forward local_appids.
+  local cr = require("cloudremote")
+  local old_list_apps = cr.list_apps
+  local forwarded
+  cr.list_apps = function(provider, refresh_token, account, local_appids)
+    forwarded = local_appids
+    return { { appid = 311690, files = 1, size = 5423 } }
+  end
+  local registry = {}
+  cs.register(registry, cfgp)
+  local rpc = require("rpc")
+  local dispatched, raw = rpc.dispatch(registry.LumenCloudRemoteApps, {
+    json = json.encode({ account = 1052518393, local_appids = { 250900 } }),
+  })
+  cr.list_apps = old_list_apps
+  ok(dispatched, "structured remote RPC dispatch succeeds")
+  eq(forwarded[1], 250900, "registered RPC forwards local_appids")
+  eq(json.decode(raw).apps[1].size, 5423, "registered RPC returns structured stats")
   os.execute("rm -rf '" .. dir .. "'")
 end
 

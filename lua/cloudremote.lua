@@ -5,7 +5,7 @@
 -- CloudRedirect's Google Drive + OneDrive providers needed to list the app-id
 -- folders under a Steam account, plus the OAuth token refresh — talking to the
 -- SAME cloud layout the hook uses: root "CloudRedirect" / <steamAccountId> /
--- <appId>. Read-only; no writes, no downloads.
+-- <appId>. Read-only; no writes and no save-blob downloads.
 --
 -- The hook itself is 32-bit and file-based on Linux, so this never touches the
 -- hook; it just re-reads the same refresh token and hits the provider's REST
@@ -63,6 +63,34 @@ function cloudremote.parse_access_token(body)
   return nil
 end
 
+local function logical_stats(files, honor_persist_state)
+  if type(files) ~= "table" then return nil end
+  local count, size = 0, 0
+  for _, entry in pairs(files) do
+    if type(entry) == "table" then
+      local persisted = not honor_persist_state or entry.ps == nil or tonumber(entry.ps) == 0
+      if persisted then
+        count = count + 1
+        local bytes = tonumber(entry.size)
+        if bytes and bytes >= 0 then size = size + bytes end
+      end
+    end
+  end
+  return { files = count, size = size }
+end
+
+function cloudremote.parse_state_stats(body)
+  local ok, state = pcall(json.decode, body or "")
+  if not ok or type(state) ~= "table" then return nil end
+  return logical_stats(state.files, true)
+end
+
+function cloudremote.parse_manifest_stats(body)
+  local ok, manifest = pcall(json.decode, body or "")
+  if not ok or type(manifest) ~= "table" then return nil end
+  return logical_stats(manifest, false)
+end
+
 -- Google Drive files.list query for folders named `name` under `parent_id`
 -- (or Drive root when parent_id is nil/empty). Returned UNENCODED.
 function cloudremote.gdrive_query(name, parent_id)
@@ -83,28 +111,46 @@ function cloudremote.gdrive_children_query(parent_id)
   return "'" .. esc .. "' in parents and trashed=false"
 end
 
--- parse_drive_folders(body) -> {names...}, next_page_token(or nil)
-function cloudremote.parse_drive_folders(body)
+-- parse_drive_folder_entries(body) -> {{id,name}...}, next_page_token(or nil)
+function cloudremote.parse_drive_folder_entries(body)
   local ok, j = pcall(json.decode, body or "")
   if not ok or type(j) ~= "table" then return {}, nil end
-  local names = {}
+  local entries = {}
   for _, f in ipairs(j.files or {}) do
-    if f.mimeType == GDRIVE_FOLDER_MIME and f.name then names[#names + 1] = f.name end
+    if f.mimeType == GDRIVE_FOLDER_MIME and f.name then
+      entries[#entries + 1] = { id = f.id, name = f.name }
+    end
   end
   local tok = j.nextPageToken
   if tok == "" then tok = nil end
+  return entries, tok
+end
+
+-- parse_drive_folders(body) -> {names...}, next_page_token(or nil)
+function cloudremote.parse_drive_folders(body)
+  local entries, tok = cloudremote.parse_drive_folder_entries(body)
+  local names = {}
+  for _, entry in ipairs(entries) do names[#names + 1] = entry.name end
   return names, tok
+end
+
+-- parse_onedrive_folder_entries(body) -> {{name}...}, next_link(or nil)
+function cloudremote.parse_onedrive_folder_entries(body)
+  local ok, j = pcall(json.decode, body or "")
+  if not ok or type(j) ~= "table" then return {}, nil end
+  local entries = {}
+  for _, it in ipairs(j.value or {}) do
+    if it.folder ~= nil and it.name then entries[#entries + 1] = { name = it.name } end
+  end
+  return entries, j["@odata.nextLink"]
 end
 
 -- parse_onedrive_folders(body) -> {names...}, next_link(or nil)
 function cloudremote.parse_onedrive_folders(body)
-  local ok, j = pcall(json.decode, body or "")
-  if not ok or type(j) ~= "table" then return {}, nil end
+  local entries, next_link = cloudremote.parse_onedrive_folder_entries(body)
   local names = {}
-  for _, it in ipairs(j.value or {}) do
-    if it.folder ~= nil and it.name then names[#names + 1] = it.name end
-  end
-  return names, j["@odata.nextLink"]
+  for _, entry in ipairs(entries) do names[#names + 1] = entry.name end
+  return names, next_link
 end
 
 -- ── IO layer ────────────────────────────────────────────────────────────────
@@ -151,12 +197,12 @@ local function gdrive_find_folder(http, token, name, parent_id)
   return j.files[1].id
 end
 
-local function gdrive_list_appids(http, token, account_id)
+local function gdrive_list_app_folders(http, token, account_id)
   local root = gdrive_find_folder(http, token, "CloudRedirect", nil)
   if not root then return {} end -- no CloudRedirect folder yet => nothing remote
   local acct = gdrive_find_folder(http, token, tostring(account_id), root)
   if not acct then return {} end
-  local appids, page = {}, nil
+  local folders, page = {}, nil
   repeat
     local q = cloudremote.gdrive_children_query(acct)
     local url = "https://www.googleapis.com/drive/v3/files?q=" .. urlencode(q) ..
@@ -164,15 +210,15 @@ local function gdrive_list_appids(http, token, account_id)
     if page then url = url .. "&pageToken=" .. urlencode(page) end
     local r = gdrive_get(http, token, url)
     if not r or r.status ~= 200 then break end
-    local names, nexttok = cloudremote.parse_drive_folders(r.body)
-    for _, n in ipairs(names) do appids[#appids + 1] = n end
+    local entries, nexttok = cloudremote.parse_drive_folder_entries(r.body)
+    for _, entry in ipairs(entries) do folders[#folders + 1] = entry end
     page = nexttok
   until not page
-  return appids
+  return folders
 end
 
-local function onedrive_list_appids(http, token, account_id)
-  local appids = {}
+local function onedrive_list_app_folders(http, token, account_id)
+  local folders = {}
   local url = "https://graph.microsoft.com/v1.0/me/drive/root:/CloudRedirect/" ..
     tostring(account_id) .. ":/children?$select=name,folder&$top=1000"
   repeat
@@ -180,11 +226,150 @@ local function onedrive_list_appids(http, token, account_id)
     if not r then break end
     if r.status == 404 then return {} end -- account folder absent => nothing remote
     if r.status ~= 200 then break end
-    local names, nextlink = cloudremote.parse_onedrive_folders(r.body)
-    for _, n in ipairs(names) do appids[#appids + 1] = n end
+    local entries, nextlink = cloudremote.parse_onedrive_folder_entries(r.body)
+    for _, entry in ipairs(entries) do folders[#folders + 1] = entry end
     url = nextlink
   until not url
-  return appids
+  return folders
+end
+
+local METADATA_PRIORITY = {
+  "state.cloudredirect",
+  "manifest.cloudredirect",
+  "manifest.dat",
+}
+
+local function parse_metadata_stats(name, body)
+  if name == "state.cloudredirect" then
+    return cloudremote.parse_state_stats(body)
+  end
+  return cloudremote.parse_manifest_stats(body)
+end
+
+local function gdrive_read_stats(http, token, folder_id)
+  local metadata, page = {}, nil
+  repeat
+    local q = cloudremote.gdrive_children_query(folder_id)
+    local url = "https://www.googleapis.com/drive/v3/files?q=" .. urlencode(q) ..
+      "&fields=" .. urlencode("nextPageToken,files(id,name,mimeType)") .. "&pageSize=100"
+    if page then url = url .. "&pageToken=" .. urlencode(page) end
+    local r = gdrive_get(http, token, url)
+    if not r or r.status ~= 200 then break end
+    local ok, j = pcall(json.decode, r.body or "")
+    if not ok or type(j) ~= "table" then break end
+    for _, file in ipairs(j.files or {}) do
+      if file.id and file.name then metadata[file.name] = file.id end
+    end
+    page = j.nextPageToken
+    if page == "" then page = nil end
+  until not page
+
+  for _, name in ipairs(METADATA_PRIORITY) do
+    local id = metadata[name]
+    if id then
+      local url = "https://www.googleapis.com/drive/v3/files/" .. urlencode(id) .. "?alt=media"
+      local r = gdrive_get(http, token, url)
+      if r and r.status == 200 then
+        local stats = parse_metadata_stats(name, r.body)
+        if stats then return stats end
+      end
+    end
+  end
+  return { files = 0, size = 0 }
+end
+
+local function onedrive_get(http, token, url)
+  return http.get(url, { headers = { ["Authorization"] = "Bearer " .. token }, timeout = 30 })
+end
+
+local function onedrive_read_stats(http, token, account_id, appid)
+  local base = "https://graph.microsoft.com/v1.0/me/drive/root:/CloudRedirect/" ..
+    tostring(account_id) .. "/" .. tostring(appid)
+  local metadata = {}
+  local url = base .. ":/children?$select=name,file&$top=100"
+  repeat
+    local r = onedrive_get(http, token, url)
+    if not r or r.status ~= 200 then break end
+    local ok, j = pcall(json.decode, r.body or "")
+    if not ok or type(j) ~= "table" then break end
+    for _, file in ipairs(j.value or {}) do
+      if file.file ~= nil and file.name then metadata[file.name] = true end
+    end
+    url = j["@odata.nextLink"]
+  until not url
+
+  for _, name in ipairs(METADATA_PRIORITY) do
+    if metadata[name] then
+      local r = onedrive_get(http, token, base .. "/" .. name .. ":/content")
+      if r and r.status == 200 then
+        local stats = parse_metadata_stats(name, r.body)
+        if stats then return stats end
+      end
+    end
+  end
+  return { files = 0, size = 0 }
+end
+
+local function numeric_app_folders(folders)
+  local apps, seen = {}, {}
+  for _, folder in ipairs(folders) do
+    local id = math.tointeger(tonumber(folder.name))
+    -- Skip the account-scope folder (appId 0), where the hook stores account-
+    -- wide data (stats.json) rather than a real game's saves.
+    if id and id ~= 0 and not seen[id] then
+      seen[id] = true
+      apps[#apps + 1] = { appid = id, folder = folder }
+    end
+  end
+  table.sort(apps, function(a, b) return a.appid < b.appid end)
+  return apps
+end
+
+local function local_appid_set(local_appids)
+  local set = {}
+  for _, id in ipairs(local_appids or {}) do
+    local n = math.tointeger(tonumber(id))
+    if n then set[n] = true end
+  end
+  return set
+end
+
+-- list_apps(provider, refresh_token, account_id, local_appids[, deps]) ->
+-- {{appid,files,size}...} or nil, err. Remote metadata is fetched only for
+-- AppIDs that are not present in local_appids.
+function cloudremote.list_apps(provider, refresh_token, account_id, local_appids, deps)
+  if provider ~= "gdrive" and provider ~= "onedrive" then
+    return nil, "unsupported provider"
+  end
+  local http = resolve_http(deps)
+  local token, terr = get_access_token(http, provider, refresh_token)
+  if not token then return nil, terr end
+
+  local folders
+  if provider == "gdrive" then
+    folders = gdrive_list_app_folders(http, token, account_id)
+  else
+    folders = onedrive_list_app_folders(http, token, account_id)
+  end
+
+  local local_set = local_appid_set(local_appids)
+  local apps = {}
+  for _, entry in ipairs(numeric_app_folders(folders)) do
+    local stats = { files = 0, size = 0 }
+    if not local_set[entry.appid] then
+      if provider == "gdrive" then
+        stats = gdrive_read_stats(http, token, entry.folder.id)
+      else
+        stats = onedrive_read_stats(http, token, account_id, entry.appid)
+      end
+    end
+    apps[#apps + 1] = {
+      appid = entry.appid,
+      files = stats.files,
+      size = stats.size,
+    }
+  end
+  return apps
 end
 
 -- list_appids(provider, refresh_token, account_id[, deps]) -> {appid(number)...}
@@ -197,20 +382,15 @@ function cloudremote.list_appids(provider, refresh_token, account_id, deps)
   local token, terr = get_access_token(http, provider, refresh_token)
   if not token then return nil, terr end
 
-  local names
+  local folders
   if provider == "gdrive" then
-    names = gdrive_list_appids(http, token, account_id)
+    folders = gdrive_list_app_folders(http, token, account_id)
   else
-    names = onedrive_list_appids(http, token, account_id)
+    folders = onedrive_list_app_folders(http, token, account_id)
   end
 
   local appids = {}
-  for _, n in ipairs(names) do
-    local id = math.tointeger(tonumber(n))
-    -- Skip the account-scope folder (appId 0), where the hook stores account-
-    -- wide data (stats.json) rather than a real game's saves.
-    if id and id ~= 0 then appids[#appids + 1] = id end
-  end
+  for _, entry in ipairs(numeric_app_folders(folders)) do appids[#appids + 1] = entry.appid end
   return appids
 end
 

@@ -224,6 +224,44 @@
     return card;
   }
 
+  // Merge local scanner records with structured provider records for one Steam
+  // account. Local figures remain authoritative for synced games; only a game
+  // that has no local record uses the remote logical file count and byte size.
+  function cloudMergeApps(allApps, remoteSet, account) {
+    var localList = allApps.filter(function (a) {
+      return account == null || a.account === account;
+    });
+    var localIds = {};
+    var out = localList.map(function (a) {
+      localIds[a.appid] = true;
+      return {
+        appid: a.appid,
+        account: a.account,
+        files: a.files,
+        size: a.size,
+        local: true,
+        remote: !!(remoteSet && remoteSet[a.appid]),
+      };
+    });
+    if (remoteSet) {
+      Object.keys(remoteSet).forEach(function (idStr) {
+        var id = Number(idStr);
+        if (!localIds[id]) {
+          var remote = remoteSet[idStr] || {};
+          out.push({
+            appid: id,
+            account: account,
+            files: Number(remote.files) || 0,
+            size: Number(remote.size) || 0,
+            local: false,
+            remote: true,
+          });
+        }
+      });
+    }
+    return out;
+  }
+
   // Render the games list into its own section under the settings. Fetches the
   // unified app list (LumenCloudApps), with a search box that filters by name or
   // app id. Kept in a dedicated container so a re-render doesn't touch the rest.
@@ -264,31 +302,15 @@
 
     var allApps = [];          // local apps (per Steam account)
     var nameCache = {};
-    var remoteSets = {};       // account id -> { appid: true } (remote enumeration)
+    var remoteSets = {};       // account id -> { appid: {appid,files,size} }
     var currentAccount = null; // selected account id (null = show all)
 
     // Build the merged view for the current account: local apps annotated with
     // whether they also exist remotely, plus remote-only games as extra cards.
     function mergedApps() {
       var acct = currentAccount;
-      var localList = allApps.filter(function (a) { return acct == null || a.account === acct; });
-      var localIds = {};
-      var out = localList.map(function (a) {
-        localIds[a.appid] = true;
-        var rset = (acct != null && remoteSets[acct]) || null;
-        return { appid: a.appid, account: a.account, files: a.files, size: a.size,
-                 local: true, remote: !!(rset && rset[a.appid]) };
-      });
       var rset = (acct != null && remoteSets[acct]) || null;
-      if (rset) {
-        Object.keys(rset).forEach(function (idStr) {
-          var id = Number(idStr);
-          if (!localIds[id]) {
-            out.push({ appid: id, account: acct, files: 0, size: 0, local: false, remote: true });
-          }
-        });
-      }
-      return out;
+      return cloudMergeApps(allApps, rset, acct);
     }
 
     function draw() {
@@ -324,14 +346,29 @@
     // (not signed in / offline) are non-fatal: the list just stays local-only.
     function ensureRemote(account) {
       if (account == null || remoteSets[account]) { draw(); return; }
-      call("LumenCloudRemoteApps", { json: JSON.stringify({ account: account }) })
+      var localAppids = allApps
+        .filter(function (a) { return a.account === account; })
+        .map(function (a) { return a.appid; });
+      call("LumenCloudRemoteApps", {
+        json: JSON.stringify({ account: account, local_appids: localAppids }),
+      })
         .then(function (res) {
           var r; try { r = JSON.parse(res); } catch (e) {}
           var set = {};
-          if (r && r.success && r.appids) r.appids.forEach(function (id) { set[id] = true; });
+          var records = [];
+          if (r && r.success && Array.isArray(r.apps)) {
+            records = r.apps;
+          } else if (r && r.success && Array.isArray(r.appids)) {
+            records = r.appids.map(function (id) { return { appid: id, files: 0, size: 0 }; });
+          }
+          records.forEach(function (app) {
+            var id = Number(app.appid);
+            if (id) set[id] = { appid: id, files: app.files || 0, size: app.size || 0 };
+          });
           remoteSets[account] = set;
           if (r && r.success && typeof fetchAppName === "function") {
-            (r.appids || []).forEach(function (id) {
+            records.forEach(function (app) {
+              var id = Number(app.appid);
               fetchAppName(id).then(function (n) { if (n) nameCache[id] = n; }).catch(function () {});
             });
           }
@@ -458,4 +495,3 @@
     body.textContent = "Loading\u2026";
     cloudReload(body);
   }
-
