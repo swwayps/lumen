@@ -951,6 +951,15 @@ function mp.build_games(ctx)
       -- pin, and an empty depot list would serialize as `{}` (not `[]`) and trip
       -- the frontend. (Also keeps the list clean after a manifest purge.)
       if #depots > 0 and not all_shared then
+        local is_synthetic = false
+        if appid and ctx.cache_dir then
+          local sf = io.open(ctx.cache_dir .. "/synthetic_" .. appid, "r")
+          if sf then
+            sf:close()
+            is_synthetic = true
+          end
+        end
+
         games[#games + 1] = {
           appid = appid,
           locked = appPins.locked or false,
@@ -958,6 +967,7 @@ function mp.build_games(ctx)
           depots = depots,
           dlc_appids = parsed.dlc_appids,
           fromLuaFile = imports[appid] == true,
+          synthetic = is_synthetic,
         }
       end
     end
