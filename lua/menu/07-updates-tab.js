@@ -68,8 +68,8 @@
       };
 
       var latest = verRow({
-        label: GU.latest, selected: !anyPinned && !_providersOffline,
-        disabled: _providersOffline,
+        label: GU.latest, selected: !anyPinned && !_providersOffline && !game.synthetic,
+        disabled: _providersOffline || game.synthetic,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
             .then(function () { select(latest); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
@@ -84,7 +84,7 @@
         if (v.pinned) badges.push({ cls: "lock", text: GU.pinned });
         if (v.installed) badges.push({ cls: "cur", text: GU.current });
         if (v.fromLuaTools) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
-        var isSelected = v.pinned || (_providersOffline && !anyPinned && (v.installed || (!hasInstalled && v.fromLuaTools)));
+        var isSelected = v.pinned || ((_providersOffline || game.synthetic) && !anyPinned && (v.installed || (!hasInstalled && v.fromLuaTools)));
         var row = verRow({
           label: fmtDate(v.date), gid: v.gid, selected: isSelected, badges: badges,
           onClick: function () {
@@ -238,8 +238,8 @@
     };
 
     var latest = verRow({
-      label: GU.latest, selected: !game.locked && !_providersOffline && !game.offline,
-      disabled: _providersOffline || game.offline,
+      label: GU.latest, selected: !game.locked && !_providersOffline && !game.offline && !game.synthetic,
+      disabled: _providersOffline || game.offline || game.synthetic,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
           .then(function () { select(latest); setLocked(false); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
@@ -254,7 +254,7 @@
       var badges = [];
       if (b.installed) badges.push({ cls: "cur", text: GU.current });
       if (b.fromLua) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
-      var isSelected = (game.locked && b.pinned) || ((_providersOffline || game.offline) && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
+      var isSelected = (game.locked && b.pinned) || ((_providersOffline || game.offline || game.synthetic) && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
       var row = verRow({
         label: fmtDate(b.date), selected: isSelected, badges: badges,
         onClick: function () {
