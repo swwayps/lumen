@@ -36,7 +36,7 @@ if command -v systemctl >/dev/null 2>&1; then
       echo "unit:steam-launcher.service"
       exit 0
     fi
-    setsid nohup systemctl --user restart steam-launcher.service \
+    setsid nohup systemctl --user restart steam-launcher.service 9>&- \
       </dev/null >/dev/null 2>&1 &
     exit 0
   fi
@@ -52,7 +52,7 @@ if command -v systemctl >/dev/null 2>&1; then
       echo "unit:$gs_unit"
       exit 0
     fi
-    setsid nohup systemctl --user restart "$gs_unit" \
+    setsid nohup systemctl --user restart "$gs_unit" 9>&- \
       </dev/null >/dev/null 2>&1 &
     exit 0
   fi
@@ -99,5 +99,5 @@ if pgrep -x steam >/dev/null 2>&1 \
 fi
 
 sleep 1
-setsid nohup "$LAUNCHER" </dev/null >/dev/null 2>&1 &
+setsid nohup "$LAUNCHER" 9>&- </dev/null >/dev/null 2>&1 &
 exit 0

@@ -54,20 +54,21 @@ function steamrestart.restart(deps)
 end
 
 function steamrestart.register(registry, deps)
-  local restarting = false
+  local now = deps and deps.now or os.time
+  local restart_guard_until = 0
   registry.RestartSteam = function()
-    if restarting then
+    local started_at = now()
+    if started_at < restart_guard_until then
       return json.encode({
         success = false,
         error = "Steam restart already in progress",
       })
     end
     local ok, err = steamrestart.restart(deps)
-    if ok then restarting = true end
-    return json.encode({
-      success = ok == true,
-      error = ok and nil or tostring(err),
-    })
+    if ok then restart_guard_until = started_at + 15 end
+    local response = { success = ok == true }
+    if not ok then response.error = tostring(err) end
+    return json.encode(response)
   end
   return registry
 end

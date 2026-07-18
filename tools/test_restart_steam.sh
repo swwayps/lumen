@@ -88,5 +88,9 @@ grep -q "flock -n" "$RESTART_SH" || {
   echo "FAIL: restart helper has no cross-process lock" >&2
   exit 1
 }
+grep -q 'setsid nohup "$LAUNCHER" 9>&-' "$RESTART_SH" || {
+  echo "FAIL: launched Steam inherits the restart lock descriptor" >&2
+  exit 1
+}
 
 echo "test_restart_steam: ALL PASS"
