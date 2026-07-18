@@ -94,6 +94,42 @@
         });
     });
 
+    // Native restart: available with or without the optional LuaTools plugin.
+    // Confirmation is explicit because Steam and its open windows will close.
+    var restartBtn = document.createElement("div");
+    restartBtn.className = "reset lumen-restart";
+    restartBtn.textContent = S0.restart || "Restart Steam";
+    var restartPending = false;
+    restartBtn.addEventListener("click", function () {
+      if (restartPending) return;
+      showConfirm({
+        title: S0.restartTitle || "Restart Steam?",
+        body: S0.restartBody || "Steam will close and reopen through slsteam-moon. Continue?",
+        declineText: S0.restartCancel || "Cancel",
+        confirmText: S0.restartConfirm || "Restart Steam",
+        onConfirm: function () {
+          if (restartPending) return;
+          restartPending = true;
+          call("RestartSteam", {})
+            .then(function (res) {
+              var result = typeof res === "string" ? JSON.parse(res) : res;
+              if (!result || !result.success) {
+                throw new Error((result && result.error) || "restart failed");
+              }
+            })
+            .catch(function (e) {
+              restartPending = false;
+              showConfirm({
+                title: S0.restartFailTitle || "Could not restart Steam",
+                body: (S0.restartFail || "Restart failed: ")
+                  + (e && e.message ? e.message : e),
+                confirmText: (S0.about && S0.about.ok) || "OK",
+              });
+            });
+        },
+      });
+    });
+
     // Clear-stored-versions button: header-right (Game Updates tab only). Drops
     // archived manifests EXCEPT installed/pinned ones; two-click confirm.
     var clearBtn = document.createElement("div");
@@ -132,7 +168,7 @@
         });
     });
 
-    ctop.appendChild(h); ctop.appendChild(clearBtn); ctop.appendChild(resetBtn); ctop.appendChild(x);
+    ctop.appendChild(h); ctop.appendChild(clearBtn); ctop.appendChild(restartBtn); ctop.appendChild(resetBtn); ctop.appendChild(x);
 
     var body = document.createElement("div");
     body.className = "lumen-body";
@@ -186,26 +222,31 @@
         info.title = guStrings().experimentalHint;
         h.appendChild(info);
         resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
         clearBtn.style.display = "";
         renderGameUpdates(body);
       } else if (which === "cloud") {
         h.textContent = cloudStrings().title;
         resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
         clearBtn.style.display = "none";
         renderCloud(body);
       } else if (which === "themes") {
         h.textContent = themeStrings().title;
         resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
         clearBtn.style.display = "none";
         renderThemes(body);
       } else if (which === "about") {
         h.textContent = ((I18N[pickLang()] || I18N.en).about || I18N.en.about).title;
         resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
         clearBtn.style.display = "none";
         renderAbout(body);
       } else {
         h.textContent = "slsteam-moon";
         resetBtn.style.display = "";
+        restartBtn.style.display = "";
         clearBtn.style.display = "none";
         loadSlsConfig();
       }
