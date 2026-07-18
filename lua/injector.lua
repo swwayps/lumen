@@ -13,6 +13,7 @@ local httpresp = require("httpresp")
 local polyfill = require("polyfill")
 local rpc = require("rpc")
 local cefport = require("cefport")
+local b64 = require("b64")
 
 local injector = {}
 
@@ -174,6 +175,16 @@ local function list_all_targets()
   return targets
 end
 
+-- Browser/root CDP websocket. Fetch enabled through flattened child sessions
+-- covers current and future Store/Community renderers.
+local function browser_ws_url()
+  local body = http_get("/json/version")
+  if not body then return nil end
+  local ok, version = pcall(json.decode, body)
+  if not ok or type(version) ~= "table" then return nil end
+  return version.webSocketDebuggerUrl
+end
+
 -- Is Steam's main UI up (past login + first paint)? SharedJSContext exists even
 -- at the "Sign in" screen, so attaching to ANY target before the main shell is
 -- up interferes with the client coming up (stalls boot / blanks render). We
@@ -196,8 +207,130 @@ local function ui_is_ready()
   return false
 end
 
-local function send_cmd(c, session, method, params)
-  c:send(wsframe.encode_text(session:build_command(method, params)))
+local function send_cmd(c, session, method, params, child_session)
+  local frame = wsframe.encode_text(
+    session:build_command(method, params, child_session))
+  -- The socket is normally non-blocking. Use a bounded full-frame write so a
+  -- large fulfilled HTML document cannot be truncated silently.
+  c:settimeout(5)
+  local first = 1
+  while first <= #frame do
+    local sent, err, last = c:send(frame, first)
+    local upto = sent or last
+    if not upto or upto < first then
+      c:settimeout(0)
+      return false, err
+    end
+    first = upto + 1
+    if err and err ~= "timeout" then
+      c:settimeout(0)
+      return false, err
+    end
+  end
+  c:settimeout(0)
+  return true
+end
+
+-- Enable the public-document gateway only after Steam has completed login and
+-- painted its shell. Attaching the browser observer during cold boot can stall
+-- CEF before the UI is usable.
+function injector.anonymous_gateway_config(channels, ui_ready)
+  if ui_ready ~= true then return nil end
+  for _, channel in ipairs(channels or {}) do
+    if type(channel.assets) == "table"
+        and channel.assets.anonymous_web == true then
+      return { anonymous_web = true }
+    end
+  end
+  return nil
+end
+
+function injector.anonymous_web_url(url)
+  local host = tostring(url or ""):match("^https://([^/%?#]+)")
+  if not host then return false end
+  host = host:lower()
+  return host == "store.steampowered.com" or host == "steamcommunity.com"
+end
+
+-- Forward presentation headers only. Cookie, authorization, session and
+-- compression headers must never cross into the credential-free request.
+function injector.anonymous_request_headers(headers)
+  local allowed = {
+    ["accept"] = true,
+    ["accept-language"] = true,
+    ["user-agent"] = true,
+  }
+  local out, have_user_agent = {}, false
+  for name, value in pairs(type(headers) == "table" and headers or {}) do
+    local lower = tostring(name):lower()
+    if allowed[lower] then
+      out[#out + 1] = tostring(name) .. ": " .. tostring(value)
+      if lower == "user-agent" then have_user_agent = true end
+    end
+  end
+  if not have_user_agent then
+    out[#out + 1] = "User-Agent: Valve Steam Client"
+  end
+  table.sort(out)
+  return out
+end
+
+function injector.anonymous_fetch_patterns(gateway)
+  if not gateway or gateway.anonymous_web ~= true then return {} end
+  return {
+    {
+      urlPattern = "https://store.steampowered.com/*",
+      resourceType = "Document",
+      requestStage = "Request",
+    },
+    {
+      urlPattern = "https://steamcommunity.com/*",
+      resourceType = "Document",
+      requestStage = "Request",
+    },
+  }
+end
+
+function injector.anonymous_response_plan(response)
+  if type(response) ~= "table" or type(response.body) ~= "string" then
+    return nil, "invalid response"
+  end
+  local status = tonumber(response.status)
+  if not status or status < 100 or status > 599 then
+    return nil, "invalid status"
+  end
+  status = math.floor(status)
+  if status >= 300 and status < 400 then
+    if not injector.anonymous_web_url(response.redirect_url) then
+      return nil, "unsafe redirect"
+    end
+    return { action = "redirect", status = status, url = response.redirect_url }
+  end
+  if status < 200 or status >= 300 then
+    return nil, "unexpected HTTP status"
+  end
+  if response.effective_url
+      and not injector.anonymous_web_url(response.effective_url) then
+    return nil, "unsafe effective URL"
+  end
+  local content_type = tostring(response.content_type or "")
+  local media_type = content_type:lower():match("^%s*([^;]+)")
+  if media_type ~= "text/html" and media_type ~= "application/xhtml+xml" then
+    return nil, "non-HTML response"
+  end
+  return {
+    action = "document",
+    status = status,
+    content_type = content_type,
+  }
+end
+
+function injector.browser_auto_attach_params(enabled)
+  return {
+    autoAttach = enabled == true,
+    waitForDebuggerOnStart = false,
+    flatten = true,
+  }
 end
 
 -- ── Per-target connection object ───────────────────────────────────────────
@@ -410,6 +543,342 @@ function Conn:close()
   self.sock = nil
 end
 
+-- ── Browser/root public-document gateway ───────────────────────────────────
+-- A target-level connection is created after a document already exists. The
+-- browser websocket can auto-attach flattened child sessions and enable Fetch
+-- before future Store/Community navigations reach the network.
+local BrowserConn = {}
+BrowserConn.__index = BrowserConn
+
+local function browser_conn_new(ws_url, gateway)
+  return setmetatable({
+    ws_url = ws_url,
+    gateway = gateway,
+    sock = nil,
+    session = nil,
+    buf = "",
+    sessions = {},
+    setup_pending = {},
+    setup_counts = {},
+    requests = {},
+    discover_id = nil,
+    discover_done = false,
+    auto_attach_id = nil,
+    enabled = false,
+    enable_failed = false,
+    send_failed = false,
+    setup_failed = false,
+  }, BrowserConn)
+end
+
+function BrowserConn:_send_child(session_id, method, params, pending)
+  local id = self.session._id + 1
+  if not send_cmd(self.sock, self.session, method, params, session_id) then
+    self.send_failed = true
+    return nil
+  end
+  if pending then self.setup_pending[id] = pending end
+  return id
+end
+
+function BrowserConn:_queue_setup(session_id, kind, method, params)
+  local pending = { session_id = session_id, kind = kind }
+  local id = self:_send_child(session_id, method, params, pending)
+  if id then
+    self.setup_counts[session_id] =
+      (self.setup_counts[session_id] or 0) + 1
+  end
+  return id
+end
+
+function BrowserConn:_resume(session_id)
+  self:_send_child(session_id, "Runtime.runIfWaitingForDebugger", {})
+end
+
+function BrowserConn:_setup_target(session_id, info, waiting)
+  if not session_id or self.sessions[session_id] then return end
+  local state = {
+    info = info or {},
+    waiting = waiting == true,
+    fetch_enabled = false,
+  }
+  self.sessions[session_id] = state
+  if state.info.type == "page" then
+    self:_queue_setup(session_id, "fetch", "Fetch.enable", {
+      patterns = injector.anonymous_fetch_patterns(self.gateway),
+    })
+  end
+  if state.waiting then
+    self:_resume(session_id)
+    state.waiting = false
+  end
+end
+
+function BrowserConn:_fail_request(session_id, request_id, reason)
+  self:_send_child(session_id, "Fetch.failRequest", {
+    requestId = request_id,
+    errorReason = reason or "Failed",
+  })
+end
+
+function BrowserConn:_start_anonymous_request(params, session_id)
+  local request = params.request or {}
+  if request.method ~= "GET" then
+    self:_fail_request(session_id, params.requestId, "BlockedByClient")
+    return
+  end
+
+  local ok_http, http = pcall(require, "http")
+  if not ok_http or type(http.start) ~= "function"
+      or type(http.poll) ~= "function" then
+    self:_fail_request(session_id, params.requestId, "Failed")
+    return
+  end
+  local ok_start, handle, start_err = pcall(http.start, request.url, {
+    headers = injector.anonymous_request_headers(request.headers),
+    timeout = 10,
+    follow_redirects = false,
+    https_only = true,
+    max_bytes = 8 * 1024 * 1024,
+  })
+  if not ok_start or not handle then
+    log("public web request failed to start: "
+      .. tostring(ok_start and start_err or handle))
+    self:_fail_request(session_id, params.requestId, "Failed")
+    return
+  end
+  self.requests[params.requestId] = {
+    handle = handle,
+    http = http,
+    session_id = session_id,
+  }
+end
+
+function BrowserConn:_fulfill_response(session_id, request_id, response, err)
+  local plan, plan_err = injector.anonymous_response_plan(response)
+  if not plan then
+    log("public web request failed: " .. tostring(err or plan_err))
+    self:_fail_request(session_id, request_id, "Failed")
+    return
+  end
+  if plan.action == "redirect" then
+    self:_send_child(session_id, "Fetch.fulfillRequest", {
+      requestId = request_id,
+      responseCode = plan.status,
+      responseHeaders = {
+        { name = "Location", value = plan.url },
+        { name = "Cache-Control", value = "no-store" },
+      },
+      body = "",
+    })
+    return
+  end
+  self:_send_child(session_id, "Fetch.fulfillRequest", {
+    requestId = request_id,
+    responseCode = plan.status,
+    responseHeaders = {
+      { name = "Content-Type", value = plan.content_type },
+      { name = "Cache-Control", value = "no-store" },
+    },
+    body = b64.encode(response.body),
+  })
+end
+
+function BrowserConn:_poll_requests()
+  for request_id, pending in pairs(self.requests) do
+    local ok_poll, done, response, err =
+      pcall(pending.http.poll, pending.handle)
+    if not ok_poll then
+      self.requests[request_id] = nil
+      self:_fail_request(pending.session_id, request_id, "Failed")
+      log("public web request poll failed: " .. tostring(done))
+    elseif done then
+      self.requests[request_id] = nil
+      self:_fulfill_response(pending.session_id, request_id, response, err)
+    end
+  end
+end
+
+function BrowserConn:_finish_setup(message)
+  local pending = self.setup_pending[message.id]
+  if not pending then return false end
+  self.setup_pending[message.id] = nil
+  local session_id = pending.session_id
+  local state = self.sessions[session_id]
+  if message.kind ~= "result" then
+    self.setup_failed = true
+  elseif state and pending.kind == "fetch" then
+    state.fetch_enabled = true
+    -- Existing pages may already display Steam's restricted response. Reload
+    -- once only after Fetch.enable is acknowledged.
+    if injector.anonymous_web_url(state.info and state.info.url)
+        and not state.reloaded then
+      state.reloaded = true
+      self:_send_child(session_id, "Page.reload", { ignoreCache = true })
+    end
+  end
+  local left = math.max(0, (self.setup_counts[session_id] or 1) - 1)
+  self.setup_counts[session_id] = left > 0 and left or nil
+  return true
+end
+
+function BrowserConn:_handle_result(message)
+  if self.discover_id and message.id == self.discover_id then
+    self.discover_id = nil
+    self.discover_done = message.kind == "result"
+    if not self.discover_done then self.setup_failed = true end
+    return
+  end
+  if self.auto_attach_id and message.id == self.auto_attach_id then
+    self.auto_attach_id = nil
+    self.enabled = message.kind == "result"
+    self.enable_failed = not self.enabled
+    return
+  end
+  self:_finish_setup(message)
+end
+
+function BrowserConn:_handle_event(message)
+  local params = message.params or {}
+  if message.method == "Target.attachedToTarget" then
+    self:_setup_target(params.sessionId, params.targetInfo,
+      params.waitingForDebugger)
+  elseif message.method == "Target.detachedFromTarget" then
+    self.sessions[params.sessionId] = nil
+    self.setup_counts[params.sessionId] = nil
+    for request_id, pending in pairs(self.requests) do
+      if pending.session_id == params.sessionId then
+        self.requests[request_id] = nil
+      end
+    end
+  elseif message.method == "Fetch.requestPaused" and message.session_id then
+    local url = params.request and params.request.url or ""
+    if injector.anonymous_web_url(url) then
+      self:_start_anonymous_request(params, message.session_id)
+    else
+      self:_send_child(message.session_id, "Fetch.continueRequest", {
+        requestId = params.requestId,
+      })
+    end
+  end
+end
+
+function BrowserConn:_consume(bytes)
+  if bytes and #bytes > 0 then self.buf = self.buf .. bytes end
+  while true do
+    local frame, opcode, rest, complete = wsframe.decode_frame(self.buf)
+    if not complete then break end
+    self.buf = rest
+    if opcode == 0x8 then return false end
+    if opcode == 0x1 then
+      local ok, message = pcall(cdp.parse_message, frame)
+      if ok and message then
+        if message.kind == "event" then
+          self:_handle_event(message)
+        else
+          self:_handle_result(message)
+        end
+      end
+    end
+  end
+  return true
+end
+
+function BrowserConn:_pump(timeout)
+  if self.send_failed or self.setup_failed then return false end
+  self.sock:settimeout(timeout or 0)
+  local chunk, err, partial = self.sock:receive(8192)
+  self.sock:settimeout(0)
+  local got = chunk or partial
+  if got and #got > 0 and not self:_consume(got) then return false end
+  return err ~= "closed" and not self.send_failed and not self.setup_failed
+end
+
+function BrowserConn:_wait_until(predicate, seconds)
+  local deadline = socket.gettime() + (seconds or 2)
+  while socket.gettime() < deadline do
+    if predicate() then return true end
+    if not self:_pump(math.min(0.05, deadline - socket.gettime())) then
+      return false
+    end
+  end
+  return predicate()
+end
+
+function BrowserConn:connect()
+  local path = ws_path(self.ws_url)
+  if not path then return false end
+  local connection = socket.tcp()
+  connection:settimeout(5)
+  if not connection:connect(CEF_HOST, cef_port()) then
+    connection:close()
+    return false
+  end
+  if not ws_handshake(connection, path) then
+    connection:close()
+    return false
+  end
+  connection:settimeout(0)
+  self.sock = connection
+  self.session = cdp.new_session()
+  self.buf = ""
+
+  self.discover_id = self.session._id + 1
+  if not send_cmd(connection, self.session, "Target.setDiscoverTargets",
+      { discover = true }) then
+    self:close(false)
+    return false
+  end
+  self.auto_attach_id = self.session._id + 1
+  if not send_cmd(connection, self.session, "Target.setAutoAttach",
+      injector.browser_auto_attach_params(true)) then
+    self:close(false)
+    return false
+  end
+
+  local ready = self:_wait_until(function()
+    return self.send_failed or self.setup_failed or self.enable_failed
+      or (self.discover_done and self.enabled
+          and next(self.setup_pending) == nil)
+  end, 3)
+  if not ready or not self.discover_done or not self.enabled
+      or self.send_failed or self.setup_failed then
+    self:close(false)
+    return false
+  end
+  log("public Store/Community gateway attached")
+  return true
+end
+
+function BrowserConn:drain()
+  if self.send_failed or self.setup_failed then return false end
+  local data, err, partial = self.sock:receive("*a")
+  local got = data or partial
+  if got and #got > 0 and not self:_consume(got) then return false end
+  self:_poll_requests()
+  return err ~= "closed" and not self.send_failed and not self.setup_failed
+end
+
+function BrowserConn:close(disable)
+  if disable ~= false and self.sock and self.session and self.enabled then
+    for session_id, state in pairs(self.sessions) do
+      if state.waiting then self:_resume(session_id) end
+      if state.info and state.info.type == "page" then
+        self:_send_child(session_id, "Fetch.disable", {})
+      end
+    end
+    send_cmd(self.sock, self.session, "Target.setAutoAttach",
+      injector.browser_auto_attach_params(false))
+  end
+  if self.sock then pcall(function() self.sock:close() end) end
+  self.sock = nil
+  self.enabled = false
+  self.sessions = {}
+  self.setup_pending = {}
+  self.setup_counts = {}
+  self.requests = {}
+end
+
 -- ── Multi-target manager (cooperative new/fds/tick) ────────────────────────
 local State = {}
 State.__index = State
@@ -436,12 +905,51 @@ function injector.new(opts)
     backoff = 1,
     next_attempt = 0,
     ui_ready = false,    -- latched once Steam's main UI is up (post-login/paint)
+    browser_conn = nil,
+    next_gateway_attempt = 0,
   }, State)
+end
+
+function State:_sync_anonymous_gateway()
+  local desired = injector.anonymous_gateway_config(self.channels, self.ui_ready)
+  if not desired then
+    if self.browser_conn then
+      self.browser_conn:close(true)
+      self.browser_conn = nil
+    end
+    return true
+  end
+  if self.browser_conn and self.browser_conn.sock
+      and self.browser_conn.enabled then
+    return true
+  end
+  local now = os.time()
+  if now < self.next_gateway_attempt then return false end
+  if self.browser_conn then
+    self.browser_conn:close(false)
+    self.browser_conn = nil
+  end
+  local ws_url = browser_ws_url()
+  if not ws_url then
+    self.next_gateway_attempt = now + 2
+    return false
+  end
+  local connection = browser_conn_new(ws_url, desired)
+  if not connection:connect() then
+    self.next_gateway_attempt = now + 2
+    return false
+  end
+  self.browser_conn = connection
+  self.next_gateway_attempt = 0
+  return true
 end
 
 -- fds() -> array of currently-open CDP sockets for select().
 function State:fds()
   local out = {}
+  if self.browser_conn and self.browser_conn.sock then
+    out[#out + 1] = self.browser_conn.sock
+  end
   for _, conn in pairs(self.conns) do
     if conn.sock then out[#out + 1] = conn.sock end
   end
@@ -638,7 +1146,16 @@ end
 
 -- tick(): connect to new targets, drain existing ones, drop closed ones.
 function State:tick()
+  self:_sync_anonymous_gateway()
+  if self.browser_conn and self.browser_conn.sock
+      and not self.browser_conn:drain() then
+    log("public Store/Community gateway closed (will re-attach)")
+    self.browser_conn:close(false)
+    self.browser_conn = nil
+    self.next_gateway_attempt = os.time() + 1
+  end
   self:_discover()
+  self:_sync_anonymous_gateway()
   for url, conn in pairs(self.conns) do
     if conn.sock then
       local alive = conn:drain()

@@ -12,6 +12,18 @@ local injector = require("injector")
 
 local function assert_true(c, m) if not c then error("FAIL: " .. (m or "")) end end
 
+do
+  local f = assert(io.open("lua/boot.lua", "r"))
+  local source = f:read("*a")
+  f:close()
+  assert_true(source:find("anonymous_web = parental_unlock_enabled", 1, true),
+    "parental unlock enables public Store/Community documents")
+  assert_true(not source:find('require("themeengine")', 1, true),
+    "main branch keeps theme infrastructure out of boot")
+  assert_true(not source:find('require("themepreload")', 1, true),
+    "main branch keeps theme preload out of boot")
+end
+
 local SAMPLE = {
   { title = "Steam",           url = "about:blank",                          webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/A" },
   { title = "SharedJSContext", url = "https://steamloopback.host/index.html", webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/B" },
@@ -219,6 +231,74 @@ do
   local n = injector.dispatch_method(nil, "Anything", {})
   assert_true(n:find("unknown method", 1, true) ~= nil,
     "a nil registry doesn't throw, just reports unknown")
+end
+
+-- 9. Public Store/Community fallback is post-login, accepts only the exact
+--    HTTPS hosts, strips credentials, and rejects unsafe/non-HTML responses.
+do
+  local channels = {{ assets = { anonymous_web = true } }}
+  assert_true(injector.anonymous_gateway_config(channels, false) == nil,
+    "public gateway does not attach during Steam cold boot")
+  local gateway = injector.anonymous_gateway_config(channels, true)
+  assert_true(gateway and gateway.anonymous_web == true,
+    "public gateway attaches after Steam UI startup")
+
+  local patterns = injector.anonymous_fetch_patterns(gateway)
+  assert_true(#patterns == 2
+      and patterns[1].resourceType == "Document"
+      and patterns[2].resourceType == "Document",
+    "public gateway intercepts only Store and Community documents")
+
+  assert_true(injector.anonymous_web_url("https://store.steampowered.com/app/440")
+      and injector.anonymous_web_url("https://steamcommunity.com/app/440")
+      and not injector.anonymous_web_url("https://store.steampowered.com.evil.test/")
+      and not injector.anonymous_web_url("http://store.steampowered.com/")
+      and not injector.anonymous_web_url("https://help.steampowered.com/"),
+    "public gateway accepts only the two exact HTTPS hosts")
+
+  local public_headers = injector.anonymous_request_headers({
+    ["User-Agent"] = "Valve Steam Client",
+    Cookie = "secret",
+    Authorization = "token",
+    ["Accept-Language"] = "en-US",
+    ["Accept-Encoding"] = "gzip",
+    ["X-Steam-SessionID"] = "session",
+  })
+  local joined = table.concat(public_headers, "\n"):lower()
+  assert_true(joined:find("user%-agent: valve steam client")
+      and joined:find("accept%-language: en%-us")
+      and not joined:find("cookie", 1, true)
+      and not joined:find("authorization", 1, true)
+      and not joined:find("session", 1, true)
+      and not joined:find("accept%-encoding"),
+    "public request preserves presentation headers without credentials")
+
+  local html_plan = injector.anonymous_response_plan({
+    status = 200,
+    body = "<html></html>",
+    content_type = "text/html; charset=UTF-8",
+  })
+  assert_true(html_plan and html_plan.action == "document",
+    "public HTML is accepted")
+  local redirect_plan = injector.anonymous_response_plan({
+    status = 302,
+    body = "",
+    redirect_url = "https://steamcommunity.com/",
+  })
+  assert_true(redirect_plan and redirect_plan.action == "redirect",
+    "safe redirect is returned to CEF for another validated interception")
+  assert_true(injector.anonymous_response_plan({
+      status = 302, body = "", redirect_url = "https://example.com/",
+    }) == nil,
+    "cross-host redirects are rejected")
+  assert_true(injector.anonymous_response_plan({
+      status = 302, body = "", redirect_url = "http://store.steampowered.com/",
+    }) == nil,
+    "redirect downgrades are rejected")
+  assert_true(injector.anonymous_response_plan({
+      status = 200, body = "binary", content_type = "application/octet-stream",
+    }) == nil,
+    "non-HTML documents are rejected")
 end
 
 print("test_inject: ALL PASS")

@@ -6,6 +6,16 @@ package.loaded["lumen_http"] = {
     last_req = req
     return { status = 200, body = "OK:" .. req.method .. ":" .. req.url }
   end,
+  start = function(req)
+    last_req = req
+    return { request = req }
+  end,
+  poll = function(handle)
+    return true, {
+      status = 200,
+      body = "ASYNC:" .. handle.request.method .. ":" .. handle.request.url,
+    }
+  end,
 }
 local http = require("http")
 local function ok(c, m) if not c then error("FAIL: "..(m or "")) end end
@@ -37,5 +47,23 @@ ok(find(last_req.headers, "X-Custom: 1") and find(last_req.headers, "Accept: app
 
 http.get("http://x/n")
 ok(last_req.headers == nil, "no headers stays nil")
+
+local pending = http.start("https://store.steampowered.com/", {
+  headers = { ["User-Agent"] = "Valve Steam Client" },
+  timeout = 10,
+  follow_redirects = false,
+  https_only = true,
+  max_bytes = 8 * 1024 * 1024,
+})
+ok(type(pending) == "table", "async request returns a pollable handle")
+ok(last_req.method == "GET", "async request defaults to GET")
+ok(last_req.follow_redirects == false, "async redirect policy reaches the C binding")
+ok(last_req.https_only == true, "async HTTPS-only policy reaches the C binding")
+ok(last_req.max_bytes == 8 * 1024 * 1024, "async response limit reaches the C binding")
+ok(find(last_req.headers, "User-Agent: Valve Steam Client"),
+  "async request normalizes headers")
+local done, async_response = http.poll(pending)
+ok(done == true and async_response.body:find("ASYNC:GET:", 1, true),
+  "async poll returns the completed response")
 
 print("test_http_shim: ALL PASS")
