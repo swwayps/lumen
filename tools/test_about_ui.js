@@ -66,14 +66,18 @@ async function main() {
     path.join(__dirname, "..", "lua", "menu", "08-about-tab.js"), "utf8");
   const calls = [];
   let resolveSave;
-  const components = [
+  let versionLoads = 0;
+  const stableComponents = [
     { key: "slsteam_moon", name: "slsteam-moon", installed: "v2.7", latest: "v2.7",
-      state: "current", channel: "stable", betaAvailable: false },
+      state: "current", channel: "stable", betaAvailable: true },
     { key: "plugin", name: "LuaTools plugin", installed: "v2.7", latest: "v2.7",
       state: "current", channel: "stable", betaAvailable: false },
     { key: "lumen", name: "Lumen", installed: "v2.7", latest: "beta",
       state: "update", channel: "stable", betaAvailable: true },
   ];
+  const betaComponents = stableComponents.map((component) => Object.assign({}, component, {
+    channel: component.betaAvailable ? "beta" : "stable",
+  }));
 
   const body = new El("div");
   const document = {
@@ -84,7 +88,12 @@ async function main() {
     __call(fn, args) {
       calls.push({ fn, args });
       if (fn === "GetAboutVersions") {
-        return Promise.resolve(JSON.stringify({ success: true, components }));
+        versionLoads += 1;
+        return Promise.resolve(JSON.stringify({
+          success: true,
+          channel: versionLoads === 1 ? "stable" : "beta",
+          components: versionLoads === 1 ? stableComponents : betaComponents,
+        }));
       }
       if (fn === "SetAboutChannel") {
         return new Promise((resolve) => { resolveSave = resolve; });
@@ -97,6 +106,7 @@ async function main() {
     intro: "versions", installed: "installed", latest: "latest", unknown: "unknown",
     upToDate: "up to date", updateAvailable: "update available", stable: "Stable",
     beta: "Beta", channelSaveFail: "Could not save channel: ", updateTitle: "Updates",
+    channelTitle: "Update channel", channelDesc: "Use one channel for every component.",
     updateDesc: "Update components", updateBtn: "Update All", updateOpenedTitle: "Updating",
     updateOpenedBody: "Opened", updateNoTerm: "No terminal", updateFail: "Failed: ", ok: "OK",
   } } };
@@ -120,21 +130,35 @@ async function main() {
   await tick(); await tick();
 
   const sls = rowNamed(body, "slsteam-moon");
+  const plugin = rowNamed(body, "LuaTools plugin");
   const lumen = rowNamed(body, "Lumen");
-  if (!sls || !lumen) throw new Error("component rows were not rendered");
+  if (!sls || !plugin || !lumen) throw new Error("component rows were not rendered");
 
-  const stableOnly = byClass(sls, "lumen-channel")[0];
-  if (!stableOnly || !stableOnly.classList.contains("single")) {
-    throw new Error("Stable-only component must render a single channel indicator");
-  }
-  if (buttons(stableOnly).length !== 0 || !stableOnly.textContent.includes("Stable")) {
-    throw new Error("Stable-only indicator must not be interactive");
+  for (const row of [sls, plugin, lumen]) {
+    const indicator = byClass(row, "lumen-channel")[0];
+    if (!indicator || !indicator.classList.contains("single")
+        || buttons(indicator).length !== 0
+        || !indicator.textContent.includes("Stable")) {
+      throw new Error("Each component must render a non-interactive Stable indicator");
+    }
   }
 
-  const selector = byClass(lumen, "lumen-channel")[0];
+  const cards = byClass(body, "lumen-about-act");
+  if (cards.length !== 2
+      || !cards[0].textContent.includes("Update channel")
+      || !cards[1].textContent.includes("Updates")) {
+    throw new Error("Global channel card must render immediately above Updates");
+  }
+
+  const selectors = byClass(body, "lumen-channel").filter(
+    (el) => !el.classList.contains("single"));
+  if (selectors.length !== 1) {
+    throw new Error("About must render exactly one interactive channel selector");
+  }
+  const selector = selectors[0];
   const options = selector && buttons(selector);
   if (!options || options.length !== 2) {
-    throw new Error("Beta-capable component must render two channel buttons");
+    throw new Error("Global channel selector must render Stable and Beta");
   }
   if (options[0].getAttribute("aria-pressed") !== "true"
       || options[1].getAttribute("aria-pressed") !== "false") {
@@ -144,9 +168,9 @@ async function main() {
   options[1].click();
   await tick();
   const save = calls.find((c) => c.fn === "SetAboutChannel");
-  if (!save || JSON.parse(save.args.json).key !== "lumen"
-      || JSON.parse(save.args.json).channel !== "beta") {
-    throw new Error("choosing Beta must persist the Lumen channel");
+  const saved = save && JSON.parse(save.args.json);
+  if (!saved || saved.channel !== "beta" || Object.prototype.hasOwnProperty.call(saved, "key")) {
+    throw new Error("choosing Beta must persist one global channel");
   }
 
   const update = byClass(body, "lumen-about-btn")[0];
@@ -160,6 +184,18 @@ async function main() {
   await tick(); await tick();
   if (!calls.some((c) => c.fn === "UpdateAll")) {
     throw new Error("Update All must run after the channel save completes");
+  }
+  if (versionLoads < 2) {
+    throw new Error("saving the global channel must refresh effective component channels");
+  }
+
+  const slsIndicator = byClass(sls, "lumen-channel")[0];
+  const pluginIndicator = byClass(plugin, "lumen-channel")[0];
+  const lumenIndicator = byClass(lumen, "lumen-channel")[0];
+  if (!slsIndicator.textContent.includes("Beta")
+      || !pluginIndicator.textContent.includes("Stable")
+      || !lumenIndicator.textContent.includes("Beta")) {
+    throw new Error("component indicators must show effective channels after fallback");
   }
 
   console.log("test_about_ui: ok");

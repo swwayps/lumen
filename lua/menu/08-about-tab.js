@@ -27,10 +27,10 @@
     // Serialize preference writes. Update All waits for this chain so a quick
     // channel change followed by an immediate update cannot use stale values.
     var pendingChannelSave = Promise.resolve();
-    function saveChannel(key, channel) {
+    function saveChannel(channel) {
       var job = pendingChannelSave.catch(function () {}).then(function () {
         return call("SetAboutChannel", {
-          json: JSON.stringify({ key: key, channel: channel }),
+          json: JSON.stringify({ channel: channel }),
         });
       }).then(function (res) {
         var data = typeof res === "string" ? JSON.parse(res) : res;
@@ -55,13 +55,13 @@
     }
     var rowsByKey = {};
     COMPS.forEach(function (c) {
-      var row = versionRow(c.name, c.key, S, saveChannel);
+      var row = versionRow(c.name, S);
       rowsByKey[c.key] = row;
       list.appendChild(row.el);
     });
 
-    call("GetAboutVersions", {})
-      .then(function (res) {
+    function loadVersions() {
+      return call("GetAboutVersions", {}).then(function (res) {
         var data = JSON.parse(res);
         if (!data || !data.success) throw new Error((data && data.error) || "load failed");
         var got = {};
@@ -72,15 +72,21 @@
           if (got[c.key]) row.fill(got[c.key]);
           else row.fail();
         });
+        channelCard.fill(data.channel);
       })
       .catch(function (e) {
         log("GetAboutVersions", e);
         COMPS.forEach(function (c) { if (rowsByKey[c.key]) rowsByKey[c.key].fail(); });
+        channelCard.fail();
       });
+    }
 
     // ── actions ──────────────────────────────────────────────────────────────
     var actions = document.createElement("div");
     actions.className = "lumen-about-actions";
+
+    var channelCard = channelAction(S, saveChannel, loadVersions);
+    actions.appendChild(channelCard.el);
 
     actions.appendChild(actionRow(S.updateTitle, S.updateDesc, S.updateBtn, {
       onConfirmed: function (btn) {
@@ -111,6 +117,7 @@
     }));
 
     body.appendChild(actions);
+    loadVersions();
 
     // ── credit ─────────────────────────────────────────────────────────────
     var credit = document.createElement("div");
@@ -123,7 +130,7 @@
   // the version line goes + a spinner where the state pill goes. Returns
   // { el, fill(c), fail() }: fill() swaps the spinners for the real version text
   // and state pill once GetAboutVersions resolves; fail() shows an unknown state.
-  function versionRow(name, key, S, saveChannel) {
+  function versionRow(name, S) {
     var row = document.createElement("div");
     row.className = "lumen-about-ver";
 
@@ -173,77 +180,110 @@
       var latest = side(c.latest, c.latestBuild, c.latestAsset);
       vv.textContent = S.installed + ": " + inst + "  \u00b7  " + S.latest + ": " + latest;
       setPill(c.state);
-      renderChannel(c);
+      renderChannel(c.channel);
     }
 
     function fail() {
       vv.textContent = S.installed + ": " + S.unknown + "  \u00b7  " + S.latest + ": " + S.unknown;
       setPill("unknown");
-      renderChannel({ channel: "stable", betaAvailable: false });
+      renderChannel("stable");
     }
 
-    function renderChannel(c) {
+    function renderChannel(channel) {
       channelHost.textContent = "";
-      if (!c.betaAvailable) {
-        var indicator = document.createElement("span");
-        indicator.className = "lumen-channel single";
-        indicator.textContent = S.stable;
-        channelHost.appendChild(indicator);
-        return;
-      }
-
-      var current = c.channel === "beta" ? "beta" : "stable";
-      var control = document.createElement("div");
-      control.className = "lumen-channel";
-      control.setAttribute("role", "group");
-      var error = document.createElement("div");
-      error.className = "lumen-channel-error";
-
-      var options = [];
-      function sync() {
-        options.forEach(function (btn) {
-          var active = btn.getAttribute("data-channel") === current;
-          btn.classList[active ? "add" : "remove"]("active");
-          btn.setAttribute("aria-pressed", active ? "true" : "false");
-        });
-      }
-      [
-        { value: "stable", label: S.stable },
-        { value: "beta", label: S.beta },
-      ].forEach(function (opt) {
-        var btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "lumen-channel-option";
-        btn.textContent = opt.label;
-        btn.setAttribute("data-channel", opt.value);
-        btn.addEventListener("click", function () {
-          if (control.classList.contains("busy") || current === opt.value) return;
-          var previous = current;
-          error.textContent = "";
-          control.classList.add("busy");
-          control.setAttribute("aria-busy", "true");
-          saveChannel(key, opt.value).then(function () {
-            current = opt.value;
-            sync();
-          }).catch(function (e) {
-            current = previous;
-            sync();
-            error.textContent = S.channelSaveFail +
-              (e && e.message ? e.message : String(e));
-          }).then(function () {
-            control.classList.remove("busy");
-            control.setAttribute("aria-busy", "false");
-          });
-        });
-        options.push(btn);
-        control.appendChild(btn);
-      });
-      sync();
-      channelHost.appendChild(control);
-      channelHost.appendChild(error);
+      var indicator = document.createElement("span");
+      indicator.className = "lumen-channel single";
+      indicator.textContent = channel === "beta" ? S.beta : S.stable;
+      channelHost.appendChild(indicator);
     }
 
     return { el: row, fill: fill, fail: fail };
+  }
+
+  // Global Stable/Beta preference card. The backend persists the same requested
+  // channel for all components; the non-interactive indicators above continue
+  // to show each component's effective channel after Stable fallback.
+  function channelAction(S, saveChannel, refresh) {
+    var row = document.createElement("div");
+    row.className = "lumen-about-act";
+
+    var txt = document.createElement("div");
+    txt.className = "txt";
+    var title = document.createElement("div");
+    title.className = "at";
+    title.textContent = S.channelTitle;
+    var desc = document.createElement("div");
+    desc.className = "ad";
+    desc.textContent = S.channelDesc;
+    txt.appendChild(title);
+    txt.appendChild(desc);
+    row.appendChild(txt);
+
+    var host = document.createElement("div");
+    host.className = "lumen-channel-card-control";
+    var control = document.createElement("div");
+    control.className = "lumen-channel";
+    control.setAttribute("role", "group");
+    var error = document.createElement("div");
+    error.className = "lumen-channel-error";
+    host.appendChild(control);
+    host.appendChild(error);
+    row.appendChild(host);
+
+    var current = "stable";
+    var options = [];
+    function sync() {
+      options.forEach(function (btn) {
+        var active = btn.getAttribute("data-channel") === current;
+        btn.classList[active ? "add" : "remove"]("active");
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+    [
+      { value: "stable", label: S.stable },
+      { value: "beta", label: S.beta },
+    ].forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "lumen-channel-option";
+      btn.textContent = opt.label;
+      btn.setAttribute("data-channel", opt.value);
+      btn.addEventListener("click", function () {
+        if (control.classList.contains("busy") || current === opt.value) return;
+        var previous = current;
+        error.textContent = "";
+        control.classList.add("busy");
+        control.setAttribute("aria-busy", "true");
+        saveChannel(opt.value).then(function () {
+          current = opt.value;
+          sync();
+          return refresh();
+        }).catch(function (e) {
+          current = previous;
+          sync();
+          error.textContent = S.channelSaveFail +
+            (e && e.message ? e.message : String(e));
+        }).then(function () {
+          control.classList.remove("busy");
+          control.setAttribute("aria-busy", "false");
+        });
+      });
+      options.push(btn);
+      control.appendChild(btn);
+    });
+    sync();
+
+    return {
+      el: row,
+      fill: function (channel) {
+        current = channel === "beta" ? "beta" : "stable";
+        sync();
+      },
+      fail: function () {
+        control.classList.remove("busy");
+        control.setAttribute("aria-busy", "false");
+      },
+    };
   }
 
   // A small rotating loading spinner element.

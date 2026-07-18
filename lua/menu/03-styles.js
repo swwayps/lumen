@@ -155,6 +155,7 @@
       ".lumen-channel.busy{opacity:.65;}",
       ".lumen-channel.busy .lumen-channel-option{cursor:wait;pointer-events:none;}",
       ".lumen-channel-error{margin-top:4px;color:#ec5c5c;font-size:11px;line-height:1.35;}",
+      ".lumen-channel-card-control{flex:0 0 auto;text-align:right;}",
       ".lumen-about-state{flex:0 0 auto;font-size:11px;font-weight:700;text-transform:uppercase;",
       "letter-spacing:.4px;padding:3px 9px;border-radius:10px;white-space:nowrap;}",
       ".lumen-about-state.cur{background:#1a3a24;color:#6fd08c;}",
