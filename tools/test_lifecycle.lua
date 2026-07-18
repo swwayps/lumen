@@ -34,10 +34,20 @@ end
 -- 3. A restart (gone briefly then back) must NOT exit, and resets the timer.
 do
   local w = lifecycle.new_watcher({ grace = GRACE })
-  assert_true(w:should_exit(10, true)  == false, "alive")
-  assert_true(w:should_exit(15, false) == false, "restart: gone")
-  assert_true(w:should_exit(25, false) == false, "restart: still gone, within grace")
-  assert_true(w:should_exit(30, true)  == false, "restart: back -> keep")
+  local exiting, returned = w:should_exit(10, true)
+  assert_true(exiting == false and returned ~= true,
+    "initial appearance is not a restart return")
+  exiting, returned = w:should_exit(15, false)
+  assert_true(exiting == false and returned ~= true, "restart: gone")
+  exiting, returned = w:should_exit(25, false)
+  assert_true(exiting == false and returned ~= true,
+    "restart: still gone, within grace")
+  exiting, returned = w:should_exit(30, true)
+  assert_true(exiting == false and returned == true,
+    "restart: back -> emit one return event")
+  exiting, returned = w:should_exit(31, true)
+  assert_true(exiting == false and returned ~= true,
+    "restart return event is emitted only once")
   -- After coming back, a later close must wait a FRESH full grace window.
   assert_true(w:should_exit(40, false) == false, "gone again -> new grace starts")
   assert_true(w:should_exit(40 + GRACE - 1, false) == false, "within fresh grace -> keep")
@@ -47,7 +57,7 @@ end
 -- 4. Default grace is generous (>= 30s) to cover slow restarts.
 do
   local w = lifecycle.new_watcher()
-  assert_true(w.grace >= 30, "default grace covers slow restart gaps")
+  assert_true(w.grace == 45, "default grace remains the full restart window")
 end
 
 print("test_lifecycle: ALL PASS")

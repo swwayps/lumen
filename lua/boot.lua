@@ -110,7 +110,25 @@ end
 -- NOT luatools.js, which must never go there (see the channel split below). It
 -- talks to the same backend via the same binding polyfill. Register its two
 -- native RPCs (read/write slsteam-moon's config.yaml) into the dispatch table.
-require("slsmenu").register(registry)
+local slsconfig = require("slsconfig")
+local slsconfig_path = slsconfig.default_path()
+local parental_unlock_enabled = false
+local webview_assets
+
+local function refresh_parental_unlock(values)
+  values = values or slsconfig.read(slsconfig_path)
+  parental_unlock_enabled =
+    values.DisableParentalRestrictions == true
+  if webview_assets then
+    webview_assets.anonymous_web = parental_unlock_enabled
+  end
+end
+
+refresh_parental_unlock()
+require("slsmenu").register(registry, {
+  path = slsconfig_path,
+  on_values = refresh_parental_unlock,
+})
 
 -- The "Game Updates" tab (manifest pinning): assemble the per-game version
 -- tree from on-disk data and read/write the ManifestPins map in config.yaml.
@@ -141,15 +159,12 @@ require("slscheck").register(registry)
 -- it there's nothing to configure, so we DON'T register the cloud RPCs and the
 -- menu hides the tab (window.__lumenCloud=false) — zero cost for users who
 -- don't use cloud saves. Single file-stat, decided once here at boot.
-local slsconfig = require("slsconfig")
 local have_cloudredirect = slsconfig.has_cloudredirect()
 if have_cloudredirect then
   require("cloudsettings").register(registry)
 end
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
-local parental_unlock_enabled =
-  slsconfig.read(slsconfig.default_path()).DisableParentalRestrictions == true
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
 -- split into ordered source fragments under menu/ (one concern per file) for
@@ -225,10 +240,11 @@ pcall(function() require("deskcover").run("--user") end)
 -- lumen_menu.js bundle is deliberately minimal and shell-safe. The menubar
 -- button broadcasts open/close to every context so the overlay renders in
 -- whichever view is currently on top (see injector State:broadcast_overlay).
-local webview_assets = build_webview_assets()
+webview_assets = build_webview_assets()
 webview_assets.anonymous_web = parental_unlock_enabled
 loop.run({
   registry = registry,
+  on_steam_returned = refresh_parental_unlock,
   channels = {
     { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = webview_assets },
     { titles = { ["Steam"] = true }, assets = build_menu_assets() },

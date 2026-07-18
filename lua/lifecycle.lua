@@ -25,12 +25,15 @@ function lifecycle.new_watcher(opts)
   }, Watcher)
 end
 
--- should_exit(now, steam_alive) -> boolean. Call each poll tick.
+-- should_exit(now, steam_alive) -> should_exit, steam_returned.
+-- steam_returned is true for exactly one tick after an observed alive -> gone
+-- -> alive transition. The initial appearance during boot is not a return.
 function Watcher:should_exit(now, steam_alive)
   if steam_alive then
+    local returned = self.seen and self.gone_since ~= nil
     self.seen = true
     self.gone_since = nil
-    return false
+    return false, returned
   end
   -- Steam not alive.
   if not self.seen then

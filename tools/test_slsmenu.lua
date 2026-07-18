@@ -132,4 +132,38 @@ do
   os.remove(p)
 end
 
+-- ── registered writes publish fresh values without polling config.yaml ─────
+do
+  local p = write_tmp(
+    "DisableParentalRestrictions: no\nPlayNotOwnedGames: no\nLogLevel: 2\n")
+  local registry, updates = {}, {}
+  slsmenu.register(registry, {
+    path = p,
+    on_values = function(values)
+      updates[#updates + 1] = values.DisableParentalRestrictions
+    end,
+  })
+
+  local set_res = json.decode(registry.SetSlsConfig(json.encode({
+    key = "DisableParentalRestrictions",
+    value = true,
+  })))
+  assert_eq(set_res.success, true, "registered parental write succeeds")
+  assert_eq(#updates, 1, "successful write publishes exactly once")
+  assert_eq(updates[1], true, "published values include enabled parental unlock")
+
+  local bad_res = json.decode(registry.SetSlsConfig(json.encode({
+    key = "not-a-setting",
+    value = true,
+  })))
+  assert_eq(bad_res.success, false, "invalid registered write fails")
+  assert_eq(#updates, 1, "failed write does not publish")
+
+  local reset_res = json.decode(registry.ResetSlsConfig())
+  assert_eq(reset_res.success, true, "registered reset succeeds")
+  assert_eq(#updates, 2, "successful reset publishes exactly once")
+  assert_eq(updates[2], false, "reset publishes disabled parental default")
+  os.remove(p)
+end
+
 print("test_slsmenu: ALL PASS")
