@@ -301,6 +301,15 @@ do
     and by.slsteam_moon.betaAvailable == false and by.plugin.betaAvailable == false)
   check("gv selected Lumen beta", by.lumen.channel == "beta"
     and by.lumen.latest == "beta" and by.lumen.latestAsset:find("beta%-lumen") ~= nil)
+  check("gv exposes instant Stable/Beta states",
+    type(by.lumen.channelStates) == "table"
+      and by.lumen.channelStates.stable == "current"
+      and by.lumen.channelStates.beta == "update")
+  check("gv Beta fallback reuses Stable state",
+    type(by.slsteam_moon.channelStates) == "table"
+      and type(by.plugin.channelStates) == "table"
+      and by.slsteam_moon.channelStates.beta == by.slsteam_moon.channelStates.stable
+      and by.plugin.channelStates.beta == by.plugin.channelStates.stable)
   check("gv stable fallback when selected beta unavailable",
     by.slsteam_moon.channel == "stable" and by.slsteam_moon.latest == "v2.7")
   check("gv stable install differs from selected beta", by.lumen.state == "update")
