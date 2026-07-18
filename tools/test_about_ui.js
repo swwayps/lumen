@@ -66,10 +66,13 @@ async function main() {
     path.join(__dirname, "..", "lua", "menu", "08-about-tab.js"), "utf8");
   const styles = fs.readFileSync(
     path.join(__dirname, "..", "lua", "menu", "03-styles.js"), "utf8");
-  if (!styles.includes(".lumen-channel-card-control{flex:0 0 103px;width:103px;")
-      || !styles.includes(".lumen-channel-card-control .lumen-channel{width:100%;height:38px;")
-      || !styles.includes(".lumen-channel-card-control .lumen-channel-option{flex:1 1 50%;")) {
-    throw new Error("Global selector must match Update All and split into equal halves");
+  if (!styles.includes(".lumen-channel-card-control{flex:0 0 160px;width:160px;")
+      || !styles.includes(".lumen-channel-card-control .lumen-channel{position:relative;width:100%;height:40px;")
+      || !styles.includes(".lumen-channel-card-control .lumen-channel::before{content:'';position:absolute;")
+      || !styles.includes(".lumen-channel-card-control .lumen-channel[data-channel=beta]::before{")
+      || !styles.includes(".lumen-channel-card-control .lumen-channel-option{position:relative;z-index:1;")
+      || !styles.includes("flex:1 1 50%;height:100%;min-width:0;")) {
+    throw new Error("Global selector must use a balanced, full-height segmented control");
   }
   const calls = [];
   const saveResolvers = [];
@@ -183,12 +186,19 @@ async function main() {
   if (!options || options.length !== 2) {
     throw new Error("Global channel selector must render Stable and Beta");
   }
+  if (selector.getAttribute("aria-label") !== "Update channel"
+      || selector.getAttribute("data-channel") !== "stable") {
+    throw new Error("channel selector must expose its purpose and visual state");
+  }
   if (options[0].getAttribute("aria-pressed") !== "true"
       || options[1].getAttribute("aria-pressed") !== "false") {
     throw new Error("channel selector must expose its active state with aria-pressed");
   }
 
   options[1].click();
+  if (selector.getAttribute("data-channel") !== "beta") {
+    throw new Error("Beta click must move the segmented control indicator immediately");
+  }
   const indicatorText = (row) => byClass(row, "lumen-channel")[0].textContent;
   if (!indicatorText(sls).includes("Beta")
       || !indicatorText(plugin).includes("Stable")

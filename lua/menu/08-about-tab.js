@@ -239,8 +239,10 @@
     var control = document.createElement("div");
     control.className = "lumen-channel";
     control.setAttribute("role", "group");
+    control.setAttribute("aria-label", S.channelTitle);
     var error = document.createElement("div");
     error.className = "lumen-channel-error";
+    error.setAttribute("aria-live", "polite");
     host.appendChild(control);
     host.appendChild(error);
     row.appendChild(host);
@@ -248,6 +250,7 @@
     var current = "stable";
     var options = [];
     function sync() {
+      control.setAttribute("data-channel", current);
       options.forEach(function (btn) {
         var active = btn.getAttribute("data-channel") === current;
         btn.classList[active ? "add" : "remove"]("active");
