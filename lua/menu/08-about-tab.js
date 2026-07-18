@@ -81,11 +81,17 @@
       });
     }
 
+    function previewChannel(channel) {
+      COMPS.forEach(function (c) {
+        if (rowsByKey[c.key]) rowsByKey[c.key].preview(channel);
+      });
+    }
+
     // ── actions ──────────────────────────────────────────────────────────────
     var actions = document.createElement("div");
     actions.className = "lumen-about-actions";
 
-    var channelCard = channelAction(S, saveChannel, loadVersions);
+    var channelCard = channelAction(S, saveChannel, loadVersions, previewChannel);
     actions.appendChild(channelCard.el);
 
     actions.appendChild(actionRow(S.updateTitle, S.updateDesc, S.updateBtn, {
@@ -152,6 +158,7 @@
     right.className = "lumen-about-right";
     right.appendChild(spinnerEl());        // single loading spinner (pill slot)
     row.appendChild(right);
+    var component = null;
 
     function setPill(state) {
       right.textContent = "";
@@ -164,6 +171,7 @@
     }
 
     function fill(c) {
+      component = c;
       // Each side reads "<tag> (<build date> · <asset #id>)". The asset id is
       // the canonical per-upload identifier, so when a release is re-cut under
       // the SAME tag (date unchanged too) the ids still differ — making the
@@ -179,8 +187,7 @@
       var inst = side(c.installed, c.installedBuild, c.installedAsset);
       var latest = side(c.latest, c.latestBuild, c.latestAsset);
       vv.textContent = S.installed + ": " + inst + "  \u00b7  " + S.latest + ": " + latest;
-      setPill(c.state);
-      renderChannel(c.channel);
+      preview(c.channel);
     }
 
     function fail() {
@@ -197,13 +204,21 @@
       channelHost.appendChild(indicator);
     }
 
-    return { el: row, fill: fill, fail: fail };
+    function preview(requested) {
+      if (!component) return;
+      var effective = requested === "beta" && component.betaAvailable ? "beta" : "stable";
+      var states = component.channelStates || {};
+      renderChannel(effective);
+      setPill(states[effective] || component.state);
+    }
+
+    return { el: row, fill: fill, fail: fail, preview: preview };
   }
 
   // Global Stable/Beta preference card. The backend persists the same requested
   // channel for all components; the non-interactive indicators above continue
   // to show each component's effective channel after Stable fallback.
-  function channelAction(S, saveChannel, refresh) {
+  function channelAction(S, saveChannel, refresh, preview) {
     var row = document.createElement("div");
     row.className = "lumen-about-act";
 
@@ -251,16 +266,18 @@
       btn.addEventListener("click", function () {
         if (control.classList.contains("busy") || current === opt.value) return;
         var previous = current;
+        current = opt.value;
+        sync();
+        preview(current);
         error.textContent = "";
         control.classList.add("busy");
         control.setAttribute("aria-busy", "true");
         saveChannel(opt.value).then(function () {
-          current = opt.value;
-          sync();
           return refresh();
         }).catch(function (e) {
           current = previous;
           sync();
+          preview(previous);
           error.textContent = S.channelSaveFail +
             (e && e.message ? e.message : String(e));
         }).then(function () {

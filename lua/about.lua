@@ -329,18 +329,25 @@ function about.get_versions(opts)
       local beta_available = beta_latest ~= nil
       local channel = channels[c.key] == "beta" and beta_available and "beta" or "stable"
       local latest = channel == "beta" and beta_latest or stable_latest
+      local stable_state = about.compare_state(inst, stable_latest)
+      local beta_state = beta_available
+        and about.compare_state(inst, beta_latest) or stable_state
       out[#out + 1] = {
         key = c.key,
         name = c.name,
         channel = channel,
         betaAvailable = beta_available,
+        channelStates = {
+          stable = stable_state,
+          beta = beta_state,
+        },
         installed = inst.tag or "",
         latest = (latest and latest.tag) or "",
         installedBuild = about.fmt_date(inst.asset_at),
         latestBuild = about.fmt_date(latest and latest.asset_at),
         installedAsset = about.fmt_asset(inst.id),
         latestAsset = about.fmt_asset(latest and latest.id),
-        state = about.compare_state(inst, latest),
+        state = channel == "beta" and beta_state or stable_state,
       }
     end
   end
