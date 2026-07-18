@@ -152,6 +152,11 @@ require("fixesmenu").register(registry)
 -- (the check is a cheap /proc scan; it's meaningful in every mode).
 require("slscheck").register(registry)
 
+-- Native restart is always available, including --noplugin installs. Register
+-- after collecting plugin endpoints so the safe slsteam-moon-aware helper
+-- replaces any plugin-provided RestartSteam implementation.
+require("steamrestart").register(registry)
+
 -- The "Cloud Saves" tab (menu/12-cloud-tab.js): set up CloudRedirect cloud
 -- saves (provider, OAuth sign-in, stats toggles) directly against the hook's
 -- ~/.config/CloudRedirect file contract — no flatpak, no background process.

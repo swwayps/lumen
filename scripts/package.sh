@@ -3,6 +3,7 @@
 # Layout inside the zip:
 #   lumen          (static binary, built by scripts/_build-portable.sh)
 #   lua/*.lua      (injector, shims, polyfill, etc.)
+#   lua/*.sh       (detached runtime helpers)
 #   lua/menu/*.js  (ordered fragments of the injected settings menu)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,6 +23,8 @@ trap 'rm -rf "$STAGE"' EXIT
 cp bin/lumen "$STAGE/lumen"
 mkdir -p "$STAGE/lua"
 cp lua/*.lua "$STAGE/lua/"
+# The native restart RPC requires this helper at runtime.
+cp lua/restart_steam.sh "$STAGE/lua/"
 # Frontend asset(s) injected into the shell ship alongside the .lua modules and
 # are read at boot from LUMEN_LUA_DIR.
 cp lua/*.js "$STAGE/lua/" 2>/dev/null || true
