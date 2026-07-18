@@ -70,6 +70,7 @@
       var latest = verRow({
         label: GU.latest, selected: !anyPinned && !_providersOffline && !game.synthetic,
         disabled: _providersOffline || game.synthetic,
+        synthetic: game.synthetic,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
             .then(function () { select(latest); if (isGameInstalled(game)) showValidatePrompt(game.appid); })
@@ -240,6 +241,7 @@
     var latest = verRow({
       label: GU.latest, selected: !game.locked && !_providersOffline && !game.offline && !game.synthetic,
       disabled: _providersOffline || game.offline || game.synthetic,
+      synthetic: game.synthetic,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
           .then(function () { select(latest); setLocked(false); if (isGameInstalled(game)) showValidatePrompt(game.appid); })

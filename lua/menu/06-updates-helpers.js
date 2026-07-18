@@ -187,10 +187,20 @@
     if (opts.disabled) {
       var GU = guStrings();
       var badge = document.createElement("span");
-      badge.className = "lumen-badge err";
       badge.style.cursor = "pointer";
-      badge.textContent = GU.offlineBadge;
-      badge.title = GU.offlineBody;
+      var title, body;
+      if (opts.synthetic) {
+        badge.className = "lumen-badge synth";
+        badge.textContent = GU.syntheticBadge;
+        title = GU.syntheticTitle;
+        body = GU.syntheticBody;
+      } else {
+        badge.className = "lumen-badge err";
+        badge.textContent = GU.offlineBadge;
+        title = GU.offlineTitle;
+        body = GU.offlineBody;
+      }
+      badge.title = body;
 
       var infoSpan = document.createElement("span");
       infoSpan.className = "info";
@@ -202,8 +212,8 @@
       var showWarn = function (e) {
         e.stopPropagation();
         showConfirm({
-          title: GU.offlineTitle,
-          body: GU.offlineBody,
+          title: title,
+          body: body,
           confirmText: GU.ok
         });
       };
