@@ -121,6 +121,9 @@
         offlineBadge: "unavailable",
         offlineTitle: "Manifest Servers Offline",
         offlineBody: "The remote manifest servers are currently unreachable or rate-limiting requests. Steam cannot fetch update codes or verify new manifests from the network right now.\n\nTo allow installation and launch, auto-updates are disabled and we have temporarily fallen back to using your local archived build (or the build supplied by LuaTools). Game auto-updates will not function while the servers remain offline.",
+        syntheticBadge: "synthetic",
+        syntheticTitle: "Synthetic Game",
+        syntheticBody: "This game contains synthetic metadata. This means it was structured from local files on your PC, as Steam requires legitimate ownership of the game to grant access. For this reason, auto-updates will not work for this game.",
       },
       keys: {
         PlayNotOwnedGames: { label: "Play not-owned games", desc: "Lets Steam launch games that aren't in your account.", info: "You don't need to turn this on. Games you add through LuaTools are injected and install either way — this switch doesn't change that." },
@@ -357,6 +360,9 @@
         offlineBadge: "indisponível",
         offlineTitle: "Servidores de Manifesto Offline",
         offlineBody: "Os servidores remotos de manifestos estão inacessíveis ou limitando requisições no momento. A Steam não consegue obter códigos de atualização ou verificar novos manifestos pela rede agora.\n\nPara permitir a instalação e o lançamento do jogo, a atualização automática foi desativada e mudamos temporariamente para a versão local arquivada (ou a versão fornecida pelo LuaTools). A atualização automática dos jogos não funcionará enquanto os servidores estiverem offline.",
+        syntheticBadge: "sintético",
+        syntheticTitle: "Jogo Sintético",
+        syntheticBody: "Este jogo contém metadados sintéticos. Isso significa que ele foi estruturado a partir de arquivos locais no seu PC, pois o Steam exige a propriedade legítima do jogo para liberar o acesso. Por essa razão, as atualizações automáticas não funcionarão para este jogo.",
       },
       keys: {
         PlayNotOwnedGames: { label: "Jogar jogos não adquiridos", desc: "Permite que a Steam abra jogos que não estão na sua conta.", info: "Você não precisa ativar isso. Os jogos que você adiciona pelo LuaTools são injetados e instalam de qualquer jeito — esta opção não muda isso." },
