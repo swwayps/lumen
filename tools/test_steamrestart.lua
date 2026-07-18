@@ -71,18 +71,26 @@ end
 -- restart behavior identical with and without the optional LuaTools plugin.
 do
   local registry = { RestartSteam = function() return "plugin" end }
+  local now, starts = 100, 0
   steamrestart.register(registry, {
     lua_dir = "/runtime/lua",
     exists = function() return true end,
     preflight = function() return true end,
-    spawn = function() return true end,
+    spawn = function() starts = starts + 1; return true end,
+    now = function() return now end,
   })
   local response = json.decode(registry.RestartSteam())
   assert_true(response.success == true, "native RestartSteam RPC reports success")
+  assert_true(response.error == nil, "successful restart omits an error field")
   local duplicate = json.decode(registry.RestartSteam())
   assert_true(duplicate.success == false
       and tostring(duplicate.error):find("already", 1, true),
     "native RestartSteam rejects a concurrent restart")
+  assert_true(starts == 1, "concurrent restart does not spawn another helper")
+  now = 116
+  local later = json.decode(registry.RestartSteam())
+  assert_true(later.success == true and starts == 2,
+    "restart guard expires after the in-flight window")
 end
 
 do
