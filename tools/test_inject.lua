@@ -40,6 +40,10 @@ do
     "normal SharedJSContext routing installs the complete popup theme hook")
   assert_true(source:find("anonymous_web=parental_unlock_enabled", 1, true),
     "parental unlock enables anonymous Store/Community documents")
+  assert_true(source:find("refresh_parental_unlock", 1, true),
+    "boot can refresh the parental gateway state in memory")
+  assert_true(source:find("on_steam_returned", 1, true),
+    "parental state is refreshed once when Steam returns")
   assert_true(not source:find('require("parentalunlock")', 1, true),
     "native parental state no longer needs a SharedJSContext visual patch")
   local injector_file = assert(io.open("lua/injector.lua", "r"))
@@ -310,6 +314,20 @@ do
   assert_true(injector.browser_uses_auto_attach(login_gateway) == false
       and injector.browser_uses_auto_attach(gateway) == true,
     "the login observer uses manual SharedJSContext attachment, never Target.setAutoAttach")
+end
+
+do
+  local f = assert(io.open("lua/loop.lua", "r"))
+  local source = f:read("*a")
+  f:close()
+  assert_true(source:find("steam_returned", 1, true)
+      and source:find("opts.on_steam_returned", 1, true),
+    "loop forwards the one-shot Steam return event")
+  local lifecycle_pos =
+    source:find("local should_exit, steam_returned", 1, true)
+  local injector_pos = source:find("inj:tick()", 1, true)
+  assert_true(lifecycle_pos and injector_pos and lifecycle_pos < injector_pos,
+    "Steam return refresh runs before injector gateway synchronization")
 end
 
 local SAMPLE = {

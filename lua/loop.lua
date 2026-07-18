@@ -43,8 +43,6 @@ function loop.run(opts)
     else
       socket.sleep(inj:idle_delay())
     end
-    inj:tick()
-
     local now = os.time()
     if now >= next_check then
       next_check = now + CHECK_EVERY
@@ -52,13 +50,22 @@ function loop.run(opts)
         log("autostart entry changed/vanilla -> re-asserting desktop coverage")
         deskcover.run("--user")
       end
-      if watcher:should_exit(now, proc.is_alive("steam")) then
+      local should_exit, steam_returned =
+        watcher:should_exit(now, proc.is_alive("steam"))
+      if steam_returned and type(opts.on_steam_returned) == "function" then
+        local ok, err = pcall(opts.on_steam_returned)
+        if not ok then
+          log("Steam return callback failed: " .. tostring(err))
+        end
+      end
+      if should_exit then
         deskcover.run("--user")        -- final heal before we stop
         if type(opts.on_exit) == "function" then pcall(opts.on_exit) end
         log("Steam closed -> Lumen exiting")
         os.exit(0)
       end
     end
+    inj:tick()
   end
 end
 

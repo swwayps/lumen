@@ -82,12 +82,39 @@ function slsmenu.reset(path)
   })
 end
 
--- register(registry): install GetSlsConfig / SetSlsConfig bound to the real
--- config path. Args from the dispatcher are ignored (the path is fixed).
-function slsmenu.register(registry)
-  registry.GetSlsConfig = function() return slsmenu.get(slsconfig.default_path()) end
-  registry.SetSlsConfig = function(json_str) return slsmenu.set(slsconfig.default_path(), json_str) end
-  registry.ResetSlsConfig = function() return slsmenu.reset(slsconfig.default_path()) end
+-- register(registry[, opts]): install GetSlsConfig / SetSlsConfig bound to the
+-- real config path. A successful write publishes the fresh values through
+-- opts.on_values, keeping boot-owned runtime state current without polling.
+function slsmenu.register(registry, opts)
+  opts = opts or {}
+  local path = opts.path or slsconfig.default_path()
+  local on_values = opts.on_values
+
+  local function publish(values)
+    if type(on_values) == "function" then
+      pcall(on_values, values)
+    end
+  end
+
+  registry.GetSlsConfig = function()
+    return slsmenu.get(path)
+  end
+  registry.SetSlsConfig = function(json_str)
+    local result = slsmenu.set(path, json_str)
+    local ok, response = pcall(json.decode, result)
+    if ok and response.success == true then
+      publish(slsconfig.read(path))
+    end
+    return result
+  end
+  registry.ResetSlsConfig = function()
+    local result = slsmenu.reset(path)
+    local ok, response = pcall(json.decode, result)
+    if ok and response.success == true then
+      publish(response.values)
+    end
+    return result
+  end
   return registry
 end
 
