@@ -47,8 +47,10 @@ function about.versions_path()
   return home .. "/.local/share/Lumen/versions.json"
 end
 
--- Per-component update-channel preferences. Stable is the compatibility
--- default for missing/old installs and for every malformed value.
+-- Unified update-channel preference. The file keeps the legacy per-component
+-- shape so older installers remain compatible, but all three values are always
+-- normalized to one channel. A mixed legacy file migrates toward Beta when any
+-- component requested it, preserving the user's opt-in.
 function about.channels_path()
   local home = os.getenv("HOME") or ""
   return home .. "/.local/share/Lumen/update-channels.json"
@@ -61,8 +63,14 @@ end
 
 function about.normalize_channels(raw)
   raw = type(raw) == "table" and raw or {}
+  local channel = valid_channel(raw.channel)
+  if channel ~= "beta" then
+    for _, key in ipairs(CHANNEL_KEYS) do
+      if raw[key] == "beta" then channel = "beta"; break end
+    end
+  end
   local out = {}
-  for _, key in ipairs(CHANNEL_KEYS) do out[key] = valid_channel(raw[key]) end
+  for _, key in ipairs(CHANNEL_KEYS) do out[key] = channel end
   return out
 end
 
@@ -101,19 +109,11 @@ function about.save_channels(path, channels, deps)
   return true
 end
 
-function about.set_channel(path, key, channel, deps)
-  local known = false
-  for _, candidate in ipairs(CHANNEL_KEYS) do
-    if key == candidate then known = true; break end
-  end
-  if not known then return false, "unknown component" end
+function about.set_channel(path, channel, deps)
   if channel ~= "stable" and channel ~= "beta" then
     return false, "unknown channel"
   end
-  local read_file = deps and deps.read_file
-  local current = about.read_channels(path, read_file)
-  current[key] = channel
-  return about.save_channels(path, current, deps)
+  return about.save_channels(path, { channel = channel }, deps)
 end
 
 -- read_installed(path[, read_file]) -> table of key->tag (empty table on any
@@ -344,7 +344,11 @@ function about.get_versions(opts)
       }
     end
   end
-  return { success = true, components = out }
+  return {
+    success = true,
+    channel = channels.slsteam_moon,
+    components = out,
+  }
 end
 
 -- ── Update All: open the user's terminal running the installer ──────────────
@@ -472,9 +476,10 @@ function about.update_all(opts)
   return { success = true, terminal = term.bin }
 end
 
--- Deterministic installer argv for the independently selected component
--- channels. --noplugin removes its channel entirely because that component is
--- intentionally absent, while leaving the other two selections untouched.
+-- Deterministic installer argv for the unified channel. The installer still
+-- receives one flag per component for compatibility and independently falls
+-- back to Stable when a component has no Beta artifact. --noplugin removes the
+-- absent plugin's flag.
 function about.channel_flags(channels, no_plugin)
   channels = about.normalize_channels(channels)
   local flags = {
@@ -516,7 +521,7 @@ function about.register(registry, opts)
     if opts.read_file and deps.read_file == nil then
       deps.read_file = opts.read_file
     end
-    local ok, err = about.set_channel(channel_path, req.key, req.channel, deps)
+    local ok, err = about.set_channel(channel_path, req.channel, deps)
     return json.encode({ success = ok and true or false, error = err })
   end
   registry.UpdateAll = function()

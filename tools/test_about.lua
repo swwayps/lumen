@@ -137,14 +137,15 @@ if channels_ready then
   local mixed = about.normalize_channels({
     slsteam_moon = "beta", plugin = "preview", lumen = "beta",
   })
-  check("channels preserve supported beta", mixed.slsteam_moon == "beta"
-    and mixed.lumen == "beta")
-  check("channels reject unsupported value", mixed.plugin == "stable")
+  check("channels collapse mixed preferences to global beta",
+    mixed.slsteam_moon == "beta" and mixed.plugin == "beta"
+      and mixed.lumen == "beta")
 
   local decoded = about.read_channels("x", reader_returning(
     '{"slsteam_moon":"stable","plugin":"beta","lumen":"beta"}'))
-  check("channels read JSON", decoded.slsteam_moon == "stable"
-    and decoded.plugin == "beta" and decoded.lumen == "beta")
+  check("channels migrate mixed JSON to global beta",
+    decoded.slsteam_moon == "beta" and decoded.plugin == "beta"
+      and decoded.lumen == "beta")
   local broken = about.read_channels("x", reader_returning("not json"))
   check("channels malformed JSON -> defaults", broken.slsteam_moon == "stable"
     and broken.plugin == "stable" and broken.lumen == "stable")
@@ -165,8 +166,9 @@ if channels_ready then
   check("channels save writes temporary file", #writes == 1
     and writes[1].path ~= "/tmp/channels.json")
   local saved = json.decode(writes[1].body)
-  check("channels save normalized JSON", saved.lumen == "beta"
-    and saved.plugin == "stable")
+  check("channels save one preference for every component",
+    saved.slsteam_moon == "beta" and saved.plugin == "beta"
+      and saved.lumen == "beta")
   check("channels save atomically renames", renamed
     and renamed[1] == writes[1].path and renamed[2] == "/tmp/channels.json")
 end
@@ -261,8 +263,9 @@ do
 end
 
 do
-  -- Only Lumen publishes a beta artifact. A stored Lumen beta preference uses
-  -- that artifact fingerprint; the other components remain effective Stable.
+  -- Only Lumen publishes a beta artifact. A legacy mixed preference becomes
+  -- global Beta, while components without a Beta artifact remain effectively
+  -- Stable through the existing fallback.
   local function release_body(url)
     local name = url:find("/lumen/", 1, true) and "lumen-linux.zip"
       or url:find("luatools-moon", 1, true) and "luatools-linux.zip"
@@ -293,6 +296,7 @@ do
   })
   local by = {}
   for _, c in ipairs(res.components) do by[c.key] = c end
+  check("gv exposes requested global channel", res.channel == "beta")
   check("gv beta available only for Lumen", by.lumen.betaAvailable == true
     and by.slsteam_moon.betaAvailable == false and by.plugin.betaAvailable == false)
   check("gv selected Lumen beta", by.lumen.channel == "beta"
@@ -334,23 +338,23 @@ do
 end
 
 
--- ── per-component channel flags ─────────────────────────────────────────────
+-- ── unified component channel flags ─────────────────────────────────────────
 local flags_ready = type(about.channel_flags) == "function"
 check("exports channel flags", flags_ready)
 if flags_ready then
   local flags = about.channel_flags({
     slsteam_moon = "stable", plugin = "beta", lumen = "beta",
   }, false)
-  check("channel flags deterministic", table.concat(flags, " ") ==
-    "--slsteam-channel stable --plugin-channel beta --lumen-channel beta")
+  check("channel flags use one global beta", table.concat(flags, " ") ==
+    "--slsteam-channel beta --plugin-channel beta --lumen-channel beta")
   local np = about.channel_flags({
     slsteam_moon = "beta", plugin = "beta", lumen = "stable",
   }, true)
-  check("noplugin omits plugin channel", table.concat(np, " ") ==
-    "--slsteam-channel beta --lumen-channel stable --noplugin")
+  check("noplugin keeps global beta", table.concat(np, " ") ==
+    "--slsteam-channel beta --lumen-channel beta --noplugin")
   local script = about.update_script(about.INSTALL_URL, flags)
-  check("update script forwards every channel", script:find(
-    "| bash %-s %-%- %-%-slsteam%-channel stable %-%-plugin%-channel beta %-%-lumen%-channel beta") ~= nil)
+  check("update script forwards the global channel", script:find(
+    "| bash %-s %-%- %-%-slsteam%-channel beta %-%-plugin%-channel beta %-%-lumen%-channel beta") ~= nil)
 end
 
 -- ── channel RPC registration ────────────────────────────────────────────────
@@ -366,13 +370,20 @@ do
   })
   check("register exposes SetAboutChannel", type(registry.SetAboutChannel) == "function")
   if type(registry.SetAboutChannel) == "function" then
-    local good = json.decode(registry.SetAboutChannel(
-      '{"key":"lumen","channel":"beta"}'))
-    check("channel RPC accepts known beta", good.success == true
-      and wrote and json.decode(wrote).lumen == "beta")
+    local good = json.decode(registry.SetAboutChannel('{"channel":"beta"}'))
+    local saved = wrote and json.decode(wrote) or {}
+    check("channel RPC saves global beta", good.success == true
+      and saved.slsteam_moon == "beta" and saved.plugin == "beta"
+      and saved.lumen == "beta")
+    wrote = nil
+    local stable = json.decode(registry.SetAboutChannel('{"channel":"stable"}'))
+    saved = wrote and json.decode(wrote) or {}
+    check("channel RPC saves global stable", stable.success == true
+      and saved.slsteam_moon == "stable" and saved.plugin == "stable"
+      and saved.lumen == "stable")
     local bad = json.decode(registry.SetAboutChannel(
-      '{"key":"other","channel":"beta"}'))
-    check("channel RPC rejects unknown component", bad.success == false)
+      '{"channel":"preview"}'))
+    check("channel RPC rejects unknown channel", bad.success == false)
   end
 end
 
