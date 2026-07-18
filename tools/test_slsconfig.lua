@@ -58,8 +58,29 @@ do
   local v = slsconfig.parse("LogLevel: 2\n", false)
   assert_eq(v.API,          true,  "API default true")
   assert_eq(v.DisableCloud, true,  "DisableCloud default true (no CloudRedirect)")
+  assert_eq(v.DisableParentalRestrictions, false, "parental unlock defaults off")
   assert_eq(v.SafeMode,     false, "SafeMode default false")
   assert_eq(v.LogLevel,     2,     "LogLevel read")
+end
+
+-- ── parental unlock is a visible, independent bool ─────────────────────────
+do
+  local entry
+  for _, e in ipairs(slsconfig.SCHEMA) do
+    if e.key == "DisableParentalRestrictions" then entry = e end
+  end
+  assert_true(entry ~= nil, "parental unlock is present in SCHEMA")
+  assert_eq(entry.hidden, nil, "parental unlock is visible")
+  assert_eq(entry.type, "bool", "parental unlock is a bool")
+  assert_eq(entry.default, false, "parental unlock defaults off")
+
+  local out = slsconfig.set_key(SAMPLE, "DisableParentalRestrictions", true)
+  assert_true(out:find("DisableParentalRestrictions: yes", 1, true),
+              "parental unlock can be enabled")
+  assert_eq(slsconfig.parse(out).DisableParentalRestrictions, true,
+            "parental unlock round-trips")
+  assert_eq(slsconfig.parse(out).DisableFamilyShareLock, true,
+            "family share lock remains independent")
 end
 
 -- ── deprecated keys are still parsed but flagged hidden (not rendered) ──────

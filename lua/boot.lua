@@ -168,7 +168,8 @@ require("slscheck").register(registry)
 -- it there's nothing to configure, so we DON'T register the cloud RPCs and the
 -- menu hides the tab (window.__lumenCloud=false) — zero cost for users who
 -- don't use cloud saves. Single file-stat, decided once here at boot.
-local have_cloudredirect = require("slsconfig").has_cloudredirect()
+local slsconfig = require("slsconfig")
+local have_cloudredirect = slsconfig.has_cloudredirect()
 if have_cloudredirect then
   require("cloudsettings").register(registry)
 end
@@ -182,6 +183,8 @@ local themeengine = require("themeengine")
 local themepreload = require("themepreload")
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
+local parental_unlock_enabled =
+  slsconfig.read(slsconfig.default_path()).DisableParentalRestrictions == true
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
 -- split into ordered source fragments under menu/ (one concern per file) for
@@ -278,9 +281,11 @@ local function build_channels(theme_config, clean_previous)
   if configured and configured.enabled == true and type(configured.active) == "string" then
     theme_key = configured.active
   end
+  local webview_assets = build_webview_assets(theme_key)
+  webview_assets.anonymous_web=parental_unlock_enabled
   local out = {
     { urls = { "store.steampowered.com", "steamcommunity.com" }, browser = true,
-      assets = build_webview_assets(theme_key) },
+      assets = webview_assets },
     -- Steam's browser view is exposed by recent clients as a data: tracking
     -- target even while it renders Store/Community. It needs the lightweight
     -- menu bundle so the overlay can render above that composited view.

@@ -259,23 +259,31 @@ end
 -- Pick the one active custom-theme gateway from the composed channel set.
 -- Normal Lumen channels intentionally do not carry these fields, so disabled
 -- themes allocate no browser socket and enable no Fetch domain at all.
-function injector.theme_gateway_config(channels)
+function injector.theme_gateway_config(channels, ui_ready)
+  local gateway = nil
   for _, channel in ipairs(channels or {}) do
     local assets = channel.assets
     if type(assets) == "table"
         and assets.browser_gateway == true
         and type(assets.virtual_provider) == "function"
         and type(assets.document_bootstrap_source) == "string" then
-      return {
-        virtual_provider = assets.virtual_provider,
-        document_bootstrap_source = assets.document_bootstrap_source,
-        shared_bootstrap_source = assets.shared_bootstrap_source
-          or assets.document_bootstrap_source,
-        bypass_csp = assets.bypass_csp == true,
-      }
+      gateway = gateway or {}
+      gateway.virtual_provider = assets.virtual_provider
+      gateway.document_bootstrap_source = assets.document_bootstrap_source
+      gateway.shared_bootstrap_source = assets.shared_bootstrap_source
+        or assets.document_bootstrap_source
+      gateway.bypass_csp = assets.bypass_csp == true
+    end
+    -- The anonymous Store/Community gateway is intentionally post-login. A
+    -- browser-level auto-attach during Steam's cold boot can stall CEF before
+    -- the shell paints; the user cannot navigate to these pages before then.
+    if ui_ready == true and type(assets) == "table"
+        and assets.anonymous_web == true then
+      gateway = gateway or {}
+      gateway.anonymous_web = true
     end
   end
-  return nil
+  return gateway
 end
 
 -- A deliberately narrower browser-level observer for the account selector.
@@ -310,11 +318,84 @@ function injector.browser_uses_auto_attach(gateway)
   return not (gateway and gateway.login_only == true)
 end
 
+function injector.anonymous_web_url(url)
+  local host = tostring(url or ""):match("^https://([^/%?#]+)")
+  if not host then return false end
+  host = host:lower()
+  return host == "store.steampowered.com" or host == "steamcommunity.com"
+end
+
+-- Only presentation headers are forwarded to libcurl. In particular, do not
+-- forward Cookie/Authorization/session identifiers or Accept-Encoding (the C
+-- binding returns decoded bytes, which must not retain a gzip response header).
+function injector.anonymous_request_headers(headers)
+  local allowed = {
+    ["accept"] = true,
+    ["accept-language"] = true,
+    ["user-agent"] = true,
+  }
+  local out, have_ua = {}, false
+  for name, value in pairs(type(headers) == "table" and headers or {}) do
+    local lower = tostring(name):lower()
+    if allowed[lower] then
+      out[#out + 1] = tostring(name) .. ": " .. tostring(value)
+      if lower == "user-agent" then have_ua = true end
+    end
+  end
+  if not have_ua then out[#out + 1] = "User-Agent: Valve Steam Client" end
+  table.sort(out)
+  return out
+end
+
+function injector.anonymous_response_plan(response)
+  if type(response) ~= "table" or type(response.body) ~= "string" then
+    return nil, "invalid response"
+  end
+  local status = tonumber(response.status)
+  if not status or status < 100 or status > 599 then
+    return nil, "invalid status"
+  end
+  status = math.floor(status)
+  if response.effective_url
+      and not injector.anonymous_web_url(response.effective_url) then
+    return nil, "unsafe effective URL"
+  end
+  if status >= 300 and status < 400 then
+    if not injector.anonymous_web_url(response.redirect_url) then
+      return nil, "unsafe redirect"
+    end
+    return {action="redirect", status=status, url=response.redirect_url}
+  end
+  if status < 200 or status >= 300 then
+    return nil, "unexpected HTTP status"
+  end
+  local content_type = tostring(response.content_type or "")
+  local media_type = content_type:lower():match("^%s*([^;]+)")
+  if media_type ~= "text/html" and media_type ~= "application/xhtml+xml" then
+    return nil, "non-HTML response"
+  end
+  return {action="document", status=status, content_type=content_type}
+end
+
 function injector.browser_fetch_patterns(gateway)
   if not gateway then return {} end
-  return {
-    { urlPattern="https://lumen-theme.local/*", requestStage="Request" },
-  }
+  local patterns = {}
+  if type(gateway.virtual_provider) == "function" then
+    patterns[#patterns + 1] = {
+      urlPattern="https://lumen-theme.local/*", requestStage="Request"
+    }
+  end
+  if gateway.anonymous_web == true then
+    patterns[#patterns + 1] = {
+      urlPattern="https://store.steampowered.com/*",
+      resourceType="Document", requestStage="Request",
+    }
+    patterns[#patterns + 1] = {
+      urlPattern="https://steamcommunity.com/*",
+      resourceType="Document", requestStage="Request",
+    }
+  end
+  return patterns
 end
 
 function injector.browser_auto_attach_params(enabled)
@@ -729,12 +810,15 @@ local function browser_conn_new(ws_url, gateway)
     sessions={},
     setup_pending={},
     setup_counts={},
+    requests={},
     manual_pending={},
     auto_attach_id=nil,
     get_targets_id=nil,
     attaching_targets={},
     enabled=false,
     enable_failed=false,
+    send_failed=false,
+    setup_failed=false,
   }, BrowserConn)
 end
 
@@ -759,6 +843,7 @@ end
 function BrowserConn:_send_child(session_id, method, params, pending)
   local id = self.session._id + 1
   if not send_cmd(self.sock, self.session, method, params, session_id) then
+    self.send_failed = true
     return nil
   end
   if pending then self.setup_pending[id] = pending end
@@ -810,6 +895,7 @@ function BrowserConn:_install_bootstrap(session_id, run_immediately)
   state.bootstrap_source = nil
   local source = state.shared and self.gateway.shared_bootstrap_source
     or self.gateway.document_bootstrap_source
+  if type(source) ~= "string" then return true end
   return self:_queue_setup(session_id, "bootstrap",
     "Page.addScriptToEvaluateOnNewDocument",
     injector.document_bootstrap_params(source, run_immediately),
@@ -822,6 +908,7 @@ function BrowserConn:_setup_target(session_id, info, waiting)
     info=info or {},
     waiting=waiting == true,
     shared=shared_target(info),
+    bypass_csp=false,
   }
   self.sessions[session_id] = state
   if state.info.type ~= "page" then
@@ -886,15 +973,131 @@ function BrowserConn:_fulfill_virtual(params, session_id)
   end
 end
 
+function BrowserConn:_fail_anonymous(session_id, request_id, reason)
+  self:_send_child(session_id, "Fetch.failRequest", {
+    requestId=request_id, errorReason=reason or "Failed",
+  })
+end
+
+-- Start a credential-free public request without blocking the CDP loop.
+-- Steam's CEF re-adds its cookie after request-header overrides, so the paused
+-- document is fulfilled only after the libcurl multi handle completes.
+function BrowserConn:_start_anonymous(params, session_id)
+  local request = params.request or {}
+  if request.method ~= "GET" then
+    self:_fail_anonymous(session_id, params.requestId, "BlockedByClient")
+    return
+  end
+
+  local ok_http, http = pcall(require, "http")
+  if not ok_http or type(http.start) ~= "function"
+      or type(http.poll) ~= "function" then
+    self:_fail_anonymous(session_id, params.requestId)
+    return
+  end
+  local ok_start, handle, start_err = pcall(http.start, request.url, {
+    headers=injector.anonymous_request_headers(request.headers),
+    timeout=10,
+    follow_redirects=false,
+    https_only=true,
+    max_bytes=8 * 1024 * 1024,
+  })
+  if not ok_start or not handle then
+    log("anonymous web request failed to start: "
+      .. tostring(ok_start and start_err or handle))
+    self:_fail_anonymous(session_id, params.requestId)
+    return
+  end
+  self.requests[params.requestId] = {
+    handle=handle,
+    http=http,
+    session_id=session_id,
+  }
+end
+
+function BrowserConn:_finish_anonymous(session_id, request_id, response, err)
+  local plan, plan_err = injector.anonymous_response_plan(response)
+  if not plan then
+    log("anonymous web request failed: " .. tostring(err or plan_err))
+    self:_fail_anonymous(session_id, request_id)
+    return
+  end
+
+  if plan.action == "redirect" then
+    self:_send_child(session_id, "Fetch.fulfillRequest", {
+      requestId=request_id,
+      responseCode=plan.status,
+      responseHeaders={
+        {name="Location",value=plan.url},
+        {name="Cache-Control",value="no-store"},
+      },
+      body="",
+    })
+    return
+  end
+
+  self:_send_child(session_id, "Fetch.fulfillRequest", {
+    requestId=request_id,
+    responseCode=plan.status,
+    responseHeaders={
+      {name="Content-Type",value=plan.content_type},
+      {name="Cache-Control",value="no-store"},
+    },
+    body=b64.encode(response.body),
+  })
+end
+
+function BrowserConn:_poll_anonymous()
+  for request_id, pending in pairs(self.requests) do
+    local ok_poll, done, response, err =
+      pcall(pending.http.poll, pending.handle)
+    if not ok_poll then
+      self.requests[request_id] = nil
+      self:_fail_anonymous(pending.session_id, request_id)
+      log("anonymous web request poll failed: " .. tostring(done))
+    elseif done then
+      self.requests[request_id] = nil
+      self:_finish_anonymous(
+        pending.session_id, request_id, response, err)
+    end
+  end
+end
+
+function BrowserConn:_handle_paused_request(params, session_id)
+  local url = params.request and params.request.url or ""
+  if self.gateway.anonymous_web == true and injector.anonymous_web_url(url) then
+    self:_start_anonymous(params, session_id)
+  elseif type(self.gateway.virtual_provider) == "function" then
+    self:_fulfill_virtual(params, session_id)
+  else
+    self:_send_child(session_id, "Fetch.continueRequest", {
+      requestId=params.requestId,
+    })
+  end
+end
+
 function BrowserConn:_finish_setup(message)
   local pending = self.setup_pending[message.id]
   if not pending then return false end
   self.setup_pending[message.id] = nil
   local session_id = pending.session_id
   local state = self.sessions[session_id]
-  if state and pending.kind == "bootstrap" and message.kind == "result" then
+  if message.kind ~= "result" then
+    self.setup_failed = true
+  elseif state and pending.kind == "bootstrap" then
     state.script_id = message.result and message.result.identifier
     state.bootstrap_source = pending.source
+  elseif state and pending.kind == "fetch" then
+    state.fetch_enabled = true
+    -- Existing Store/Community targets have already painted the authenticated
+    -- 403 before this post-login gateway attaches. Reload once, after Fetch is
+    -- acknowledged, so the replacement public document is intercepted.
+    if self.gateway.anonymous_web == true
+        and injector.anonymous_web_url(state.info and state.info.url)
+        and not state.anonymous_reloaded then
+      state.anonymous_reloaded = true
+      self:_send_child(session_id, "Page.reload", {ignoreCache=true})
+    end
   end
   local left = math.max(0, (self.setup_counts[session_id] or 1) - 1)
   self.setup_counts[session_id] = left > 0 and left or nil
@@ -945,8 +1148,13 @@ function BrowserConn:_handle_event(message)
   elseif message.method == "Target.detachedFromTarget" then
     self.sessions[params.sessionId] = nil
     self.setup_counts[params.sessionId] = nil
+    for request_id, pending in pairs(self.requests) do
+      if pending.session_id == params.sessionId then
+        self.requests[request_id] = nil
+      end
+    end
   elseif message.method == "Fetch.requestPaused" and message.session_id then
-    self:_fulfill_virtual(params, message.session_id)
+    self:_handle_paused_request(params, message.session_id)
   elseif self.gateway.login_only
       and message.method == "Runtime.executionContextsCleared"
       and message.session_id and self.sessions[message.session_id] then
@@ -978,12 +1186,13 @@ function BrowserConn:_consume(bytes)
 end
 
 function BrowserConn:_pump(timeout)
+  if self.send_failed or self.setup_failed then return false end
   self.sock:settimeout(timeout or 0)
   local chunk, err, partial = self.sock:receive(8192)
   self.sock:settimeout(0)
   local got = chunk or partial
   if got and #got > 0 and not self:_consume(got) then return false end
-  return err ~= "closed"
+  return err ~= "closed" and not self.send_failed and not self.setup_failed
 end
 
 function BrowserConn:_wait_until(predicate, seconds)
@@ -1005,10 +1214,16 @@ function BrowserConn:connect()
   self.sock = c
   self.session = cdp.new_session()
   self.buf = ""
-  send_cmd(c, self.session, "Target.setDiscoverTargets", {discover=true})
+  if not send_cmd(c, self.session, "Target.setDiscoverTargets", {discover=true}) then
+    self:close(false)
+    return false
+  end
   if not injector.browser_uses_auto_attach(self.gateway) then
     self.get_targets_id = self.session._id + 1
-    send_cmd(c, self.session, "Target.getTargets", {})
+    if not send_cmd(c, self.session, "Target.getTargets", {}) then
+      self:close(false)
+      return false
+    end
     self.enabled = true
     log("manual SharedJSContext theme observer attached")
     return true
@@ -1020,10 +1235,14 @@ function BrowserConn:connect()
     return false
   end
   local ready = self:_wait_until(function()
-    return (self.enabled or self.enable_failed)
-      and next(self.setup_pending) == nil
+    return self.send_failed or self.setup_failed
+      or ((self.enabled or self.enable_failed)
+          and next(self.setup_pending) == nil)
   end, 3)
-  if not ready or not self.enabled then self:close(false); return false end
+  if not ready or not self.enabled or self.send_failed or self.setup_failed then
+    self:close(false)
+    return false
+  end
   log("browser theme gateway attached; renderer startup gate active")
   return true
 end
@@ -1035,13 +1254,16 @@ function BrowserConn:update_gateway(gateway)
   local old_login_theme = self.gateway.login_theme_source
   local old_login_only = self.gateway.login_only
   local old_bypass_csp = self.gateway.bypass_csp
+  local old_anonymous_web = self.gateway.anonymous_web
+  self.setup_failed = false
   self.gateway = gateway
   if old_source == gateway.document_bootstrap_source
       and old_shared_source == gateway.shared_bootstrap_source
       and old_login_guard == gateway.login_guard_source
       and old_login_theme == gateway.login_theme_source
       and old_login_only == gateway.login_only
-      and old_bypass_csp == gateway.bypass_csp then return true end
+      and old_bypass_csp == gateway.bypass_csp
+      and old_anonymous_web == gateway.anonymous_web then return true end
   if gateway.login_only then
     for session_id, state in pairs(self.sessions) do
       if state.shared then
@@ -1059,32 +1281,44 @@ function BrowserConn:update_gateway(gateway)
     -- live-theme race this gateway exists to remove; RestartJSContext follows
     -- after registration is acknowledged.
     if state.info and state.info.type == "page" and not gateway.login_only then
-      if state.bypass_csp ~= gateway.bypass_csp then
+      if state.bypass_csp ~= (gateway.bypass_csp == true) then
         self:_queue_setup(session_id, "csp", "Page.setBypassCSP",
           {enabled=gateway.bypass_csp == true})
         state.bypass_csp = gateway.bypass_csp == true
       end
+      if old_anonymous_web ~= gateway.anonymous_web then
+        state.fetch_enabled = false
+        state.anonymous_reloaded = nil
+        self:_queue_setup(session_id, "fetch", "Fetch.enable",
+          {patterns=injector.browser_fetch_patterns(gateway)})
+      end
       self:_install_bootstrap(session_id, false)
     end
   end
-  return self:_wait_until(function()
+  local ready = self:_wait_until(function()
+    if self.send_failed or self.setup_failed then return true end
     for _, state in pairs(self.sessions) do
       if state.info and state.info.type == "page" then
         local desired = state.shared and gateway.shared_bootstrap_source
           or gateway.document_bootstrap_source
         if state.bootstrap_source ~= desired
-            or state.bypass_csp ~= (gateway.bypass_csp == true) then return false end
+            or (state.bypass_csp == true) ~= (gateway.bypass_csp == true)
+            or (old_anonymous_web ~= gateway.anonymous_web
+                and state.fetch_enabled ~= true) then return false end
       end
     end
     return true
   end, 3)
+  return ready and not self.send_failed and not self.setup_failed
 end
 
 function BrowserConn:drain()
+  if self.send_failed or self.setup_failed then return false end
   local data, err, partial = self.sock:receive("*a")
   local got = data or partial
   if got and #got > 0 and not self:_consume(got) then return false end
-  return err ~= "closed"
+  self:_poll_anonymous()
+  return err ~= "closed" and not self.send_failed and not self.setup_failed
 end
 
 function BrowserConn:close(disable)
@@ -1118,6 +1352,7 @@ function BrowserConn:close(disable)
   self.sessions = {}
   self.setup_pending = {}
   self.setup_counts = {}
+  self.requests = {}
   self.manual_pending = {}
   self.attaching_targets = {}
 end
@@ -1197,7 +1432,7 @@ end
 -- between themes updates its provider atomically without a Fetch gap; disabling
 -- themes explicitly disables Fetch and closes the root socket before reload.
 function State:_sync_browser_gateway()
-  local desired = injector.theme_gateway_config(self.channels)
+  local desired = injector.theme_gateway_config(self.channels, self.ui_ready)
     or injector.login_theme_gateway(self.channels, self.ui_ready)
   if not desired then
     if self.browser_conn then
@@ -1208,7 +1443,12 @@ function State:_sync_browser_gateway()
     return true
   end
   if self.browser_conn and self.browser_conn.sock and self.browser_conn.enabled then
-    return self.browser_conn:update_gateway(desired)
+    local updated = self.browser_conn:update_gateway(desired)
+    if not updated then
+      self.browser_conn:close(false)
+      self.browser_conn = nil
+    end
+    return updated
   end
   if self.browser_conn then self.browser_conn:close(false); self.browser_conn = nil end
   local ws_url = browser_ws_url()

@@ -38,6 +38,15 @@ do
     "cold boot exposes both ordered hooks to the manual browser observer")
   assert_true(source:find("js={runtime.popup_hook}", 1, true),
     "normal SharedJSContext routing installs the complete popup theme hook")
+  assert_true(source:find("anonymous_web=parental_unlock_enabled", 1, true),
+    "parental unlock enables anonymous Store/Community documents")
+  assert_true(not source:find('require("parentalunlock")', 1, true),
+    "native parental state no longer needs a SharedJSContext visual patch")
+  local injector_file = assert(io.open("lua/injector.lua", "r"))
+  local injector_source = injector_file:read("*a"); injector_file:close()
+  assert_true(injector_source:find("pcall(http.start", 1, true)
+      and injector_source:find("function BrowserConn:_poll_anonymous()", 1, true),
+    "public documents use a polled request without blocking the CDP loop")
 end
 
 -- A cold-boot theme hook must reach SharedJSContext before Steam creates its
@@ -155,6 +164,13 @@ do
     }}}) == nil,
     "theme assets do not activate experimental browser auto-attach without opt-in")
 
+  local anonymous_channels = {{assets={anonymous_web=true}}}
+  local anonymous_gateway = injector.theme_gateway_config(anonymous_channels, true)
+  assert_true(anonymous_gateway and anonymous_gateway.anonymous_web == true,
+    "enabled parental unlock exposes an anonymous web gateway after UI startup")
+  assert_true(injector.theme_gateway_config(anonymous_channels, false) == nil,
+    "anonymous gateway does not attach during Steam cold boot")
+
   local login_channels = {{assets={
     login_browser_gateway=true,
     login_guard_source="/* tiny guard */",
@@ -177,6 +193,66 @@ do
   assert_true(patterns[1].urlPattern == "https://lumen-theme.local/*"
       and patterns[1].requestStage == "Request",
     "virtual theme files are fulfilled before network access")
+  local anonymous_patterns = injector.browser_fetch_patterns(anonymous_gateway)
+  assert_true(#anonymous_patterns == 2
+      and anonymous_patterns[1].resourceType == "Document"
+      and anonymous_patterns[2].resourceType == "Document",
+    "anonymous mode intercepts only Store and Community documents")
+  assert_true(type(injector.anonymous_web_url) == "function"
+      and injector.anonymous_web_url("https://store.steampowered.com/app/440")
+      and injector.anonymous_web_url("https://steamcommunity.com/app/440")
+      and not injector.anonymous_web_url("https://store.steampowered.com.evil.test/")
+      and not injector.anonymous_web_url("https://help.steampowered.com/"),
+    "anonymous proxy accepts only the two exact HTTPS hosts")
+  assert_true(type(injector.anonymous_request_headers) == "function",
+    "injector exposes credential-free public request headers")
+  local public_headers = injector.anonymous_request_headers({
+    ["User-Agent"]="Valve Steam Client", Cookie="secret",
+    Authorization="token", ["Accept-Language"]="en-US",
+    ["Accept-Encoding"]="gzip", ["X-Steam-SessionID"]="session",
+  })
+  local joined = table.concat(public_headers, "\n"):lower()
+  assert_true(joined:find("user%-agent: valve steam client")
+      and joined:find("accept%-language: en%-us")
+      and not joined:find("cookie", 1, true)
+      and not joined:find("authorization", 1, true)
+      and not joined:find("session", 1, true)
+      and not joined:find("accept%-encoding"),
+    "public proxy preserves presentation headers but never credentials or compression")
+  assert_true(type(injector.anonymous_response_plan) == "function",
+    "injector exposes anonymous response validation")
+  local html_plan = injector.anonymous_response_plan({
+    status=200, body="<html></html>", content_type="text/html; charset=UTF-8",
+  })
+  assert_true(html_plan and html_plan.action == "document",
+    "public HTML is accepted")
+  local redirect_plan = injector.anonymous_response_plan({
+    status=302, body="", content_type="text/html",
+    redirect_url="https://steamcommunity.com/",
+  })
+  assert_true(redirect_plan and redirect_plan.action == "redirect",
+    "HTTPS redirects inside the exact host allowlist are passed to CEF")
+  assert_true(injector.anonymous_response_plan({
+      status=302, body="", redirect_url="https://example.com/",
+    }) == nil,
+    "cross-host redirects are rejected")
+  assert_true(injector.anonymous_response_plan({
+      status=302, body="", redirect_url="http://store.steampowered.com/",
+    }) == nil,
+    "redirect downgrades are rejected")
+  assert_true(injector.anonymous_response_plan({
+      status=200, body="binary", content_type="application/octet-stream",
+    }) == nil,
+    "non-HTML documents are rejected")
+  assert_true(injector.anonymous_response_plan({
+      status=403, body="<html></html>", content_type="text/html",
+    }) == nil,
+    "non-success public documents are rejected")
+  assert_true(injector.anonymous_response_plan({
+      status=200, body="<html></html>", content_type="text/html",
+      effective_url="https://example.com/",
+    }) == nil,
+    "an unexpected effective response host is rejected")
   assert_true(type(injector.browser_auto_attach_params) == "function",
     "injector exposes the renderer startup gate")
   local attach = injector.browser_auto_attach_params(true)

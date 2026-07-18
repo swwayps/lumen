@@ -29,6 +29,25 @@ do
   assert_true(type(res.schema) == "table" and #res.schema > 0, "schema present")
   assert_eq(res.values.PlayNotOwnedGames, true, "value reflected")
   assert_eq(res.values.LogLevel, 1, "loglevel reflected")
+  assert_eq(res.values.DisableParentalRestrictions, false, "parental unlock defaults off")
+  local parental
+  for _, entry in ipairs(res.schema) do
+    if entry.key == "DisableParentalRestrictions" then parental = entry end
+  end
+  assert_true(parental ~= nil and not parental.hidden, "parental unlock is visible")
+  os.remove(p)
+end
+
+-- ── set() persists the parental unlock independently ───────────────────────
+do
+  local p = write_tmp(
+    "DisableFamilyShareLock: yes\nUseWhitelist: no\nPlayNotOwnedGames: no\nLogLevel: 2\n")
+  local res = json.decode(slsmenu.set(
+    p, json.encode({ key = "DisableParentalRestrictions", value = true })))
+  assert_eq(res.success, true, "parental unlock set success")
+  local after = json.decode(slsmenu.get(p))
+  assert_eq(after.values.DisableParentalRestrictions, true, "parental unlock persisted")
+  assert_eq(after.values.DisableFamilyShareLock, true, "family share lock untouched")
   os.remove(p)
 end
 

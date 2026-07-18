@@ -30,6 +30,8 @@ slsconfig.SCHEMA = {
     label = "Play not-owned games" },
   { key = "DisableFamilyShareLock", type = "bool",   default = true,  level = "normal",
     label = "Disable Family Share lock" },
+  { key = "DisableParentalRestrictions", type = "bool", default = false, level = "normal",
+    label = "Disable parental restrictions" },
   { key = "AutoFilterList",         type = "bool",   default = true,  level = "advanced",
     label = "Auto-filter app list" },
   { key = "UseWhitelist",           type = "bool",   default = false, level = "danger",
