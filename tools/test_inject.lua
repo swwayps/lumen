@@ -49,8 +49,8 @@ do
   local injector_file = assert(io.open("lua/injector.lua", "r"))
   local injector_source = injector_file:read("*a"); injector_file:close()
   assert_true(injector_source:find("pcall(http.start", 1, true)
-      and injector_source:find("function BrowserConn:_poll_anonymous()", 1, true),
-    "public documents use a polled request without blocking the CDP loop")
+      and injector_source:find("function Conn:_poll_anonymous()", 1, true),
+    "public documents use a page-scoped polled request without blocking CDP")
 end
 
 -- A cold-boot theme hook must reach SharedJSContext before Steam creates its
@@ -170,8 +170,8 @@ do
 
   local anonymous_channels = {{assets={anonymous_web=true}}}
   local anonymous_gateway = injector.theme_gateway_config(anonymous_channels, true)
-  assert_true(anonymous_gateway and anonymous_gateway.anonymous_web == true,
-    "enabled parental unlock exposes an anonymous web gateway after UI startup")
+  assert_true(anonymous_gateway == nil,
+    "parental unlock does not activate browser-wide auto-attach")
   assert_true(injector.theme_gateway_config(anonymous_channels, false) == nil,
     "anonymous gateway does not attach during Steam cold boot")
 
@@ -197,7 +197,8 @@ do
   assert_true(patterns[1].urlPattern == "https://lumen-theme.local/*"
       and patterns[1].requestStage == "Request",
     "virtual theme files are fulfilled before network access")
-  local anonymous_patterns = injector.browser_fetch_patterns(anonymous_gateway)
+  local anonymous_patterns = injector.page_fetch_patterns(
+    anonymous_channels[1].assets, false)
   assert_true(#anonymous_patterns == 2
       and anonymous_patterns[1].resourceType == "Document"
       and anonymous_patterns[2].resourceType == "Document",
@@ -563,6 +564,73 @@ do
   local n = injector.dispatch_method(nil, "Anything", {})
   assert_true(n:find("unknown method", 1, true) ~= nil,
     "a nil registry doesn't throw, just reports unknown")
+end
+
+-- Parental public documents use each Store/Community page connection. The
+-- browser-wide gateway remains theme-only, so enabling parental unlock cannot
+-- put unrelated popups into Chromium's debugger-paused state.
+do
+  local anonymous_assets = {anonymous_web=true}
+  local patterns = injector.page_fetch_patterns(anonymous_assets, false)
+  assert_true(#patterns == 2
+      and patterns[1].resourceType == "Document"
+      and patterns[2].resourceType == "Document",
+    "page connection intercepts Store and Community documents")
+  assert_true(injector.page_recovery_url(
+      "https://store.steampowered.com/?snr=client")
+      == "https://store.steampowered.com/?snr=client"
+      and injector.page_recovery_url("data:text/html,error", {
+        {url="https://store.steampowered.com/app/440"},
+        {url="data:text/html,error"},
+      }) == "https://store.steampowered.com/app/440"
+      and injector.page_recovery_url("data:text/html,error", {
+        {url="https://example.com/"},
+      }) == nil,
+    "page recovery uses only an allowlisted original or history document")
+
+  local recovery_assets = {anonymous_web=true}
+  local recovery_routes = injector.route_targets_with_recovery({
+    {title="Error", type="page", url="data:text/html,error",
+      webSocketDebuggerUrl="ws://localhost/devtools/page/recovery"},
+    {title="Unrelated", type="page", url="data:text/html,other",
+      webSocketDebuggerUrl="ws://localhost/devtools/page/unrelated"},
+  }, {{urls={"store.steampowered.com"}, assets=recovery_assets}})
+  assert_true(#recovery_routes == 1
+      and recovery_routes[1].recovery == true
+      and recovery_routes[1].assets == recovery_assets,
+    "only a recognizable failed webview receives history-based recovery")
+
+  assert_true(injector.theme_gateway_config({{assets=anonymous_assets}}, true) == nil,
+    "parental unlock never enables the browser-wide theme gateway")
+  local provider = function() return "x", "text/plain" end
+  local themed = injector.theme_gateway_config({{assets={
+    browser_gateway=true,
+    virtual_provider=provider,
+    document_bootstrap_source="theme",
+    anonymous_web=true,
+  }}}, true)
+  assert_true(themed and themed.virtual_provider == provider
+      and themed.anonymous_web == nil,
+    "custom theme gateway ignores parental anonymous state")
+  local browser_patterns = injector.browser_fetch_patterns({
+    virtual_provider=provider, anonymous_web=true,
+  })
+  assert_true(#browser_patterns == 1
+      and browser_patterns[1].urlPattern == "https://lumen-theme.local/*",
+    "browser-wide Fetch remains limited to virtual theme assets")
+
+  local state = injector.new({channels={}})
+  assert_true(state:needs_fast_tick() == false,
+    "injector stays on its idle cadence without a public request")
+  state.conns.example = {requests={document={}}}
+  assert_true(state:needs_fast_tick() == true and state:idle_delay() == 0.01,
+    "injector polls quickly only while a public request is pending")
+
+  local source_file = assert(io.open("lua/injector.lua", "r"))
+  local source = source_file:read("*a"); source_file:close()
+  assert_true(source:find("function Conn:_start_anonymous_request", 1, true)
+      and not source:find("function BrowserConn:_start_anonymous", 1, true),
+    "anonymous gateway is page-scoped with no dead browser implementation")
 end
 
 print("test_inject: ALL PASS")

@@ -274,14 +274,6 @@ function injector.theme_gateway_config(channels, ui_ready)
         or assets.document_bootstrap_source
       gateway.bypass_csp = assets.bypass_csp == true
     end
-    -- The anonymous Store/Community gateway is intentionally post-login. A
-    -- browser-level auto-attach during Steam's cold boot can stall CEF before
-    -- the shell paints; the user cannot navigate to these pages before then.
-    if ui_ready == true and type(assets) == "table"
-        and assets.anonymous_web == true then
-      gateway = gateway or {}
-      gateway.anonymous_web = true
-    end
   end
   return gateway
 end
@@ -347,6 +339,74 @@ function injector.anonymous_request_headers(headers)
   return out
 end
 
+function injector.page_fetch_patterns(assets, root_owns_virtual)
+  if type(assets) ~= "table" then return {} end
+  local patterns = {}
+  if type(assets.virtual_provider) == "function"
+      and root_owns_virtual ~= true then
+    patterns[#patterns + 1] = {
+      urlPattern="https://lumen-theme.local/*", requestStage="Request",
+    }
+  end
+  if assets.anonymous_web == true then
+    patterns[#patterns + 1] = {
+      urlPattern="https://store.steampowered.com/*",
+      resourceType="Document", requestStage="Request",
+    }
+    patterns[#patterns + 1] = {
+      urlPattern="https://steamcommunity.com/*",
+      resourceType="Document", requestStage="Request",
+    }
+  end
+  return patterns
+end
+
+function injector.page_recovery_url(url, entries)
+  if injector.anonymous_web_url(url) then return url end
+  for i = #(type(entries) == "table" and entries or {}), 1, -1 do
+    local candidate = entries[i] and entries[i].url
+    if injector.anonymous_web_url(candidate) then return candidate end
+  end
+  return nil
+end
+
+function injector.recovery_candidate(target)
+  if type(target) ~= "table" or target.type ~= "page"
+      or not target.webSocketDebuggerUrl then return false end
+  local url, title = tostring(target.url or ""), tostring(target.title or "")
+  local failed_url = url:find("data:text/html", 1, true) == 1
+    or url:find("http://error/", 1, true) == 1
+  local failed_title = title == "Error"
+    or title:find("data:text/html", 1, true) == 1
+  return failed_url and failed_title
+end
+
+function injector.route_targets_with_recovery(targets, channels)
+  local routed = cdp.route_targets(targets, channels)
+  local matched, recovery_assets = {}, nil
+  for _, route in ipairs(routed) do
+    matched[route.target.webSocketDebuggerUrl] = true
+  end
+  for _, channel in ipairs(channels or {}) do
+    if type(channel.assets) == "table"
+        and channel.assets.anonymous_web == true then
+      recovery_assets = channel.assets
+      break
+    end
+  end
+  if recovery_assets then
+    for _, target in ipairs(targets or {}) do
+      if not matched[target.webSocketDebuggerUrl]
+          and injector.recovery_candidate(target) then
+        routed[#routed + 1] = {
+          target=target, assets=recovery_assets, recovery=true,
+        }
+      end
+    end
+  end
+  return routed
+end
+
 function injector.anonymous_response_plan(response)
   if type(response) ~= "table" or type(response.body) ~= "string" then
     return nil, "invalid response"
@@ -383,16 +443,6 @@ function injector.browser_fetch_patterns(gateway)
   if type(gateway.virtual_provider) == "function" then
     patterns[#patterns + 1] = {
       urlPattern="https://lumen-theme.local/*", requestStage="Request"
-    }
-  end
-  if gateway.anonymous_web == true then
-    patterns[#patterns + 1] = {
-      urlPattern="https://store.steampowered.com/*",
-      resourceType="Document", requestStage="Request",
-    }
-    patterns[#patterns + 1] = {
-      urlPattern="https://steamcommunity.com/*",
-      resourceType="Document", requestStage="Request",
     }
   end
   return patterns
@@ -448,7 +498,8 @@ end
 local Conn = {}
 Conn.__index = Conn
 
-local function conn_new(target, assets, registry, manager, browser_target, early)
+local function conn_new(target, assets, registry, manager, browser_target, early,
+    recovery)
   return setmetatable({
     title = target.title,
     url = target.url or "",
@@ -458,6 +509,8 @@ local function conn_new(target, assets, registry, manager, browser_target, early
     manager = manager,      -- the State, for control relays (view hide/show)
     browser_target = browser_target == true,
     early = early == true,
+    recovery_only = recovery == true,
+    recovery_route = recovery == true,
     sock = nil,
     session = nil,
     buf = "",
@@ -466,6 +519,12 @@ local function conn_new(target, assets, registry, manager, browser_target, early
     deferred_sent = false,
     ready_probe_id = nil,   -- cdp id of the document.readyState probe
     visibility_probe_id = nil,
+    fetch_enable_id = nil,
+    fetch_enabled = false,
+    anonymous_reloaded = false,
+    requests = {},
+    history_probe_id = nil,
+    recovery_url = nil,
   }, Conn)
 end
 
@@ -484,16 +543,113 @@ function Conn:_probe_visibility()
 end
 
 function Conn:_enable_fetch()
-  if not (self.assets and self.assets.virtual_provider) then return end
   -- The root gateway owns virtual requests when available. Enabling the same
   -- Fetch pattern on a page as well would pause one request in two CDP clients.
-  if self.manager and self.manager.browser_conn
+  local root_owns_virtual = self.manager and self.manager.browser_conn
       and self.manager.browser_conn.enabled
       and self.manager.browser_conn.gateway
-      and type(self.manager.browser_conn.gateway.virtual_provider) == "function" then return end
-  send_cmd(self.sock, self.session, "Fetch.enable", { patterns = {
-    { urlPattern = "https://lumen-theme.local/*", requestStage = "Request" }
-  } })
+      and type(self.manager.browser_conn.gateway.virtual_provider) == "function"
+  local patterns = injector.page_fetch_patterns(self.assets, root_owns_virtual)
+  if #patterns == 0 then return end
+  self.fetch_enable_id = self.session._id + 1
+  send_cmd(self.sock, self.session, "Fetch.enable", {patterns=patterns})
+end
+
+function Conn:_fail_anonymous(request_id, reason)
+  send_cmd(self.sock, self.session, "Fetch.failRequest", {
+    requestId=request_id, errorReason=reason or "Failed",
+  })
+end
+
+function Conn:_start_anonymous_request(params)
+  local request = params.request or {}
+  if request.method ~= "GET" then
+    self:_fail_anonymous(params.requestId, "BlockedByClient")
+    return
+  end
+  local ok_http, http = pcall(require, "http")
+  if not ok_http or type(http.start) ~= "function"
+      or type(http.poll) ~= "function" then
+    self:_fail_anonymous(params.requestId)
+    return
+  end
+  local ok_start, handle, start_err = pcall(http.start, request.url, {
+    headers=injector.anonymous_request_headers(request.headers),
+    timeout=10,
+    follow_redirects=false,
+    https_only=true,
+    max_bytes=8 * 1024 * 1024,
+  })
+  if not ok_start or not handle then
+    log("anonymous web request failed to start: "
+      .. tostring(ok_start and start_err or handle))
+    self:_fail_anonymous(params.requestId)
+    return
+  end
+  self.requests[params.requestId] = {handle=handle, http=http}
+end
+
+function Conn:_finish_anonymous(request_id, response, err)
+  local plan, plan_err = injector.anonymous_response_plan(response)
+  if not plan then
+    log("anonymous web request failed: " .. tostring(err or plan_err))
+    self:_fail_anonymous(request_id)
+    return
+  end
+  if plan.action == "redirect" then
+    send_cmd(self.sock, self.session, "Fetch.fulfillRequest", {
+      requestId=request_id,
+      responseCode=plan.status,
+      responseHeaders={
+        {name="Location",value=plan.url},
+        {name="Cache-Control",value="no-store"},
+      },
+      body="",
+    })
+    return
+  end
+  send_cmd(self.sock, self.session, "Fetch.fulfillRequest", {
+    requestId=request_id,
+    responseCode=plan.status,
+    responseHeaders={
+      {name="Content-Type",value=plan.content_type},
+      {name="Cache-Control",value="no-store"},
+    },
+    body=b64.encode(response.body),
+  })
+end
+
+function Conn:_poll_anonymous()
+  for request_id, pending in pairs(self.requests) do
+    local ok_poll, done, response, err = pcall(
+      pending.http.poll, pending.handle)
+    if not ok_poll then
+      self.requests[request_id] = nil
+      self:_fail_anonymous(request_id)
+      log("anonymous web request poll failed: " .. tostring(done))
+    elseif done then
+      self.requests[request_id] = nil
+      self:_finish_anonymous(request_id, response, err)
+    end
+  end
+end
+
+function Conn:_activate_recovery(url)
+  if not url or not self.recovery_only then return end
+  self.recovery_only = false
+  self.recovery_url = url
+  self.url = url
+  send_cmd(self.sock, self.session, "Runtime.enable")
+  if self.assets and self.assets.bypass_csp then
+    send_cmd(self.sock, self.session, "Page.setBypassCSP", {enabled=true})
+  end
+  send_cmd(self.sock, self.session, "Runtime.addBinding", {name=BINDING})
+  self:_probe_ready()
+  self:_probe_visibility()
+  if self.fetch_enabled and not self.anonymous_reloaded then
+    self.anonymous_reloaded = true
+    send_cmd(self.sock, self.session, "Page.navigate", {url=url})
+  end
 end
 
 function Conn:connect()
@@ -509,6 +665,14 @@ function Conn:connect()
   self.injected = false
   self.deferred_after_id = nil
   self.deferred_sent = false
+  if self.recovery_only then
+    send_cmd(c, self.session, "Page.enable")
+    self:_enable_fetch()
+    self.history_probe_id = self.session._id + 1
+    send_cmd(c, self.session, "Page.getNavigationHistory")
+    log("attached recovery probe: " .. self.title)
+    return true
+  end
   local plan = injector.connection_plan(self.early,
     self.assets and self.assets.bypass_csp)
   if plan.runtime then send_cmd(c, self.session, "Runtime.enable") end
@@ -516,9 +680,7 @@ function Conn:connect()
   if plan.bypass_csp then
     send_cmd(c, self.session, "Page.setBypassCSP", { enabled=true })
   end
-  if plan.fetch and self.assets and self.assets.virtual_provider then
-    self:_enable_fetch()
-  end
+  if plan.fetch then self:_enable_fetch() end
   if plan.binding then
     send_cmd(c, self.session, "Runtime.addBinding", { name = BINDING })
   end
@@ -693,6 +855,22 @@ function Conn:drain()
     elseif opcode == 0x1 then
       local m = cdp.parse_message(frame)
       if (m.kind == "result" or m.kind == "error")
+          and self.history_probe_id and m.id == self.history_probe_id then
+        self.history_probe_id = nil
+        local entries = m.kind == "result" and m.result and m.result.entries
+        self:_activate_recovery(injector.page_recovery_url(self.url, entries))
+      elseif (m.kind == "result" or m.kind == "error")
+          and self.fetch_enable_id and m.id == self.fetch_enable_id then
+        self.fetch_enable_id = nil
+        self.fetch_enabled = m.kind == "result"
+        local recovery_url = self.recovery_url
+          or injector.page_recovery_url(self.url)
+        if self.fetch_enabled and not self.anonymous_reloaded
+            and recovery_url then
+          self.anonymous_reloaded = true
+          send_cmd(c, self.session, "Page.navigate", {url=recovery_url})
+        end
+      elseif (m.kind == "result" or m.kind == "error")
           and self.deferred_after_id and m.id == self.deferred_after_id then
         self:_inject_deferred()
       elseif m.kind == "result" and self.ready_probe_id and m.id == self.ready_probe_id then
@@ -710,25 +888,35 @@ function Conn:drain()
           self.manager:set_view_visibility(self.ws_url, visible)
         end
       elseif m.kind == "event" then
-        if m.method == "Fetch.requestPaused" and self.assets and self.assets.virtual_provider then
+        if m.method == "Fetch.requestPaused" then
           local p = m.params or {}
-          local url = p.request and p.request.url
-          local ok_asset, bytes, mime = pcall(self.assets.virtual_provider, url)
-          if ok_asset and bytes then
-            send_cmd(c, self.session, "Fetch.fulfillRequest", {
-              requestId=p.requestId, responseCode=200,
-              responseHeaders={
-                {name="Content-Type",value=mime or "application/octet-stream"},
-                {name="Cache-Control",value="public, max-age=31536000, immutable"},
-                {name="Access-Control-Allow-Origin",value="*"},
-              },
-              body=b64.encode(bytes),
-            })
+          local url = p.request and p.request.url or ""
+          if self.assets and self.assets.anonymous_web == true
+              and injector.anonymous_web_url(url) then
+            self:_start_anonymous_request(p)
+          elseif self.assets and type(self.assets.virtual_provider) == "function"
+              and url:find("https://lumen-theme.local/", 1, true) == 1 then
+            local ok_asset, bytes, mime = pcall(self.assets.virtual_provider, url)
+            if ok_asset and bytes then
+              send_cmd(c, self.session, "Fetch.fulfillRequest", {
+                requestId=p.requestId, responseCode=200,
+                responseHeaders={
+                  {name="Content-Type",value=mime or "application/octet-stream"},
+                  {name="Cache-Control",value="public, max-age=31536000, immutable"},
+                  {name="Access-Control-Allow-Origin",value="*"},
+                },
+                body=b64.encode(bytes),
+              })
+            else
+              send_cmd(c, self.session, "Fetch.fulfillRequest", {
+                requestId=p.requestId, responseCode=404,
+                responseHeaders={{name="Content-Type",value="text/plain"}},
+                body=b64.encode("theme asset not found"),
+              })
+            end
           else
-            send_cmd(c, self.session, "Fetch.fulfillRequest", {
-              requestId=p.requestId, responseCode=404,
-              responseHeaders={{name="Content-Type",value="text/plain"}},
-              body=b64.encode("theme asset not found"),
+            send_cmd(c, self.session, "Fetch.continueRequest", {
+              requestId=p.requestId,
             })
           end
         elseif m.method == "Runtime.bindingCalled" and m.params and m.params.name == BINDING then
@@ -760,7 +948,8 @@ function Conn:drain()
             -- Fetch.enable must precede reinjection; otherwise lumen-theme.local
             -- requests fail and remain empty until Lumen is restarted.
             local plan = injector.recreation_plan(false,
-              self.assets and self.assets.virtual_provider ~= nil,
+              self.assets and (self.assets.virtual_provider ~= nil
+                or self.assets.anonymous_web == true),
               self.assets and self.assets.bypass_csp)
             log("recreation (" .. self.title .. "): " .. m.method .. " -> restore domains + re-inject (gated)")
             if plan.runtime then send_cmd(c, self.session, "Runtime.enable") end
@@ -779,6 +968,7 @@ function Conn:drain()
       end
     end
   end
+  self:_poll_anonymous()
   return true
 end
 
@@ -810,7 +1000,6 @@ local function browser_conn_new(ws_url, gateway)
     sessions={},
     setup_pending={},
     setup_counts={},
-    requests={},
     manual_pending={},
     auto_attach_id=nil,
     get_targets_id=nil,
@@ -973,101 +1162,8 @@ function BrowserConn:_fulfill_virtual(params, session_id)
   end
 end
 
-function BrowserConn:_fail_anonymous(session_id, request_id, reason)
-  self:_send_child(session_id, "Fetch.failRequest", {
-    requestId=request_id, errorReason=reason or "Failed",
-  })
-end
-
--- Start a credential-free public request without blocking the CDP loop.
--- Steam's CEF re-adds its cookie after request-header overrides, so the paused
--- document is fulfilled only after the libcurl multi handle completes.
-function BrowserConn:_start_anonymous(params, session_id)
-  local request = params.request or {}
-  if request.method ~= "GET" then
-    self:_fail_anonymous(session_id, params.requestId, "BlockedByClient")
-    return
-  end
-
-  local ok_http, http = pcall(require, "http")
-  if not ok_http or type(http.start) ~= "function"
-      or type(http.poll) ~= "function" then
-    self:_fail_anonymous(session_id, params.requestId)
-    return
-  end
-  local ok_start, handle, start_err = pcall(http.start, request.url, {
-    headers=injector.anonymous_request_headers(request.headers),
-    timeout=10,
-    follow_redirects=false,
-    https_only=true,
-    max_bytes=8 * 1024 * 1024,
-  })
-  if not ok_start or not handle then
-    log("anonymous web request failed to start: "
-      .. tostring(ok_start and start_err or handle))
-    self:_fail_anonymous(session_id, params.requestId)
-    return
-  end
-  self.requests[params.requestId] = {
-    handle=handle,
-    http=http,
-    session_id=session_id,
-  }
-end
-
-function BrowserConn:_finish_anonymous(session_id, request_id, response, err)
-  local plan, plan_err = injector.anonymous_response_plan(response)
-  if not plan then
-    log("anonymous web request failed: " .. tostring(err or plan_err))
-    self:_fail_anonymous(session_id, request_id)
-    return
-  end
-
-  if plan.action == "redirect" then
-    self:_send_child(session_id, "Fetch.fulfillRequest", {
-      requestId=request_id,
-      responseCode=plan.status,
-      responseHeaders={
-        {name="Location",value=plan.url},
-        {name="Cache-Control",value="no-store"},
-      },
-      body="",
-    })
-    return
-  end
-
-  self:_send_child(session_id, "Fetch.fulfillRequest", {
-    requestId=request_id,
-    responseCode=plan.status,
-    responseHeaders={
-      {name="Content-Type",value=plan.content_type},
-      {name="Cache-Control",value="no-store"},
-    },
-    body=b64.encode(response.body),
-  })
-end
-
-function BrowserConn:_poll_anonymous()
-  for request_id, pending in pairs(self.requests) do
-    local ok_poll, done, response, err =
-      pcall(pending.http.poll, pending.handle)
-    if not ok_poll then
-      self.requests[request_id] = nil
-      self:_fail_anonymous(pending.session_id, request_id)
-      log("anonymous web request poll failed: " .. tostring(done))
-    elseif done then
-      self.requests[request_id] = nil
-      self:_finish_anonymous(
-        pending.session_id, request_id, response, err)
-    end
-  end
-end
-
 function BrowserConn:_handle_paused_request(params, session_id)
-  local url = params.request and params.request.url or ""
-  if self.gateway.anonymous_web == true and injector.anonymous_web_url(url) then
-    self:_start_anonymous(params, session_id)
-  elseif type(self.gateway.virtual_provider) == "function" then
+  if type(self.gateway.virtual_provider) == "function" then
     self:_fulfill_virtual(params, session_id)
   else
     self:_send_child(session_id, "Fetch.continueRequest", {
@@ -1089,15 +1185,6 @@ function BrowserConn:_finish_setup(message)
     state.bootstrap_source = pending.source
   elseif state and pending.kind == "fetch" then
     state.fetch_enabled = true
-    -- Existing Store/Community targets have already painted the authenticated
-    -- 403 before this post-login gateway attaches. Reload once, after Fetch is
-    -- acknowledged, so the replacement public document is intercepted.
-    if self.gateway.anonymous_web == true
-        and injector.anonymous_web_url(state.info and state.info.url)
-        and not state.anonymous_reloaded then
-      state.anonymous_reloaded = true
-      self:_send_child(session_id, "Page.reload", {ignoreCache=true})
-    end
   end
   local left = math.max(0, (self.setup_counts[session_id] or 1) - 1)
   self.setup_counts[session_id] = left > 0 and left or nil
@@ -1148,11 +1235,6 @@ function BrowserConn:_handle_event(message)
   elseif message.method == "Target.detachedFromTarget" then
     self.sessions[params.sessionId] = nil
     self.setup_counts[params.sessionId] = nil
-    for request_id, pending in pairs(self.requests) do
-      if pending.session_id == params.sessionId then
-        self.requests[request_id] = nil
-      end
-    end
   elseif message.method == "Fetch.requestPaused" and message.session_id then
     self:_handle_paused_request(params, message.session_id)
   elseif self.gateway.login_only
@@ -1254,7 +1336,6 @@ function BrowserConn:update_gateway(gateway)
   local old_login_theme = self.gateway.login_theme_source
   local old_login_only = self.gateway.login_only
   local old_bypass_csp = self.gateway.bypass_csp
-  local old_anonymous_web = self.gateway.anonymous_web
   self.setup_failed = false
   self.gateway = gateway
   if old_source == gateway.document_bootstrap_source
@@ -1262,8 +1343,7 @@ function BrowserConn:update_gateway(gateway)
       and old_login_guard == gateway.login_guard_source
       and old_login_theme == gateway.login_theme_source
       and old_login_only == gateway.login_only
-      and old_bypass_csp == gateway.bypass_csp
-      and old_anonymous_web == gateway.anonymous_web then return true end
+      and old_bypass_csp == gateway.bypass_csp then return true end
   if gateway.login_only then
     for session_id, state in pairs(self.sessions) do
       if state.shared then
@@ -1286,12 +1366,6 @@ function BrowserConn:update_gateway(gateway)
           {enabled=gateway.bypass_csp == true})
         state.bypass_csp = gateway.bypass_csp == true
       end
-      if old_anonymous_web ~= gateway.anonymous_web then
-        state.fetch_enabled = false
-        state.anonymous_reloaded = nil
-        self:_queue_setup(session_id, "fetch", "Fetch.enable",
-          {patterns=injector.browser_fetch_patterns(gateway)})
-      end
       self:_install_bootstrap(session_id, false)
     end
   end
@@ -1302,9 +1376,9 @@ function BrowserConn:update_gateway(gateway)
         local desired = state.shared and gateway.shared_bootstrap_source
           or gateway.document_bootstrap_source
         if state.bootstrap_source ~= desired
-            or (state.bypass_csp == true) ~= (gateway.bypass_csp == true)
-            or (old_anonymous_web ~= gateway.anonymous_web
-                and state.fetch_enabled ~= true) then return false end
+            or (state.bypass_csp == true) ~= (gateway.bypass_csp == true) then
+          return false
+        end
       end
     end
     return true
@@ -1317,7 +1391,6 @@ function BrowserConn:drain()
   local data, err, partial = self.sock:receive("*a")
   local got = data or partial
   if got and #got > 0 and not self:_consume(got) then return false end
-  self:_poll_anonymous()
   return err ~= "closed" and not self.send_failed and not self.setup_failed
 end
 
@@ -1352,7 +1425,6 @@ function BrowserConn:close(disable)
   self.sessions = {}
   self.setup_pending = {}
   self.setup_counts = {}
-  self.requests = {}
   self.manual_pending = {}
   self.attaching_targets = {}
 end
@@ -1425,7 +1497,15 @@ function State:observe_shared_generation(targets)
 end
 
 function State:idle_delay()
+  if self:needs_fast_tick() then return 0.01 end
   return self.ui_ready and 1 or injector.discovery_retry_delay(false, self.backoff)
+end
+
+function State:needs_fast_tick()
+  for _, conn in pairs(self.conns) do
+    if conn.requests and next(conn.requests) ~= nil then return true end
+  end
+  return false
 end
 
 -- Keep one global provider only while a custom theme is active. Switching
@@ -1515,7 +1595,7 @@ function State:commit_pending_channels()
 end
 
 function State:_sync_targets(targets, channels, early)
-  local routed = cdp.route_targets(targets, channels)
+  local routed = injector.route_targets_with_recovery(targets, channels)
   for _, r in ipairs(routed) do
     local t = r.target
     local existing = self.conns[t.webSocketDebuggerUrl]
@@ -1526,15 +1606,18 @@ function State:_sync_targets(targets, channels, early)
         or #(old.deferred_js or {}) ~= #(new.deferred_js or {})
         or (old.polyfill ~= nil) ~= (new.polyfill ~= nil)
         or (old.virtual_provider ~= nil) ~= (new.virtual_provider ~= nil)
+        or (old.anonymous_web == true) ~= (new.anonymous_web == true)
         or existing.browser_target ~= (r.browser == true)
         or existing.early ~= (early == true)
+        or existing.recovery_route ~= (r.recovery == true)
       if changed then
         log("routing changed: " .. tostring(existing.title) .. " -> " .. tostring(t.title))
         existing:close(); self.conns[t.webSocketDebuggerUrl] = nil; existing = nil
       end
     end
     if not existing then
-      local conn = conn_new(t, r.assets, self.registry, self, r.browser, early)
+      local conn = conn_new(t, r.assets, self.registry, self, r.browser, early,
+        r.recovery)
       if conn:connect() then self.conns[t.webSocketDebuggerUrl] = conn end
     end
   end

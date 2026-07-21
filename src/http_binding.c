@@ -271,10 +271,17 @@ static int l_async_gc(lua_State *L) {
 
 static int l_start(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    struct transfer transfer;
-    const char *init_err = transfer_init(L, 1, &transfer);
+    /* Build the transfer in its final userdata storage. libcurl keeps raw
+     * pointers to body/error buffers configured by transfer_init(); creating
+     * it on the stack and copying the struct would leave those pointers aimed
+     * at dead stack memory for the lifetime of the asynchronous request. */
+    struct async_request *request =
+        (struct async_request *)lua_newuserdatauv(L, sizeof(*request), 0);
+    memset(request, 0, sizeof(*request));
+    const char *init_err = transfer_init(L, 1, &request->transfer);
     if (init_err) {
-        transfer_cleanup(&transfer);
+        transfer_cleanup(&request->transfer);
+        lua_pop(L, 1);
         lua_pushnil(L);
         lua_pushstring(L, init_err);
         return 2;
@@ -282,24 +289,22 @@ static int l_start(lua_State *L) {
 
     CURLM *multi = curl_multi_init();
     if (!multi) {
-        transfer_cleanup(&transfer);
+        transfer_cleanup(&request->transfer);
+        lua_pop(L, 1);
         lua_pushnil(L);
         lua_pushstring(L, "curl_multi_init failed");
         return 2;
     }
-    CURLMcode add_rc = curl_multi_add_handle(multi, transfer.easy);
+    CURLMcode add_rc = curl_multi_add_handle(multi, request->transfer.easy);
     if (add_rc != CURLM_OK) {
         curl_multi_cleanup(multi);
-        transfer_cleanup(&transfer);
+        transfer_cleanup(&request->transfer);
+        lua_pop(L, 1);
         lua_pushnil(L);
         lua_pushstring(L, curl_multi_strerror(add_rc));
         return 2;
     }
 
-    struct async_request *request =
-        (struct async_request *)lua_newuserdatauv(L, sizeof(*request), 0);
-    memset(request, 0, sizeof(*request));
-    request->transfer = transfer;
     request->multi = multi;
     luaL_getmetatable(L, ASYNC_META);
     lua_setmetatable(L, -2);
