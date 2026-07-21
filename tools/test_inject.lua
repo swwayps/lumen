@@ -29,7 +29,8 @@ do
   local store_pos = source:find(
     '{ urls = { "store.steampowered.com", "steamcommunity.com" }', 1, true)
   assert_true(offers_pos and store_pos and offers_pos < store_pos
-      and source:find("__lumenOffersUnlock", 1, true),
+      and source:find("__lumenOffersUnlock", 1, true)
+      and source:find('data-featuretarget="store-menu-v7"', 1, true),
     "authenticated offers use an isolated channel before the LuaTools webview channel")
 end
 

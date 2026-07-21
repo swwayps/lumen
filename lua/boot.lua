@@ -126,6 +126,11 @@ local SPECIAL_OFFERS_UNLOCK_JS = [[
   if(location.hostname!=="store.steampowered.com"||
       !/^\/marketingmessages\/list\/?$/.test(location.pathname))return;
   function unlock(){
+    var menu=document.querySelector('[data-featuretarget="store-menu-v7"]');
+    if(menu){
+      menu.style.setProperty("display","none","important");
+      menu.setAttribute("aria-hidden","true");
+    }
     var root=document.getElementById("main_content");
     if(!root)return;
     var forms=root.querySelectorAll("form");
