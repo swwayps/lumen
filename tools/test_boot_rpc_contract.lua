@@ -34,7 +34,9 @@ package.loaded["polyfill"] = {}
 -- them in, but the RPC surface it exposes is what we assert here.
 package.loaded["themes"] = {
   register = function() end,
-  load_config = function() return nil end,
+  load_config = function() return {} end,
+  active_key = function() return "" end,
+  consume_default_override = function() return true end,
   set_apply_callback = function() end,
 }
 package.loaded["themeengine"] = { build = function() return nil end }

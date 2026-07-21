@@ -11,6 +11,28 @@ local function eq(a, b, msg) assert(a == b, (msg or "mismatch") .. ": " .. tostr
 local d = themes.default_config()
 eq(d.enabled, false, "disabled by default")
 eq(d.allow_javascript, true, "javascript defaults on")
+eq(d.force_default_theme, false, "external default-theme override defaults off")
+eq(themes.active_key({
+  enabled=true, active="Fixture", force_default_theme=true,
+}), nil, "external override suppresses the configured custom theme")
+eq(themes.active_key({
+  enabled=true, active="Fixture", force_default_theme=false,
+}), "Fixture", "custom theme remains active when the override is off")
+do
+  local path = "/tmp/lumen-theme-override-test-" .. tostring(os.time()) .. ".json"
+  local file = assert(io.open(path, "w"))
+  file:write('{"enabled":true,"active":"Fixture","force_default_theme":true}')
+  file:close()
+  local forced = themes.load_config(path)
+  eq(forced.force_default_theme, true, "themes.json persists the external override")
+  eq(themes.active_key(forced), nil, "themes.json override selects the default Steam theme")
+  assert(themes.consume_default_override(forced, path))
+  local consumed = themes.load_config(path)
+  eq(consumed.force_default_theme, false, "default-theme override resets after a safe boot")
+  eq(consumed.enabled, true, "consuming the override preserves theme enablement")
+  eq(consumed.active, "Fixture", "consuming the override preserves the selected theme")
+  os.remove(path)
+end
 eq(#engine.DEFAULT_PATCHES, 14, "complete default table")
 eq(assert(b64.decode(b64.encode("theme\0bytes"))), "theme\0bytes", "base64 round trip")
 eq(json.encode(themes.list("/tmp/lumen-themes-path-that-does-not-exist")), "[]", "empty theme list is JSON array")

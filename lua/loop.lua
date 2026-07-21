@@ -26,6 +26,7 @@ function loop.run(opts)
     target_origins = opts.target_origins,
     assets = (not opts.channels) and opts.build_assets and opts.build_assets() or nil,
     registry = opts.registry,
+    on_ui_ready = opts.on_ui_ready,
   })
   -- Let the caller wire injector-dependent callbacks (e.g. the theme apply
   -- callback that queues a channel rebuild + RestartJSContext on a live change).
