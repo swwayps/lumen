@@ -616,6 +616,22 @@ do
       and not injector.recovery_allows_event(true, "Runtime.bindingCalled")
       and injector.recovery_allows_event(false, "Page.frameNavigated"),
     "recovery-only connections cannot bind or inject before history approval")
+  assert_true(injector.recovery_navigation_needs_reroute(true, {
+        url = "https://store.steampowered.com/",
+      })
+      and injector.recovery_navigation_needs_reroute(true, {
+        url = "https://store.steampowered.com/marketingmessages/list/",
+      })
+      and not injector.recovery_navigation_needs_reroute(true, {
+        url = "data:text/html,<body></body>",
+      })
+      and not injector.recovery_navigation_needs_reroute(true, {
+        url = "https://store.steampowered.com/", parentId = "child",
+      })
+      and not injector.recovery_navigation_needs_reroute(false, {
+        url = "https://store.steampowered.com/",
+      }),
+    "a reused recovery target is rediscovered under its final page channel")
   assert_true(injector.recovery_fetch_error_needs_retry(true, nil)
       and injector.recovery_fetch_error_needs_retry(false,
         "https://store.steampowered.com/")
