@@ -24,6 +24,13 @@ do
     "main branch keeps theme infrastructure out of boot")
   assert_true(not source:find('require("themepreload")', 1, true),
     "main branch keeps theme preload out of boot")
+  local offers_pos = source:find(
+    'store.steampowered.com/marketingmessages/list', 1, true)
+  local store_pos = source:find(
+    '{ urls = { "store.steampowered.com", "steamcommunity.com" }', 1, true)
+  assert_true(offers_pos and store_pos and offers_pos < store_pos
+      and source:find("__lumenOffersUnlock", 1, true),
+    "authenticated offers use an isolated channel before the LuaTools webview channel")
 end
 
 do
