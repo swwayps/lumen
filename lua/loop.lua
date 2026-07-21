@@ -37,10 +37,11 @@ function loop.run(opts)
   local dc_tick = deskcover.new_tick({ interval = CHECK_EVERY })
   while true do
     local fds = inj:fds()
+    local wait_timeout = inj:needs_fast_tick() and 0.01 or 1
     if #fds > 0 then
-      socket.select(fds, nil, 1)
+      socket.select(fds, nil, wait_timeout)
     else
-      socket.sleep(1)   -- nothing attached yet; idle before re-discovering
+      socket.sleep(wait_timeout) -- nothing attached yet; idle before re-discovering
     end
     local now = os.time()
     if now >= next_check then

@@ -38,6 +38,9 @@ do
   local injector_pos = source:find("inj:tick()", 1, true)
   assert_true(lifecycle_pos and injector_pos and lifecycle_pos < injector_pos,
     "Steam return refresh runs before injector gateway synchronization")
+  assert_true(source:find("inj:needs_fast_tick()", 1, true)
+      and source:find("0.01", 1, true),
+    "loop polls quickly only while an asynchronous browser request is pending")
 end
 
 local SAMPLE = {
@@ -250,20 +253,38 @@ do
 end
 
 -- 9. Public Store/Community fallback is post-login, accepts only the exact
---    HTTPS hosts, strips credentials, and rejects unsafe/non-HTML responses.
+--    HTTPS hosts, runs on each page connection (never browser-wide), strips
+--    credentials, and rejects unsafe/non-HTML responses.
 do
-  local channels = {{ assets = { anonymous_web = true } }}
-  assert_true(injector.anonymous_gateway_config(channels, false) == nil,
-    "public gateway does not attach during Steam cold boot")
-  local gateway = injector.anonymous_gateway_config(channels, true)
-  assert_true(gateway and gateway.anonymous_web == true,
-    "public gateway attaches after Steam UI startup")
-
-  local patterns = injector.anonymous_fetch_patterns(gateway)
+  assert_true(type(injector.page_fetch_patterns) == "function",
+    "injector exposes page-scoped Fetch routing")
+  local patterns = injector.page_fetch_patterns({ anonymous_web = true })
   assert_true(#patterns == 2
       and patterns[1].resourceType == "Document"
       and patterns[2].resourceType == "Document",
-    "public gateway intercepts only Store and Community documents")
+    "page connection intercepts only Store and Community documents")
+  assert_true(injector.page_recovery_url(
+      "https://store.steampowered.com/?snr=client")
+      == "https://store.steampowered.com/?snr=client"
+      and injector.page_recovery_url("data:text/html,error") == nil
+      and injector.page_recovery_url("https://example.com/") == nil,
+    "page recovery navigates only to the original allowlisted HTTPS document")
+
+  local f = assert(io.open("lua/injector.lua", "r"))
+  local source = f:read("*a")
+  f:close()
+  assert_true(not source:find("Target.setAutoAttach", 1, true),
+    "parental fallback never attaches a debugger to the whole CEF browser")
+  assert_true(source:find("function Conn:_start_anonymous_request", 1, true)
+      and source:find('m.method == "Fetch.requestPaused"', 1, true),
+    "page connection owns the asynchronous public document fallback")
+
+  local state = injector.new({ channels = {} })
+  assert_true(state:needs_fast_tick() == false,
+    "injector stays on the idle cadence without pending browser requests")
+  state.conns.example = { requests = { document = {} } }
+  assert_true(state:needs_fast_tick() == true,
+    "injector requests a fast cadence only during a pending browser request")
 
   assert_true(injector.anonymous_web_url("https://store.steampowered.com/app/440")
       and injector.anonymous_web_url("https://steamcommunity.com/app/440")
