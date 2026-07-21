@@ -183,11 +183,7 @@ end
 local READY_MARKERS = {
   "Supernav", "Root Menu", "store.steampowered.com",
 }
-local function ui_is_ready()
-  local body = http_get("/json")
-  if not body then return false end
-  local ok, targets = pcall(json.decode, body)
-  if not ok or type(targets) ~= "table" then return false end
+local function targets_are_ready(targets)
   for _, t in ipairs(targets) do
     local hay = (t.title or "") .. " " .. (t.url or "")
     for _, mark in ipairs(READY_MARKERS) do
@@ -267,9 +263,69 @@ function injector.page_fetch_patterns(assets)
   }
 end
 
-function injector.page_recovery_url(url)
+local function failed_document_url(url)
+  url = tostring(url or "")
+  return url:find("data:text/html", 1, true) == 1
+    or url:find("http://error/", 1, true) == 1
+end
+
+function injector.page_recovery_url(url, entries, current_index)
   if injector.anonymous_web_url(url) then return url end
+  local history = type(entries) == "table" and entries or {}
+  local index = tonumber(current_index)
+  if index and index >= 1 and index % 1 == 0 then
+    local current = history[index + 1]
+    local previous = history[index]
+    if current and failed_document_url(current.url)
+        and previous and injector.anonymous_web_url(previous.url) then
+      return previous.url
+    end
+  end
   return nil
+end
+
+function injector.recovery_allows_event(recovery_only, method)
+  return recovery_only ~= true or method == "Fetch.requestPaused"
+end
+
+function injector.recovery_fetch_error_needs_retry(recovery_only, recovery_url)
+  return recovery_only == true or recovery_url ~= nil
+end
+
+function injector.recovery_candidate(target)
+  if type(target) ~= "table" or target.type ~= "page"
+      or not target.webSocketDebuggerUrl then return false end
+  local url, title = tostring(target.url or ""), tostring(target.title or "")
+  local failed_url = failed_document_url(url)
+  local failed_title = title == "Error"
+    or title:find("data:text/html", 1, true) == 1
+  return failed_url and failed_title
+end
+
+function injector.route_targets_with_recovery(targets, channels)
+  local routed = cdp.route_targets(targets, channels)
+  local matched, recovery_assets = {}, nil
+  for _, route in ipairs(routed) do
+    matched[route.target.webSocketDebuggerUrl] = true
+  end
+  for _, channel in ipairs(channels or {}) do
+    if type(channel.assets) == "table"
+        and channel.assets.anonymous_web == true then
+      recovery_assets = channel.assets
+      break
+    end
+  end
+  if recovery_assets then
+    for _, target in ipairs(targets or {}) do
+      if not matched[target.webSocketDebuggerUrl]
+          and injector.recovery_candidate(target) then
+        routed[#routed + 1] = {
+          target = target, assets = recovery_assets, recovery = true,
+        }
+      end
+    end
+  end
+  return routed
 end
 
 function injector.anonymous_response_plan(response)
@@ -310,7 +366,7 @@ end
 local Conn = {}
 Conn.__index = Conn
 
-local function conn_new(target, assets, registry, manager)
+local function conn_new(target, assets, registry, manager, recovery)
   return setmetatable({
     title = target.title,
     url = target.url or "",
@@ -318,6 +374,7 @@ local function conn_new(target, assets, registry, manager)
     assets = assets,
     registry = registry,
     manager = manager,      -- the State, for control relays (view hide/show)
+    recovery_only = recovery == true,
     sock = nil,
     session = nil,
     buf = "",
@@ -327,6 +384,9 @@ local function conn_new(target, assets, registry, manager)
     fetch_enabled = false,
     anonymous_reloaded = false,
     requests = {},
+    history_probe_id = nil,
+    recovery_url = nil,
+    recovery_failed = false,
   }, Conn)
 end
 
@@ -423,6 +483,20 @@ function Conn:_poll_anonymous()
   end
 end
 
+function Conn:_activate_recovery(url)
+  if not url or not self.recovery_only then return end
+  self.recovery_only = false
+  self.recovery_url = url
+  self.url = url
+  send_cmd(self.sock, self.session, "Runtime.enable")
+  send_cmd(self.sock, self.session, "Runtime.addBinding", { name = BINDING })
+  self:_probe_ready()
+  if self.fetch_enabled and not self.anonymous_reloaded then
+    self.anonymous_reloaded = true
+    send_cmd(self.sock, self.session, "Page.navigate", { url = url })
+  end
+end
+
 function Conn:connect()
   local path = ws_path(self.ws_url)
   if not path then return false end
@@ -434,6 +508,14 @@ function Conn:connect()
   self.session = cdp.new_session()
   self.buf = ""
   self.injected = false
+  if self.recovery_only then
+    send_cmd(c, self.session, "Page.enable")
+    self:_enable_fetch()
+    self.history_probe_id = self.session._id + 1
+    send_cmd(c, self.session, "Page.getNavigationHistory")
+    log("attached recovery probe: " .. self.title)
+    return true
+  end
   send_cmd(c, self.session, "Runtime.enable")
   send_cmd(c, self.session, "Page.enable")
   self:_enable_fetch()
@@ -572,10 +654,25 @@ function Conn:drain()
     elseif opcode == 0x1 then
       local m = cdp.parse_message(frame)
       if (m.kind == "result" or m.kind == "error")
+          and self.history_probe_id and m.id == self.history_probe_id then
+        self.history_probe_id = nil
+        if m.kind == "error" then
+          self.recovery_failed = true
+        else
+          self:_activate_recovery(injector.page_recovery_url(self.url,
+            m.result and m.result.entries,
+            m.result and m.result.currentIndex))
+        end
+      elseif (m.kind == "result" or m.kind == "error")
           and self.fetch_enable_id and m.id == self.fetch_enable_id then
         self.fetch_enable_id = nil
         self.fetch_enabled = m.kind == "result"
-        local recovery_url = injector.page_recovery_url(self.url)
+        if m.kind == "error" and injector.recovery_fetch_error_needs_retry(
+            self.recovery_only, self.recovery_url) then
+          self.recovery_failed = true
+        end
+        local recovery_url = self.recovery_url
+          or injector.page_recovery_url(self.url)
         if self.fetch_enabled and not self.anonymous_reloaded
             and recovery_url then
           self.anonymous_reloaded = true
@@ -590,7 +687,10 @@ function Conn:drain()
         end
         -- If "loading"/"interactive", wait for Page.loadEventFired below.
       elseif m.kind == "event" then
-        if m.method == "Fetch.requestPaused" then
+        if not injector.recovery_allows_event(self.recovery_only, m.method) then
+          -- A failed document remains inert until its immediate history entry
+          -- proves it came from Store/Community.
+        elseif m.method == "Fetch.requestPaused" then
           local params = m.params or {}
           local url = params.request and params.request.url or ""
           if self.assets and self.assets.anonymous_web == true
@@ -620,6 +720,7 @@ function Conn:drain()
       end
     end
   end
+  if self.recovery_failed then return false end
   self:_poll_anonymous()
   return true
 end
@@ -655,7 +756,36 @@ function injector.new(opts)
     backoff = 1,
     next_attempt = 0,
     ui_ready = false,    -- latched once Steam's main UI is up (post-login/paint)
+    shared_ws_url = nil,
   }, State)
+end
+
+-- Steam restarts replace the entire webhelper generation while Lumen remains
+-- alive inside its grace window. Reset readiness before touching any target in
+-- the new generation so cold-boot CDP domains are never enabled prematurely.
+function State:observe_shared_generation(targets)
+  local current
+  for _, target in ipairs(targets or {}) do
+    if target.title == "SharedJSContext" and target.webSocketDebuggerUrl then
+      current = target.webSocketDebuggerUrl
+      break
+    end
+  end
+  if not current then return false end
+  if not self.shared_ws_url then
+    self.shared_ws_url = current
+    return false
+  end
+  if self.shared_ws_url == current then return false end
+  for _, conn in pairs(self.conns) do
+    if conn.close then conn:close() end
+  end
+  self.conns = {}
+  self.shared_ws_url = current
+  self.ui_ready = false
+  self.backoff = 1
+  self.next_attempt = 0
+  return true
 end
 
 -- fds() -> array of currently-open CDP sockets for select().
@@ -681,18 +811,6 @@ end
 function State:_discover()
   local now = os.time()
   if now < self.next_attempt then return end
-  -- Hold off ALL attaching until Steam's main UI is up. Attaching to
-  -- SharedJSContext during the login/init phase stalls the client boot
-  -- (Phase 4 finding). Latch once ready so later navigations aren't gated.
-  if not self.ui_ready then
-    if ui_is_ready() then
-      self.ui_ready = true
-      log("Steam UI ready -> attaching")
-    else
-      self.next_attempt = now + 2   -- poll readiness every 2s, no backoff
-      return
-    end
-  end
   local targets, err = list_all_targets()
   if not targets then
     self.next_attempt = now + self.backoff
@@ -701,13 +819,28 @@ function State:_discover()
   end
   self.backoff = 1
   self.next_attempt = 0
+  if self:observe_shared_generation(targets) then
+    log("new SharedJSContext generation -> waiting for Steam UI readiness")
+  end
+  -- Hold off ALL attaching until Steam's main UI is up. Attaching to
+  -- SharedJSContext during the login/init phase stalls the client boot
+  -- (Phase 4 finding). Latch once ready so later navigations aren't gated.
+  if not self.ui_ready then
+    if targets_are_ready(targets) then
+      self.ui_ready = true
+      log("Steam UI ready -> attaching")
+    else
+      self.next_attempt = now + 2   -- poll readiness every 2s, no backoff
+      return
+    end
+  end
   -- Route each target to its channel's assets (store web views -> luatools.js;
   -- SharedJSContext -> lumen-menu bundle). First matching channel wins.
-  local routed = cdp.route_targets(targets, self.channels)
+  local routed = injector.route_targets_with_recovery(targets, self.channels)
   for _, r in ipairs(routed) do
     local t = r.target
     if not self.conns[t.webSocketDebuggerUrl] then
-      local conn = conn_new(t, r.assets, self.registry, self)
+      local conn = conn_new(t, r.assets, self.registry, self, r.recovery)
       if conn:connect() then self.conns[t.webSocketDebuggerUrl] = conn end
     end
   end

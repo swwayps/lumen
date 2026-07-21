@@ -266,9 +266,39 @@ do
   assert_true(injector.page_recovery_url(
       "https://store.steampowered.com/?snr=client")
       == "https://store.steampowered.com/?snr=client"
-      and injector.page_recovery_url("data:text/html,error") == nil
+      and injector.page_recovery_url("data:text/html,error", {
+        { url = "https://store.steampowered.com/app/440" },
+        { url = "data:text/html,error" },
+      }, 1) == "https://store.steampowered.com/app/440"
+      and injector.page_recovery_url("data:text/html,error", {
+        { url = "https://example.com/" },
+        { url = "data:text/html,error" },
+      }, 1) == nil
       and injector.page_recovery_url("https://example.com/") == nil,
-    "page recovery navigates only to the original allowlisted HTTPS document")
+    "page recovery uses only an allowlisted original or history document")
+
+  local recovery_assets = { anonymous_web = true }
+  local recovery_routes = injector.route_targets_with_recovery({
+    { title = "Error", type = "page", url = "data:text/html,error",
+      webSocketDebuggerUrl = "ws://localhost/devtools/page/recovery" },
+    { title = "Unrelated", type = "page", url = "data:text/html,other",
+      webSocketDebuggerUrl = "ws://localhost/devtools/page/unrelated" },
+  }, {{ urls = { "store.steampowered.com" }, assets = recovery_assets }})
+  assert_true(#recovery_routes == 1
+      and recovery_routes[1].recovery == true
+      and recovery_routes[1].assets == recovery_assets,
+    "only a recognizable failed webview receives history-based recovery")
+  assert_true(injector.recovery_allows_event(true, "Fetch.requestPaused")
+      and not injector.recovery_allows_event(true, "Page.loadEventFired")
+      and not injector.recovery_allows_event(true, "Page.frameNavigated")
+      and not injector.recovery_allows_event(true, "Runtime.bindingCalled")
+      and injector.recovery_allows_event(false, "Page.frameNavigated"),
+    "recovery-only connections cannot bind or inject before history approval")
+  assert_true(injector.recovery_fetch_error_needs_retry(true, nil)
+      and injector.recovery_fetch_error_needs_retry(false,
+        "https://store.steampowered.com/")
+      and not injector.recovery_fetch_error_needs_retry(false, nil),
+    "Fetch failure retries both before and after history approval")
 
   local f = assert(io.open("lua/injector.lua", "r"))
   local source = f:read("*a")
@@ -285,6 +315,17 @@ do
   state.conns.example = { requests = { document = {} } }
   assert_true(state:needs_fast_tick() == true,
     "injector requests a fast cadence only during a pending browser request")
+
+  local old_closed = false
+  state.ui_ready = true
+  state.shared_ws_url = "ws://localhost/devtools/page/old-shared"
+  state.conns.example = { close = function() old_closed = true end }
+  assert_true(state:observe_shared_generation({{
+      title = "SharedJSContext", type = "page",
+      webSocketDebuggerUrl = "ws://localhost/devtools/page/new-shared",
+    }}) == true and old_closed and state.ui_ready == false
+      and next(state.conns) == nil,
+    "new webhelper generation resets readiness before attaching after restart")
 
   assert_true(injector.anonymous_web_url("https://store.steampowered.com/app/440")
       and injector.anonymous_web_url("https://steamcommunity.com/app/440")

@@ -47,11 +47,13 @@ repeat
   local_done, local_response, local_err = core.poll(local_request)
   if not client then
     client = server:accept()
-    if client then client:settimeout(0) end
+    if client then client:settimeout(1) end
   end
   if client and not replied then
-    client:send("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n" ..
-      "Content-Type: text/plain\r\nConnection: close\r\n\r\nhello async")
+    local response_bytes = "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n" ..
+      "Content-Type: text/plain\r\nConnection: close\r\n\r\nhello async"
+    local sent = assert(client:send(response_bytes))
+    ok(sent == #response_bytes, "local fixture sends its complete response")
     client:close()
     replied = true
   end
@@ -64,5 +66,18 @@ ok(local_response and local_response.status == 200,
   "local async response preserves its status")
 ok(local_response and local_response.body == "hello async",
   "local async response preserves its body storage")
+
+do
+  local abandoned = assert(core.start({
+    url = "https://127.0.0.1:1/",
+    method = "GET",
+    timeout = 30,
+    https_only = true,
+  }))
+  abandoned = nil
+  collectgarbage("collect")
+  collectgarbage("collect")
+  ok(true, "garbage collection cancels an abandoned async request safely")
+end
 
 print("test_http_async: ALL PASS")
