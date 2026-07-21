@@ -218,9 +218,17 @@ local function send_cmd(c, session, method, params, child_session)
 end
 
 function injector.anonymous_web_url(url)
-  local host = tostring(url or ""):match("^https://([^/%?#]+)")
+  local host, path = tostring(url or ""):match("^https://([^/%?#]+)([^?#]*)")
   if not host then return false end
   host = host:lower()
+  -- Steam's Special Offers popup is a separate authenticated document. Making
+  -- it anonymous reloads a briefly-correct news list into the client's
+  -- "There are no news items" error page.
+  if host == "store.steampowered.com"
+      and (path == "/marketingmessages/list"
+        or path:find("/marketingmessages/list/", 1, true) == 1) then
+    return false
+  end
   return host == "store.steampowered.com" or host == "steamcommunity.com"
 end
 

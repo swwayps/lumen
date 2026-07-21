@@ -329,10 +329,12 @@ do
 
   assert_true(injector.anonymous_web_url("https://store.steampowered.com/app/440")
       and injector.anonymous_web_url("https://steamcommunity.com/app/440")
+      and not injector.anonymous_web_url(
+        "https://store.steampowered.com/marketingmessages/list/?include_seen=1")
       and not injector.anonymous_web_url("https://store.steampowered.com.evil.test/")
       and not injector.anonymous_web_url("http://store.steampowered.com/")
       and not injector.anonymous_web_url("https://help.steampowered.com/"),
-    "public gateway accepts only the two exact HTTPS hosts")
+    "public gateway accepts the two exact HTTPS hosts except authenticated offers")
 
   local public_headers = injector.anonymous_request_headers({
     ["User-Agent"] = "Valve Steam Client",
