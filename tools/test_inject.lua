@@ -582,10 +582,11 @@ do
       and injector.page_recovery_url("data:text/html,error", {
         {url="https://store.steampowered.com/app/440"},
         {url="data:text/html,error"},
-      }) == "https://store.steampowered.com/app/440"
+      }, 1) == "https://store.steampowered.com/app/440"
       and injector.page_recovery_url("data:text/html,error", {
         {url="https://example.com/"},
-      }) == nil,
+        {url="data:text/html,error"},
+      }, 1) == nil,
     "page recovery uses only an allowlisted original or history document")
 
   local recovery_assets = {anonymous_web=true}
@@ -599,6 +600,17 @@ do
       and recovery_routes[1].recovery == true
       and recovery_routes[1].assets == recovery_assets,
     "only a recognizable failed webview receives history-based recovery")
+  assert_true(injector.recovery_allows_event(true, "Fetch.requestPaused")
+      and not injector.recovery_allows_event(true, "Page.loadEventFired")
+      and not injector.recovery_allows_event(true, "Page.frameNavigated")
+      and not injector.recovery_allows_event(true, "Runtime.bindingCalled")
+      and injector.recovery_allows_event(false, "Page.frameNavigated"),
+    "recovery-only connections cannot bind or inject before history approval")
+  assert_true(injector.recovery_fetch_error_needs_retry(true, nil)
+      and injector.recovery_fetch_error_needs_retry(false,
+        "https://store.steampowered.com/")
+      and not injector.recovery_fetch_error_needs_retry(false, nil),
+    "Fetch failure retries both before and after history approval")
 
   assert_true(injector.theme_gateway_config({{assets=anonymous_assets}}, true) == nil,
     "parental unlock never enables the browser-wide theme gateway")

@@ -361,21 +361,40 @@ function injector.page_fetch_patterns(assets, root_owns_virtual)
   return patterns
 end
 
-function injector.page_recovery_url(url, entries)
+local function failed_document_url(url)
+  url = tostring(url or "")
+  return url:find("data:text/html", 1, true) == 1
+    or url:find("http://error/", 1, true) == 1
+end
+
+function injector.page_recovery_url(url, entries, current_index)
   if injector.anonymous_web_url(url) then return url end
-  for i = #(type(entries) == "table" and entries or {}), 1, -1 do
-    local candidate = entries[i] and entries[i].url
-    if injector.anonymous_web_url(candidate) then return candidate end
+  local history = type(entries) == "table" and entries or {}
+  local index = tonumber(current_index)
+  if index and index >= 1 and index % 1 == 0 then
+    local current = history[index + 1]
+    local previous = history[index]
+    if current and failed_document_url(current.url)
+        and previous and injector.anonymous_web_url(previous.url) then
+      return previous.url
+    end
   end
   return nil
+end
+
+function injector.recovery_allows_event(recovery_only, method)
+  return recovery_only ~= true or method == "Fetch.requestPaused"
+end
+
+function injector.recovery_fetch_error_needs_retry(recovery_only, recovery_url)
+  return recovery_only == true or recovery_url ~= nil
 end
 
 function injector.recovery_candidate(target)
   if type(target) ~= "table" or target.type ~= "page"
       or not target.webSocketDebuggerUrl then return false end
   local url, title = tostring(target.url or ""), tostring(target.title or "")
-  local failed_url = url:find("data:text/html", 1, true) == 1
-    or url:find("http://error/", 1, true) == 1
+  local failed_url = failed_document_url(url)
   local failed_title = title == "Error"
     or title:find("data:text/html", 1, true) == 1
   return failed_url and failed_title
@@ -525,6 +544,7 @@ local function conn_new(target, assets, registry, manager, browser_target, early
     requests = {},
     history_probe_id = nil,
     recovery_url = nil,
+    recovery_failed = false,
   }, Conn)
 end
 
@@ -857,12 +877,21 @@ function Conn:drain()
       if (m.kind == "result" or m.kind == "error")
           and self.history_probe_id and m.id == self.history_probe_id then
         self.history_probe_id = nil
-        local entries = m.kind == "result" and m.result and m.result.entries
-        self:_activate_recovery(injector.page_recovery_url(self.url, entries))
+        if m.kind == "error" then
+          self.recovery_failed = true
+        else
+          self:_activate_recovery(injector.page_recovery_url(self.url,
+            m.result and m.result.entries,
+            m.result and m.result.currentIndex))
+        end
       elseif (m.kind == "result" or m.kind == "error")
           and self.fetch_enable_id and m.id == self.fetch_enable_id then
         self.fetch_enable_id = nil
         self.fetch_enabled = m.kind == "result"
+        if m.kind == "error" and injector.recovery_fetch_error_needs_retry(
+            self.recovery_only, self.recovery_url) then
+          self.recovery_failed = true
+        end
         local recovery_url = self.recovery_url
           or injector.page_recovery_url(self.url)
         if self.fetch_enabled and not self.anonymous_reloaded
@@ -888,7 +917,10 @@ function Conn:drain()
           self.manager:set_view_visibility(self.ws_url, visible)
         end
       elseif m.kind == "event" then
-        if m.method == "Fetch.requestPaused" then
+        if not injector.recovery_allows_event(self.recovery_only, m.method) then
+          -- Wait for history approval before binding or injecting this failed
+          -- document into any Steam page.
+        elseif m.method == "Fetch.requestPaused" then
           local p = m.params or {}
           local url = p.request and p.request.url or ""
           if self.assets and self.assets.anonymous_web == true
@@ -968,6 +1000,7 @@ function Conn:drain()
       end
     end
   end
+  if self.recovery_failed then return false end
   self:_poll_anonymous()
   return true
 end
