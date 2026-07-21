@@ -118,6 +118,18 @@ do
     "old generation timing gates cannot delay the new early hook")
 end
 
+-- Recovery overrides must be consumed only after Steam's main shell is ready.
+-- The injector owns that readiness signal, so it invokes the callback once
+-- when the state transitions from cold boot to the full channel set.
+do
+  local calls = 0
+  local state = injector.new({channels={}, on_ui_ready=function() calls = calls + 1 end})
+  assert_true(state:_mark_ui_ready() == true and calls == 1,
+    "UI-ready transition invokes its callback")
+  assert_true(state:_mark_ui_ready() == false and calls == 1,
+    "UI-ready callback is not repeated within one generation")
+end
+
 -- Steam replaces the renderer context of pre-created popup targets during
 -- boot. Every target-scoped CDP domain required by theme delivery must be
 -- restored before links are injected into that new context; otherwise the

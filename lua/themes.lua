@@ -13,6 +13,7 @@ local CONFIG = HOME .. "/.config/Lumen/themes.json"
 local ROOT = HOME .. "/.local/share/Lumen/themes"
 local DEFAULT = {
   enabled = false, allow_javascript = true, active = nil,
+  force_default_theme = false,
   preferences = {}, origins = {}, recovery = { pending = false, failures = 0 },
 }
 
@@ -108,6 +109,7 @@ local function merge_defaults(cfg)
   if type(out.recovery) ~= "table" then out.recovery = clone(DEFAULT.recovery) end
   if type(out.enabled) ~= "boolean" then out.enabled = false end
   if type(out.allow_javascript) ~= "boolean" then out.allow_javascript = true end
+  if type(out.force_default_theme) ~= "boolean" then out.force_default_theme = false end
   return out
 end
 
@@ -115,6 +117,14 @@ function themes.config_path() return CONFIG end
 function themes.root_path() return ROOT end
 function themes.default_config() return clone(DEFAULT) end
 function themes.set_apply_callback(fn) apply_callback = fn end
+
+function themes.active_key(cfg)
+  if type(cfg) ~= "table" or cfg.force_default_theme == true
+      or cfg.enabled ~= true or type(cfg.active) ~= "string" then
+    return nil
+  end
+  return cfg.active
+end
 
 function themes.load_config(path)
   local body = read_file(path or CONFIG)
@@ -133,6 +143,17 @@ function themes.save_config(cfg, path)
   local moved, merr = os.rename(tmp, path)
   if not moved then os.remove(tmp); return nil, merr end
   return true
+end
+
+function themes.consume_default_override(cfg, path)
+  if type(cfg) ~= "table" or cfg.force_default_theme ~= true then
+    return true, false
+  end
+  local next_cfg = clone(cfg)
+  next_cfg.force_default_theme = false
+  local ok, err = themes.save_config(next_cfg, path)
+  if not ok then return nil, err end
+  return true, true
 end
 
 local function safe_name(s)

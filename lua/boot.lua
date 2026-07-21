@@ -340,10 +340,7 @@ local THEME_CLEANUP_JS = [[(function(){
 
 local function build_channels(theme_config, clean_previous)
   local configured = theme_config or themes.load_config()
-  local theme_key = ""
-  if configured and configured.enabled == true and type(configured.active) == "string" then
-    theme_key = configured.active
-  end
+  local theme_key = themes.active_key(configured) or ""
   webview_assets = build_webview_assets(theme_key)
   webview_assets.anonymous_web=parental_unlock_enabled
   local out = {
@@ -410,13 +407,25 @@ local function build_channels(theme_config, clean_previous)
   end
   return out
 end
-local channels = build_channels()
+local initial_theme_config = themes.load_config()
+local consume_default_override = initial_theme_config.force_default_theme == true
+local channels = build_channels(initial_theme_config)
 loop.run({
   registry = registry,
   channels = channels,
   on_steam_returned = refresh_parental_unlock,
   on_injector = function(inj)
     themes.set_apply_callback(function(cfg) inj:queue_channels(build_channels(cfg, true)) end)
+  end,
+  on_ui_ready = function()
+    if not consume_default_override then return end
+    local ok, err = themes.consume_default_override(initial_theme_config)
+    if ok then
+      consume_default_override = false
+    else
+      io.stderr:write("[lumen] failed to reset default-theme override: "
+        .. tostring(err) .. "\n")
+    end
   end,
   on_exit = function()
     if os.getenv("LUMEN_THEME_PRELOAD_ACTIVE") == "1" then

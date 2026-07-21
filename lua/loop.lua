@@ -24,6 +24,7 @@ function loop.run(opts)
     target_urls = opts.target_urls,
     assets = (not opts.channels) and opts.build_assets and opts.build_assets() or nil,
     registry = opts.registry,
+    on_ui_ready = opts.on_ui_ready,
   })
   if type(opts.on_injector) == "function" then opts.on_injector(inj) end
   -- Exit when Steam is genuinely closed (don't linger as a background process),

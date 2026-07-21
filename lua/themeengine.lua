@@ -235,7 +235,7 @@ local function palette_seed(manifest, dir, prefs)
 end
 
 function engine.build(config, root)
-  if not config or not config.enabled or type(config.active) ~= "string" then return nil end
+  if not themes.active_key(config) then return nil end
   root = root or themes.root_path()
   local dir = root .. "/" .. config.active
   local origin = type(config.origins) == "table" and config.origins[config.active] or nil

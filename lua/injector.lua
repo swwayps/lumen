@@ -1511,8 +1511,19 @@ function injector.new(opts)
     backoff = 1,
     next_attempt = 0,
     ui_ready = false,    -- latched once Steam's main UI is up (post-login/paint)
+    on_ui_ready = opts.on_ui_ready,
     visible_views = {},  -- browser ws_url -> true, reported by visibilitychange
   }, State)
+end
+
+function State:_mark_ui_ready()
+  if self.ui_ready then return false end
+  self.ui_ready = true
+  if type(self.on_ui_ready) == "function" then
+    local ok, err = pcall(self.on_ui_ready)
+    if not ok then log("UI ready callback failed: " .. tostring(err)) end
+  end
+  return true
 end
 
 -- Track the steamwebhelper generation through SharedJSContext's websocket
@@ -1729,7 +1740,7 @@ function State:_discover()
       return
     end
     self.early_grace_deadline = nil
-    self.ui_ready = true
+    self:_mark_ui_ready()
     log("Steam UI ready -> attaching full channel set")
   end
   -- Route each target to its channel's assets (store web views -> luatools.js;
