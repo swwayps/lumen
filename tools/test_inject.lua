@@ -206,9 +206,11 @@ do
   assert_true(type(injector.anonymous_web_url) == "function"
       and injector.anonymous_web_url("https://store.steampowered.com/app/440")
       and injector.anonymous_web_url("https://steamcommunity.com/app/440")
+      and not injector.anonymous_web_url(
+        "https://store.steampowered.com/marketingmessages/list/?include_seen=1")
       and not injector.anonymous_web_url("https://store.steampowered.com.evil.test/")
       and not injector.anonymous_web_url("https://help.steampowered.com/"),
-    "anonymous proxy accepts only the two exact HTTPS hosts")
+    "anonymous proxy preserves authenticated offers on the exact HTTPS hosts")
   assert_true(type(injector.anonymous_request_headers) == "function",
     "injector exposes credential-free public request headers")
   local public_headers = injector.anonymous_request_headers({
