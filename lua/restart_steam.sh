@@ -72,32 +72,33 @@ if [ -n "${SLS_RESTART_DRYRUN:-}" ]; then
   exit 0
 fi
 
-if command -v steam >/dev/null 2>&1; then
-  steam -shutdown >/dev/null 2>&1 || true
-fi
+# Steam's normal exit path performs a user-initiated account logoff. Relaunching
+# from the same desktop session then leaves this client at SharedJSContext and
+# it never calls LogOn(). Flush pending writes first, terminate only the client
+# process, then let its wrapper and children reap. Steam's crash recovery keeps
+# the persisted login token and restores the authenticated UI.
+sync
+pkill -KILL -x steam >/dev/null 2>&1 || true
 
-# Allow a clean shutdown, then escalate only if Steam is still alive.
-for _ in $(seq 1 50); do
+# This polling exists only inside an explicit restart; it is not part of
+# Lumen's steady-state loop.
+for _ in $(seq 1 75); do
   if ! pgrep -x steam >/dev/null 2>&1 \
-      && ! pgrep -f 'steamwebhelper' >/dev/null 2>&1; then
+      && ! pgrep -f 'steamwebhelper' >/dev/null 2>&1 \
+      && ! pgrep -f '/steam.sh([[:space:]]|$)' >/dev/null 2>&1 \
+      && ! pgrep -f 'srt-logger .*console-linux.txt' >/dev/null 2>&1; then
     break
   fi
   sleep 0.2
 done
 
-if pgrep -x steam >/dev/null 2>&1 \
-    || pgrep -f 'steamwebhelper' >/dev/null 2>&1; then
-  pkill -TERM -x steam >/dev/null 2>&1 || true
-  pkill -TERM -f 'steamwebhelper' >/dev/null 2>&1 || true
-  sleep 2
-fi
-if pgrep -x steam >/dev/null 2>&1 \
-    || pgrep -f 'steamwebhelper' >/dev/null 2>&1; then
-  pkill -KILL -x steam >/dev/null 2>&1 || true
-  pkill -KILL -f 'steamwebhelper' >/dev/null 2>&1 || true
-  sleep 1
-fi
+# Clean up only residual children from the client that is already gone.
+pkill -KILL -f 'steamwebhelper' >/dev/null 2>&1 || true
+pkill -KILL -f 'srt-logger .*console-linux.txt' >/dev/null 2>&1 || true
 
-sleep 1
-setsid nohup "$LAUNCHER" 9>&- </dev/null >/dev/null 2>&1 &
+# A short quiescence period keeps the complete gap comfortably inside Lumen's
+# 45-second grace window while avoiding stale Steam IPC/session state.
+sleep 12
+cd "$HOME" || exit 1
+nohup "$LAUNCHER" 9>&- </dev/null >/dev/null 2>&1 &
 exit 0

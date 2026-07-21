@@ -88,8 +88,44 @@ grep -q "flock -n" "$RESTART_SH" || {
   echo "FAIL: restart helper has no cross-process lock" >&2
   exit 1
 }
-grep -q 'setsid nohup "$LAUNCHER" 9>&-' "$RESTART_SH" || {
+grep -q '^nohup "$LAUNCHER" 9>&-' "$RESTART_SH" || {
   echo "FAIL: launched Steam inherits the restart lock descriptor" >&2
+  exit 1
+}
+if grep -q 'setsid nohup "$LAUNCHER"' "$RESTART_SH"; then
+  echo "FAIL: desktop Steam launcher is moved into a second session" >&2
+  exit 1
+fi
+if grep -Eq 'steam -shutdown|steam\.pipe|pkill -TERM -x steam' "$RESTART_SH"; then
+  echo "FAIL: restart helper uses Steam's logout-producing shutdown path" >&2
+  exit 1
+fi
+grep -q '^sync$' "$RESTART_SH" || {
+  echo "FAIL: restart helper does not flush pending filesystem writes" >&2
+  exit 1
+}
+grep -q 'pkill -KILL -x steam' "$RESTART_SH" || {
+  echo "FAIL: restart helper does not preserve the authenticated session" >&2
+  exit 1
+}
+grep -q 'for _ in $(seq 1 75)' "$RESTART_SH" || {
+  echo "FAIL: restart helper does not wait for Steam children to exit" >&2
+  exit 1
+}
+grep -Fq "pgrep -f '/steam.sh([[:space:]]|$)'" "$RESTART_SH" || {
+  echo "FAIL: helper relaunches before the previous Steam wrapper exits" >&2
+  exit 1
+}
+grep -Fq "pgrep -f 'srt-logger .*console-linux.txt'" "$RESTART_SH" || {
+  echo "FAIL: helper relaunches before the previous Steam logger exits" >&2
+  exit 1
+}
+grep -q '^sleep 12$' "$RESTART_SH" || {
+  echo "FAIL: account logoff state is not given time to settle before relaunch" >&2
+  exit 1
+}
+grep -q '^cd "$HOME" || exit 1$' "$RESTART_SH" || {
+  echo "FAIL: Steam relaunch inherits Lumen's working directory" >&2
   exit 1
 }
 
