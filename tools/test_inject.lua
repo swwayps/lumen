@@ -51,6 +51,13 @@ do
   assert_true(injector_source:find("pcall(http.start", 1, true)
       and injector_source:find("function Conn:_poll_anonymous()", 1, true),
     "public documents use a page-scoped polled request without blocking CDP")
+  local offers_pos = source:find(
+    'store.steampowered.com/marketingmessages/list', 1, true)
+  local store_pos = source:find(
+    '{ urls = { "store.steampowered.com", "steamcommunity.com" }', 1, true)
+  assert_true(offers_pos and store_pos and offers_pos < store_pos
+      and source:find("__lumenOffersUnlock", 1, true),
+    "authenticated offers use an isolated channel before the LuaTools webview channel")
 end
 
 -- A cold-boot theme hook must reach SharedJSContext before Steam creates its

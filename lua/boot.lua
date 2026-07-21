@@ -141,6 +141,35 @@ local slsconfig = require("slsconfig")
 local slsconfig_path = slsconfig.default_path()
 local parental_unlock_enabled = false
 local webview_assets
+local offers_assets
+
+-- Special Offers is an authenticated marketing popup, not a normal Store
+-- webview. Keep it out of the LuaTools/menu bundle and remove only Steam's
+-- parental form when the user explicitly enabled the local parental unlock.
+local SPECIAL_OFFERS_UNLOCK_JS = [[
+(function(){
+  if(window.__lumenOffersUnlock)return;
+  window.__lumenOffersUnlock=true;
+  if(location.hostname!=="store.steampowered.com"||
+      !/^\/marketingmessages\/list\/?$/.test(location.pathname))return;
+  function unlock(){
+    var root=document.getElementById("main_content");
+    if(!root)return;
+    var forms=root.querySelectorAll("form");
+    for(var i=0;i<forms.length;i++){
+      var form=forms[i], text=(form.textContent||"").replace(/\s+/g," ");
+      if(text.indexOf("Family View")!==-1&&
+          text.indexOf("Request Access")!==-1){
+        form.style.setProperty("display","none","important");
+        form.setAttribute("aria-hidden","true");
+      }
+    }
+  }
+  unlock();
+  new MutationObserver(unlock).observe(document.documentElement,
+    {childList:true,subtree:true});
+})();
+]]
 
 local function refresh_parental_unlock(values)
   values = values or slsconfig.read(slsconfig_path)
@@ -148,6 +177,10 @@ local function refresh_parental_unlock(values)
     values.DisableParentalRestrictions == true
   if webview_assets then
     webview_assets.anonymous_web = parental_unlock_enabled
+  end
+  if offers_assets then
+    offers_assets.js = parental_unlock_enabled
+      and { SPECIAL_OFFERS_UNLOCK_JS } or {}
   end
 end
 
@@ -283,6 +316,11 @@ pcall(function() require("deskcover").run("--user") end)
 -- lumen_menu.js bundle is deliberately minimal and shell-safe. The menubar
 -- button broadcasts open/close to every context so the overlay renders in
 -- whichever view is currently on top (see injector State:broadcast_overlay).
+offers_assets = {
+  css = {},
+  js = parental_unlock_enabled and { SPECIAL_OFFERS_UNLOCK_JS } or {},
+}
+
 local THEME_CLEANUP_JS = [[(function(){
   Array.from(document.querySelectorAll('[id^="lumen-theme-"]')).forEach(function(n){n.remove()});
   var c=document.getElementById('lumen-luatools-icon-compat');if(c)c.remove();
@@ -304,6 +342,8 @@ local function build_channels(theme_config, clean_previous)
   webview_assets = build_webview_assets(theme_key)
   webview_assets.anonymous_web=parental_unlock_enabled
   local out = {
+    { urls = { "store.steampowered.com/marketingmessages/list" },
+      assets = offers_assets },
     { urls = { "store.steampowered.com", "steamcommunity.com" }, browser = true,
       assets = webview_assets },
     -- Steam's browser view is exposed by recent clients as a data: tracking
