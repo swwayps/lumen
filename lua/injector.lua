@@ -296,6 +296,14 @@ function injector.recovery_allows_event(recovery_only, method)
   return recovery_only ~= true or method == "Fetch.requestPaused"
 end
 
+function injector.recovery_navigation_needs_reroute(recovery_only, frame)
+  if recovery_only ~= true or type(frame) ~= "table" or frame.parentId then
+    return false
+  end
+  local url = tostring(frame.url or "")
+  return url ~= "" and not failed_document_url(url)
+end
+
 function injector.recovery_fetch_error_needs_retry(recovery_only, recovery_url)
   return recovery_only == true or recovery_url ~= nil
 end
@@ -695,7 +703,14 @@ function Conn:drain()
         end
         -- If "loading"/"interactive", wait for Page.loadEventFired below.
       elseif m.kind == "event" then
-        if not injector.recovery_allows_event(self.recovery_only, m.method) then
+        if m.method == "Page.frameNavigated"
+            and injector.recovery_navigation_needs_reroute(
+              self.recovery_only, m.params and m.params.frame) then
+          -- Steam may reuse the failed data: target for the real Store page.
+          -- Close this probe so discovery can route the final URL to the right
+          -- assets (ordinary Store, Special Offers, or no channel at all).
+          self.recovery_failed = true
+        elseif not injector.recovery_allows_event(self.recovery_only, m.method) then
           -- A failed document remains inert until its immediate history entry
           -- proves it came from Store/Community.
         elseif m.method == "Fetch.requestPaused" then
