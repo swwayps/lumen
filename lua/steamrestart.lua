@@ -9,7 +9,7 @@ local function shell_quote(value)
 end
 
 function steamrestart.build_command(helper_path)
-  return "setsid nohup bash " .. shell_quote(helper_path)
+  return "nohup bash " .. shell_quote(helper_path)
     .. " </dev/null >/dev/null 2>&1 &"
 end
 
@@ -65,7 +65,7 @@ function steamrestart.register(registry, deps)
       })
     end
     local ok, err = steamrestart.restart(deps)
-    if ok then restart_guard_until = started_at + 15 end
+    if ok then restart_guard_until = started_at + 60 end
     local response = { success = ok == true }
     if not ok then response.error = tostring(err) end
     return json.encode(response)

@@ -14,8 +14,10 @@ assert_true(ok, "steamrestart module loads")
 -- the process tree that originated the RPC.
 do
   local command = steamrestart.build_command("/tmp/Lumen test/restart_steam.sh")
-  assert_true(command:find("setsid nohup bash", 1, true) ~= nil,
+  assert_true(command:find("nohup bash", 1, true) ~= nil,
     "restart helper is detached")
+  assert_true(command:find("setsid", 1, true) == nil,
+    "restart helper preserves the graphical session")
   assert_true(command:find("'/tmp/Lumen test/restart_steam.sh'", 1, true) ~= nil,
     "restart helper path is shell quoted")
   assert_true(command:find(">/dev/null 2>&1 &", 1, true) ~= nil,
@@ -87,10 +89,14 @@ do
       and tostring(duplicate.error):find("already", 1, true),
     "native RestartSteam rejects a concurrent restart")
   assert_true(starts == 1, "concurrent restart does not spawn another helper")
-  now = 116
+  now = 159
+  local settling = json.decode(registry.RestartSteam())
+  assert_true(settling.success == false and starts == 1,
+    "restart guard covers Steam account-session stabilization")
+  now = 160
   local later = json.decode(registry.RestartSteam())
   assert_true(later.success == true and starts == 2,
-    "restart guard expires after the in-flight window")
+    "restart guard expires after the stabilization window")
 end
 
 do
