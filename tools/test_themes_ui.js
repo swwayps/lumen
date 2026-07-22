@@ -60,6 +60,16 @@ function findByClass(root, name) {
 }
 
 (async function main() {
+  const stylesSource = fs.readFileSync("lua/menu/03-styles.js", "utf8");
+  const accessLayer = stylesSource.match(/#lumen-access-layer\{[^}]*z-index:(\d+)!important/);
+  const settingsLayer = stylesSource.match(/OVERLAY_ID \+ "\{[^}]*z-index:(\d+)!important/);
+  const modalLayer = stylesSource.match(/\.lumen-modal-back\{[^}]*z-index:(\d+)!important/);
+  if (!accessLayer || !settingsLayer || !modalLayer ||
+      !(Number(accessLayer[1]) < Number(settingsLayer[1]) &&
+        Number(settingsLayer[1]) < Number(modalLayer[1]))) {
+    throw new Error("FAIL: access, settings, and modal layers must have a protected ascending z-index order");
+  }
+
   const iconSource = fs.readFileSync("lua/menu/06-updates-helpers.js", "utf8");
   const overlaySource = fs.readFileSync("lua/menu/09-overlay.js", "utf8");
   if (!/var THEMES_SVG\s*=/.test(iconSource) ||
