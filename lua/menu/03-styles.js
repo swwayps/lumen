@@ -314,7 +314,7 @@
       "#" + BTN_ID + ".lumen-auto-fix-active .lumen-auto-fix-pill-copy{max-width:180px;margin-left:0;padding:0 9px 0 6px;opacity:1;transform:none;}",
       "@media (prefers-reduced-motion:reduce){.lumen-auto-fix-pill-copy,#" + BTN_ID + "{transition:none!important;}}",
       "#lumen-access-layer{position:fixed!important;inset:0!important;",
-      "z-index:2147483646!important;pointer-events:none!important;isolation:isolate!important;",
+      "z-index:2147483645!important;pointer-events:none!important;isolation:isolate!important;",
       "display:block!important;visibility:visible!important;opacity:1!important;",
       "transform:none!important;filter:none!important;contain:none!important;}",
       "#" + BTN_ID + ".lumen-fallback{display:flex!important;visibility:visible!important;",
@@ -331,7 +331,7 @@
       "height:16px!important;margin:auto!important;}",
       "#" + BTN_ID + ".lumen-fallback.lumen-fallback-slot{position:absolute!important;",
       "top:4px!important;left:4px!important;right:auto!important;}",
-      "#" + OVERLAY_ID + "{position:fixed;inset:0;z-index:2147483647;display:flex;",
+      "#" + OVERLAY_ID + "{position:fixed;inset:0;z-index:2147483646!important;display:flex;",
       "align-items:center;justify-content:center;background:rgba(0,0,0,.55);",
       "font-family:'Motiva Sans',Arial,Helvetica,sans-serif;}",
       // window
@@ -883,7 +883,7 @@
       "animation:lumen-rot .7s linear infinite;vertical-align:middle;}",
       "@keyframes lumen-rot{to{transform:rotate(360deg);}}",
       // confirm modal (validate prompt) — sits above the settings overlay
-      ".lumen-modal-back{position:fixed;inset:0;z-index:100000;display:flex;",
+      ".lumen-modal-back{position:fixed;inset:0;z-index:2147483647!important;display:flex;",
       "align-items:center;justify-content:center;background:rgba(0,0,0,.6);",
       "font-family:'Motiva Sans',Arial,Helvetica,sans-serif;}",
       ".lumen-modal{width:420px;max-width:90vw;background:#23262d;border-radius:4px;",
