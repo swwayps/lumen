@@ -1,6 +1,6 @@
 -- deskcover: decide when to re-patch the autostart entry on Lumen's existing
--- 3s tick, and shell out to ensure-desktop-coverage.sh. Pure decision logic is
--- split from IO so it is unit-testable.
+-- 3s tick, then trigger the user guardian or fall back to the coverage CLI.
+-- Pure decision logic is split from IO so it is unit-testable.
 local deskcover = {}
 
 local Tick = {}
@@ -54,11 +54,28 @@ function deskcover.stat_autostart()
   return { exists = exists, mtime = mtime, patched = patched }
 end
 
--- run(mode) — invoke the CLI ("--user"/"--system") detached, best-effort.
-function deskcover.run(mode)
+-- run(mode, opts) — prefer the user guardian, falling back to the existing
+-- detached CLI invocation. opts injects execute/file_exists effects for tests.
+function deskcover.run(mode, opts)
+  opts = opts or {}
+  local execute = opts.execute or os.execute
+  local file_exists = opts.file_exists or function(path)
+    local fh = io.open(path, "r")
+    if not fh then return false end
+    fh:close()
+    return true
+  end
+
+  local probe = "timeout 1s systemctl --user --quiet --no-ask-password " ..
+                "is-enabled slsteam-desktop-guardian.path >/dev/null 2>&1"
+  if execute(probe) then
+    execute("systemctl --user start slsteam-desktop-guardian.service >/dev/null 2>&1 &")
+    return true
+  end
+
   local cli = deskcover.cli_path()
-  local fh = io.open(cli, "r"); if not fh then return false end; fh:close()
-  os.execute('"' .. cli .. '" ' .. (mode or "--user") .. ' >/dev/null 2>&1 &')
+  if not file_exists(cli) then return false end
+  execute('"' .. cli .. '" ' .. (mode or "--user") .. ' >/dev/null 2>&1 &')
   return true
 end
 
