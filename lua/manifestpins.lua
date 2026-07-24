@@ -259,69 +259,14 @@ function mp.splice_pins(text, pins)
   return body
 end
 
--- add_additional_app(text, appid) -> new_text, status. Registers `appid` in the
--- AdditionalApps block-list (the id SLSsteam reads to treat a game as managed —
--- see slsteam.lua). Pure text transform so ImportLuaFull can fold it into the
--- SAME atomic write as the pin (no second racing write to config.yaml).
--- status: "added" | "already_present" | "inline_refused" (won't rewrite the
--- inline "[a, b]" form). Mirrors the plugin's register_app block editing.
-function mp.add_additional_app(text, appid)
-  appid = math.tointeger(tonumber(appid))
-  text = text or ""
-  if not appid then return text, "bad_appid" end
-
-  local had_trailing_nl = (#text > 0 and text:sub(-1) == "\n")
-  local lines = {}
-  for line in (text .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
-  if had_trailing_nl then lines[#lines] = nil end
-
-  local header_idx
-  for i, line in ipairs(lines) do
-    if line:match("^AdditionalApps%s*:") then header_idx = i; break end
-  end
-
-  if header_idx then
-    -- value after the colon (ignoring a trailing comment) => inline form
-    local after = lines[header_idx]:match("^AdditionalApps%s*:%s*(.-)%s*$") or ""
-    if after:gsub("#.*$", ""):gsub("%s+$", "") ~= "" then return text, "inline_refused" end
-  else
-    if #lines > 0 and lines[#lines] ~= "" then lines[#lines + 1] = "" end
-    lines[#lines + 1] = "AdditionalApps:"
-    header_idx = #lines
-  end
-
-  local last_entry_idx, indent = header_idx, "  "
-  for i = header_idx + 1, #lines do
-    local stripped = lines[i]:gsub("^%s+", "")
-    if stripped == "" or stripped:match("^#") then
-      -- comment/blank: belongs to whatever follows; skip
-    else
-      -- %s* (not %s+): block-sequence items may sit at ZERO indentation
-      -- ("- 123" flush-left is valid YAML under a mapping key). Requiring a
-      -- leading space here made a zero-indent list break the loop immediately,
-      -- so the new entry was inserted at the fallback 2-space indent right
-      -- after the header -> mixed indentation that yaml-cpp rejects, causing
-      -- parser failures.
-      local entry_indent, rest = lines[i]:match("^(%s*)%-%s+(.*)$")
-      if not entry_indent then break end  -- next top-level key ends the block
-      indent = entry_indent
-      last_entry_idx = i
-      local id = math.tointeger(tonumber((rest:gsub("#.*$", ""):gsub("%s+$", ""))))
-      if id == appid then return text, "already_present" end
-    end
-  end
-
-  table.insert(lines, last_entry_idx + 1, indent .. "- " .. tostring(appid))
-  local body = table.concat(lines, "\n")
-  if #lines > 0 then body = body .. "\n" end
-  return body, "added"
-end
-
--- remove_additional_app(text, appid) -> new_text, status. Inverse of
--- add_additional_app: drops the "- <appid>" entry from the AdditionalApps
--- block (keeping the header even if it becomes empty). Pure text transform so a
--- full game removal can fold it into the same atomic config write as the pin
--- purge. status: "removed" | "not_present" | "inline_refused" | "bad_appid".
+-- remove_additional_app(text, appid) -> new_text, status. Drops the
+-- "- <appid>" entry from the AdditionalApps block (keeping the header even if
+-- it becomes empty). Pure text transform so a full game removal can fold it
+-- into the same atomic config write as the pin purge. We no longer ADD appids
+-- to AdditionalApps (the stplug-in .lua stem is canonical), but full removal
+-- still calls this to CLEAN UP any LEGACY entry left by an older version that
+-- mirrored — otherwise the stale id keeps the game registered via config.yaml.
+-- status: "removed" | "not_present" | "inline_refused" | "bad_appid".
 function mp.remove_additional_app(text, appid)
   appid = math.tointeger(tonumber(appid))
   text = text or ""
@@ -1189,9 +1134,10 @@ end
 
 -- ImportLuaFull{appid?, lua}: import a LuaTools .lua for a game NOT yet added
 -- via the LuaTools plugin. Writes the .lua to stplug-in/<appid>.lua (depot
--- keys), registers the appid in AdditionalApps, and applies the setManifestid
--- pins (locking the build) when the file carries any — all config edits in ONE
--- atomic write. The appid is the .lua's base (first bare addappid); a
+-- keys) — the canonical registration slsteam-moon discovers from the filename
+-- stem — and applies the setManifestid pins (locking the build) to config.yaml
+-- when the file carries any. The appid is NOT mirrored into config.yaml
+-- AdditionalApps. The appid is the .lua's base (first bare addappid); a
 -- card-supplied appid must match it. A .lua with no setManifestid still imports
 -- (pinned=0): the game installs at the latest build. SLSsteam only provisions a
 -- brand-new appid on its next start, so the frontend prompts a Steam restart.
@@ -1218,27 +1164,27 @@ function mp.import_lua_full_rpc(ctx, json_str)
     if info.manifestid then depot_gids[depot] = info.manifestid; count = count + 1 end
   end
 
-  -- 3) register the appid in AdditionalApps + apply pins in one atomic write.
-  local cfg = read_file(ctx.config_path)
-  if not cfg then return err("config.yaml not found") end
-  local newcfg, status = mp.add_additional_app(cfg, appid)
-  if status == "inline_refused" then
-    return err("AdditionalApps uses an inline list; refusing to edit")
-  end
+  -- 3) apply the setManifestid pins (if any) to config.yaml. The appid is NOT
+  -- mirrored into config.yaml AdditionalApps: the stplug-in/<appid>.lua just
+  -- written IS the canonical registration (slsteam-moon discovers the app from
+  -- the .lua filename stem). A keys-only .lua carries no pins, so it needs no
+  -- config.yaml write at all.
   if count > 0 then
-    local pins = mp.parse_pins(newcfg)
+    local cfg = read_file(ctx.config_path)
+    if not cfg then return err("config.yaml not found") end
+    local pins = mp.parse_pins(cfg)
     mp.set_game_pin(pins, appid, depot_gids)
-    newcfg = mp.splice_pins(newcfg, pins)
+    local newcfg = mp.splice_pins(cfg, pins)
+    local cwok, cwerr = write_config_raw(ctx.config_path, newcfg)
+    if not cwok then return err(cwerr) end
   end
-  local cwok, cwerr = write_config_raw(ctx.config_path, newcfg)
-  if not cwok then return err(cwerr) end
   mp.invalidate_appinfo_cache(ctx, appid)
   -- Record that this game was added by loading a .lua (not the LuaTools DB) so
   -- its build badge reads "from .lua". Best-effort: a failed mark only costs the
   -- nicer label, never the import itself.
   mark_import(ctx.imports_path, appid)
 
-  return json.encode({ success = true, appid = appid, pinned = count, added = status })
+  return json.encode({ success = true, appid = appid, pinned = count })
 end
 
 -- MarkLuaImport{appid}: record `appid` as added through the menu's "Load .lua"

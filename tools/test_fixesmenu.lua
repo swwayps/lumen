@@ -158,5 +158,82 @@ check("added: from injected path", aa2[1] == 42910 and #aa2 == 1)
 local aa3 = fx.added_apps({ config_path = "/x", read_file = function() return nil end })
 check("added: missing config -> empty", type(aa3) == "table" and #aa3 == 0)
 
+-- ── parse_stplugin_stems (canonical new-version source) ───────────────────────
+-- A game added the new way drops <appid>.lua into config/stplug-in; only files
+-- named exactly "<digits>.lua" are main-app signals (depot-key / backup files
+-- and non-.lua entries are ignored).
+local st = fx.parse_stplugin_stems({ "250900.lua", "480.lua", "notagame.lua", "README.md", "250900.lua", "1030300.txt" })
+table.sort(st)
+check("stems: numeric .lua only", st[1] == 480 and st[2] == 250900)
+check("stems: dedup + ignore non-numeric/non-lua", #st == 2)
+check("stems: non-table -> empty", #fx.parse_stplugin_stems(nil) == 0)
+
+-- ── added_apps UNION (stplug-in + luaappids.yaml + config.yaml) ───────────────
+-- The regression: a game added via the LuaTools plugin only lands in stplug-in
+-- (no longer mirrored into config.yaml), so a config-only read missed it and
+-- the Fixes Menu stopped appearing. added_apps must union all three sources.
+local union = fx.added_apps({
+  config_text    = "AdditionalApps:\n  - 111\n  - 222\n",
+  luaappids_text = "AdditionalApps:\n  - 222\n  - 333\n",
+  stplug_names   = { "333.lua", "444.lua", "keys.lua" },
+})
+table.sort(union)
+check("union: merges all three sources",
+  union[1] == 111 and union[2] == 222 and union[3] == 333 and union[4] == 444)
+check("union: dedups across sources", #union == 4)
+
+-- stplug-in-only game (the exact reported regression) is detected on its own.
+local stonly = fx.added_apps({ stplug_names = { "638510.lua" } })
+check("union: stplug-only game is detected", #stonly == 1 and stonly[1] == 638510)
+
+-- luaappids.yaml-only game (manual / plugin override) is detected on its own.
+local luaonly = fx.added_apps({ luaappids_text = "AdditionalApps:\n  - 730\n" })
+check("union: luaappids-only game is detected", #luaonly == 1 and luaonly[1] == 730)
+
+-- stplug-in discovered via an injected list_dir over an injected stplug_dir.
+local viaDir = fx.added_apps({
+  stplug_dir = "/steam/config/stplug-in",
+  list_dir = function(d) return d == "/steam/config/stplug-in" and { "285900.lua", "keys.lua" } or nil end,
+})
+check("union: stplug via list_dir", #viaDir == 1 and viaDir[1] == 285900)
+
+-- ── parse_stplugin_stems (new-version primary source) ─────────────────────────
+local st = fx.parse_stplugin_stems({ "250900.lua", "284160.lua", "notanumber.lua", "README.txt", "250900.lua" })
+table.sort(st)
+check("stems: numeric .lua stems only", st[1] == 250900 and st[2] == 284160)
+check("stems: dedups + ignores non-numeric/non-lua", #st == 2)
+check("stems: non-table -> empty", #fx.parse_stplugin_stems(nil) == 0)
+check("stems: partial-numeric name ignored", #fx.parse_stplugin_stems({ "123abc.lua" }) == 0)
+
+-- ── added_apps UNION of the three sources ─────────────────────────────────────
+-- config.yaml (legacy) + luaappids.yaml (manual) + stplug-in/*.lua (primary).
+local union = fx.added_apps({
+  config_text = "AdditionalApps:\n  - 1030300\n",              -- legacy
+  luaappids_text = "AdditionalApps:\n  - 42910\n  - 1030300\n", -- manual (dup of legacy)
+  stplug_names = { "250900.lua", "284160.lua" },                -- primary
+})
+table.sort(union)
+check("union: all three sources merged", union[1] == 42910 and union[2] == 250900
+  and union[3] == 284160 and union[4] == 1030300)
+check("union: cross-source dedup (1030300 once)", #union == 4)
+
+-- the reported regression: a game added ONLY via the new stplug-in method
+-- (nothing in config.yaml / luaappids.yaml) must still be recognised.
+local stOnly = fx.added_apps({
+  config_text = "",
+  luaappids_text = "",
+  stplug_names = { "638510.lua" },
+})
+check("union: stplug-in-only game recognised", stOnly[1] == 638510 and #stOnly == 1)
+
+-- luaappids.yaml resolved from an injected path + read_file
+local viaPath = fx.added_apps({
+  config_text = "",
+  luaappids_path = "/fake/luaappids.yaml",
+  stplug_names = {},
+  read_file = function(p) return (p == "/fake/luaappids.yaml") and "AdditionalApps:\n  - 7\n" or nil end,
+})
+check("union: luaappids from injected path", viaPath[1] == 7 and #viaPath == 1)
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 if fail > 0 then os.exit(1) end

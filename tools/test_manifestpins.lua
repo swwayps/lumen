@@ -535,50 +535,12 @@ do
   os.execute("rm -rf '" .. root .. "'")
 end
 
--- ── 13. add_additional_app (pure config-text edit) ────────────────────────
--- Mirrors the plugin's AdditionalApps block-list editor but as a pure
--- text->text transform so ImportLuaFull can register an appid in the SAME
--- atomic write that applies the pin (no second racing write to config.yaml).
-do
-  local t1 = "AdditionalApps:\n  - 111\nLogLevel: 2\n"
-  local out, st = mp.add_additional_app(t1, 222)
-  eq(st, "added", "add_app: reports added")
-  check(out:find("- 222", 1, true) ~= nil, "add_app: appid inserted")
-  check(out:find("- 111", 1, true) ~= nil, "add_app: existing entry kept")
-  check(out:find("LogLevel: 2", 1, true) ~= nil, "add_app: rest preserved")
-
-  local out2, st2 = mp.add_additional_app(out, 222)
-  eq(st2, "already_present", "add_app: idempotent on duplicate")
-
-  local out3, st3 = mp.add_additional_app("LogLevel: 2\n", 333)
-  eq(st3, "added", "add_app: creates block when absent")
-  check(out3:find("AdditionalApps:", 1, true) ~= nil, "add_app: block header created")
-  check(out3:find("- 333", 1, true) ~= nil, "add_app: appid in new block")
-
-  local _, st4 = mp.add_additional_app("AdditionalApps: [1, 2]\n", 444)
-  eq(st4, "inline_refused", "add_app: refuses inline-list form")
-
-  -- Regression (config_parse_abort_analysis.md): a list whose items sit at
-  -- ZERO indentation (valid YAML) must NOT get the new entry inserted at a
-  -- 2-space indent -- that mixed indentation makes yaml-cpp reject the whole
-  -- config and can brick Steam at startup. The new entry must match the
-  -- existing items' indentation.
-  local z, zs = mp.add_additional_app("AdditionalApps:\n- 111\n- 222\nLogLevel: 2\n", 333)
-  eq(zs, "added", "add_app(zero-indent): reports added")
-  check(z:find("\n- 333\n", 1, true) ~= nil,
-    "add_app(zero-indent): new entry inserted at 0 indent (matches the list)")
-  check(z:find("  - 333", 1, true) == nil,
-    "add_app(zero-indent): NOT inserted at 2-space indent (no mixed indentation)")
-  check(z:find("- 111", 1, true) ~= nil and z:find("- 222", 1, true) ~= nil,
-    "add_app(zero-indent): existing entries preserved")
-  local _, zdup = mp.add_additional_app(z, 111)
-  eq(zdup, "already_present", "add_app(zero-indent): idempotent on an existing 0-indent id")
-end
-
 -- ── 14. ImportLuaFull: load a .lua for a game NOT added via LuaTools ───────
--- Writes the .lua to stplug-in/<appid>.lua (depot keys), registers the appid
--- in AdditionalApps, and applies the setManifestid pins (if any) in ONE atomic
--- config write. appid comes from the .lua's base; a card appid must match it.
+-- Writes the .lua to stplug-in/<appid>.lua (depot keys) — the CANONICAL
+-- registration slsteam-moon discovers from the filename stem — and applies the
+-- setManifestid pins (if any). The appid is NOT written to config.yaml
+-- AdditionalApps anymore (no mirroring); config.yaml is touched ONLY to store
+-- pins. appid comes from the .lua's base; a card appid must match it.
 do
   local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
   local root = os.tmpname(); os.remove(root); mkdir(root)
@@ -605,20 +567,24 @@ do
     check(c:find("3357651", 1, true) ~= nil, "full: .lua content written verbatim") end
 
   local rf = assert(io.open(cfg, "rb")); local body = rf:read("*a"); rf:close()
-  check(body:find("- 3357650", 1, true) ~= nil, "full: appid added to AdditionalApps")
-  check(body:find("- 555", 1, true) ~= nil, "full: existing AdditionalApps kept")
+  check(body:find("- 3357650", 1, true) == nil, "full: appid NOT mirrored into AdditionalApps")
+  check(body:find("- 555", 1, true) ~= nil, "full: existing AdditionalApps untouched")
   local pins = mp.parse_pins(body)
   check(pins[3357650] ~= nil and pins[3357650].locked == true, "full: app locked to build")
   eq(pins[3357650].depots[3357651], "2417499809052404547", "full: depot pinned")
 
   -- a .lua with NO setManifestid still imports the game (pinned=0, unlocked):
-  -- the fallback path installs at latest.
+  -- the fallback path installs at latest. With no pins there is nothing to
+  -- write to config.yaml, so it is left completely untouched.
   local lua2 = "addappid(777)\naddappid(778,1,\"k\")\n"
   local res2 = json.decode(mp.import_lua_full_rpc(ctx, json.encode({ lua = lua2 })))
   eq(res2.success, true, "full: no-pin .lua still imports")
   eq(res2.pinned, 0, "full: zero pins reported")
+  local lf2 = io.open(stplug .. "/777.lua", "rb")
+  check(lf2 ~= nil, "full: no-pin .lua written to stplug-in")
+  if lf2 then lf2:close() end
   local rf2 = assert(io.open(cfg, "rb")); local body2 = rf2:read("*a"); rf2:close()
-  check(body2:find("- 777", 1, true) ~= nil, "full: no-pin game added to AdditionalApps")
+  check(body2:find("- 777", 1, true) == nil, "full: no-pin game NOT written to AdditionalApps")
   check(mp.parse_pins(body2)[777] == nil, "full: no-pin game left unlocked")
 
   -- guard: a card-supplied appid must equal the .lua's base.

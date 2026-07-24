@@ -136,13 +136,18 @@ function fixesmenu.context(appid, deps)
   return res
 end
 
--- ── added apps (canonical: SLSsteam AdditionalApps) ─────────────────────────
--- The Fixes Menu is only meaningful for games slsteam-moon manages. The
--- CANONICAL registry of those is the AdditionalApps list in the SLSsteam
--- config.yaml (every added game is registered there — LuaTools, "Load .lua",
--- and manual adds alike). The stplug-in <appid>.lua files are only the subset
--- that carries depot keys, so we key off AdditionalApps instead. The frontend
--- fetches this set once (cached) and only anchors the entry for appids in it.
+-- ── added apps (union of the three SLSsteam AdditionalApps sources) ──────────
+-- The Fixes Menu is only meaningful for games slsteam-moon manages. As of the
+-- config.cpp "union added-apps" change, slsteam-moon sources the managed set
+-- from THREE places (and no longer mirrors everything into config.yaml):
+--   1. config/stplug-in/<appid>.lua stems  — PRIMARY for the current version.
+--      A game added via the LuaTools plugin only drops a .lua here, so the old
+--      config.yaml-only read missed it and the Fixes Menu stopped appearing.
+--   2. luaappids.yaml AdditionalApps        — manual / plugin overrides.
+--   3. config.yaml AdditionalApps           — LEGACY: games an upgrading user
+--      already had, which may not exist under stplug-in.
+-- We mirror that union here so the entry anchors for a game added ANY way. The
+-- frontend fetches this set once (cached) and only anchors for appids in it.
 
 -- PURE: extract appids from the AdditionalApps block of a config.yaml body.
 -- Handles the block-list form (the only form slsteam-moon's editor writes):
@@ -169,28 +174,97 @@ function fixesmenu.parse_additional_apps(text)
   return out
 end
 
--- added_apps(deps) -> list of managed appids from AdditionalApps. deps
--- injectable for tests (config_text or config_path + read_file).
+-- PURE: numeric <appid> stems from a list of stplug-in filenames. Only files
+-- named exactly "<digits>.lua" are main-app signals (matching slsteam-moon's
+-- discoverStPluginAppIds, which keys off the numeric filename stem); depot-key
+-- helpers, backups, and non-.lua entries are ignored. Deduped.
+function fixesmenu.parse_stplugin_stems(names)
+  local out, seen = {}, {}
+  if type(names) ~= "table" then return out end
+  for _, name in ipairs(names) do
+    local stem = tostring(name):match("^(%d+)%.lua$")
+    local num = stem and math.tointeger(tonumber(stem))
+    if num and num > 0 and not seen[num] then seen[num] = true; out[#out + 1] = num end
+  end
+  return out
+end
+
+-- added_apps(deps) -> list of managed appids, the UNION of the same three
+-- sources slsteam-moon unions (config.yaml AdditionalApps + luaappids.yaml
+-- AdditionalApps + stplug-in/<appid>.lua stems). deps injectable for tests:
+--   config_text / config_path        — legacy config.yaml body / path
+--   luaappids_text / luaappids_path  — luaappids.yaml body / path
+--   stplug_names / stplug_dir        — stplug-in filenames / directory
+--   read_file, list_dir              — IO effects
+-- With NOTHING injected, all three paths are resolved from
+-- manifestpins.default_ctx and read from disk (fs shim for the directory).
 function fixesmenu.added_apps(deps)
   deps = deps or {}
-  local text = deps.config_text
-  if text == nil then
-    local config_path = deps.config_path
-    if not config_path then
-      local ok, mp = pcall(require, "manifestpins")
-      if ok and mp and mp.default_ctx then
-        local c = mp.default_ctx(); config_path = c and c.config_path
+  local injected = deps.config_text ~= nil or deps.config_path ~= nil
+    or deps.luaappids_text ~= nil or deps.luaappids_path ~= nil
+    or deps.stplug_names ~= nil or deps.stplug_dir ~= nil
+
+  local config_path = deps.config_path
+  local luaappids_path = deps.luaappids_path
+  local stplug_dir = deps.stplug_dir
+  if not injected then
+    local ok, mp = pcall(require, "manifestpins")
+    if ok and mp and mp.default_ctx then
+      local c = mp.default_ctx()
+      if type(c) == "table" then
+        config_path = c.config_path
+        stplug_dir = c.stplug_dir
+        -- luaappids.yaml sits beside config.yaml in ~/.config/SLSsteam/.
+        if c.config_path then
+          luaappids_path = (c.config_path:gsub("config%.yaml$", "luaappids.yaml"))
+        end
       end
-    end
-    if config_path then
-      local read_file = deps.read_file or function(p)
-        local f = io.open(p, "rb"); if not f then return nil end
-        local d = f:read("*a"); f:close(); return d
-      end
-      text = read_file(config_path)
     end
   end
-  return fixesmenu.parse_additional_apps(text or "")
+
+  local read_file = deps.read_file or function(p)
+    local f = io.open(p, "rb"); if not f then return nil end
+    local d = f:read("*a"); f:close(); return d
+  end
+
+  local out, seen = {}, {}
+  local function add_all(list)
+    for _, id in ipairs(list or {}) do
+      if not seen[id] then seen[id] = true; out[#out + 1] = id end
+    end
+  end
+
+  -- 1. config.yaml AdditionalApps (legacy).
+  local cfg_text = deps.config_text
+  if cfg_text == nil and config_path then cfg_text = read_file(config_path) end
+  add_all(fixesmenu.parse_additional_apps(cfg_text or ""))
+
+  -- 2. luaappids.yaml AdditionalApps (same block form as config.yaml).
+  local lua_text = deps.luaappids_text
+  if lua_text == nil and luaappids_path then lua_text = read_file(luaappids_path) end
+  add_all(fixesmenu.parse_additional_apps(lua_text or ""))
+
+  -- 3. stplug-in/<appid>.lua stems (primary, current version).
+  local names = deps.stplug_names
+  if names == nil and stplug_dir then
+    local list_dir = deps.list_dir
+    if not list_dir then
+      local ok, fs = pcall(require, "fs")
+      if ok and fs and fs.list then
+        list_dir = function(d)
+          local ok2, entries = pcall(fs.list, d)
+          if not ok2 or type(entries) ~= "table" then return nil end
+          local ns = {}
+          for _, e in ipairs(entries) do ns[#ns + 1] = e.name or "" end
+          return ns
+        end
+      end
+    end
+    if list_dir then names = list_dir(stplug_dir) end
+  end
+  add_all(fixesmenu.parse_stplugin_stems(names or {}))
+
+  return out
 end
 
 -- ── plugin prefs (Lumen-level, not slsteam-moon config) ─────────────────────
