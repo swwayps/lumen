@@ -243,6 +243,10 @@ local themeengine = require("themeengine")
 local themepreload = require("themepreload")
 
 local lua_dir = os.getenv("LUMEN_LUA_DIR") or "lua"
+local gamepad_toast_js = utils.read_file(lua_dir .. "/gamepad-toasts.js")
+if not gamepad_toast_js then
+  io.stderr:write("[lumen] WARN: gamepad toast bridge not found\n")
+end
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
 -- split into ordered source fragments under menu/ (one concern per file) for
@@ -359,7 +363,9 @@ local function build_channels(theme_config, clean_previous)
     -- claiming it first and leaving the Lumen access button absent.
     { titles = { ["Steam"] = true }, urls = { "browserType=4" },
       assets = build_menu_assets(true, theme_key) },
-    { titles = { ["SharedJSContext"] = true }, control = true },
+    { titles = { ["SharedJSContext"] = true }, control = true,
+      assets = { polyfill=nil, css={},
+        js=gamepad_toast_js and { gamepad_toast_js } or {} } },
   }
   if clean_previous then
     out[#out+1] = { all=true, compose=true,
@@ -410,6 +416,8 @@ end
 local initial_theme_config = themes.load_config()
 local consume_default_override = initial_theme_config.force_default_theme == true
 local channels = build_channels(initial_theme_config)
+local notifyqueue = require("notifyqueue")
+local next_notify_poll = 0
 loop.run({
   registry = registry,
   channels = channels,
@@ -426,6 +434,13 @@ loop.run({
       io.stderr:write("[lumen] failed to reset default-theme override: "
         .. tostring(err) .. "\n")
     end
+  end,
+  on_tick = function(inj, now)
+    if now < next_notify_poll then return end
+    next_notify_poll = now + 0.25
+    local events = notifyqueue.drain()
+    if not inj:is_gamepad_ui() then return end
+    for _, event in ipairs(events) do inj:show_gamepad_toast(event) end
   end,
   on_exit = function()
     if os.getenv("LUMEN_THEME_PRELOAD_ACTIVE") == "1" then

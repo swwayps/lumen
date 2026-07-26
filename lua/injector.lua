@@ -221,19 +221,46 @@ end
 -- Root Menu / library / store windows only appear after login + first paint.
 local READY_MARKERS = {
   "Supernav", "Root Menu", "store.steampowered.com",
+  "Steam Big Picture Mode", "QuickAccess_", "MainMenu_",
 }
-local function ui_is_ready()
-  local body = http_get("/json")
-  if not body then return false end
-  local ok, targets = pcall(json.decode, body)
-  if not ok or type(targets) ~= "table" then return false end
-  for _, t in ipairs(targets) do
-    local hay = (t.title or "") .. " " .. (t.url or "")
+function injector.targets_ui_ready(targets)
+  for _, target in ipairs(targets or {}) do
+    local hay = (target.title or "") .. " " .. (target.url or "")
     for _, mark in ipairs(READY_MARKERS) do
       if hay:find(mark, 1, true) then return true end
     end
   end
   return false
+end
+
+local function ui_is_ready()
+  local body = http_get("/json")
+  if not body then return false end
+  local ok, targets = pcall(json.decode, body)
+  if not ok or type(targets) ~= "table" then return false end
+  return injector.targets_ui_ready(targets)
+end
+
+-- Gamepad UI is a Steam-client property, not a distribution property. Match
+-- the shell markers used by Steam itself so SteamOS, Bazzite, ChimeraOS and
+-- ordinary Big Picture sessions all take the same path.
+function injector.targets_have_gamepad_ui(targets)
+  for _, target in ipairs(targets or {}) do
+    local title = tostring(target.title or ""):lower()
+    local url = tostring(target.url or ""):lower()
+    if title == "steam big picture mode" or
+       url:find("in_gamepadui=true", 1, true) or
+       url:find("in_gamescope=true", 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+function injector.gamepad_toast_expr(event)
+  return "(function(){try{return typeof window.__lumenGamepadToast==='function'" ..
+    "&&window.__lumenGamepadToast(" .. json.encode(event or {}) ..
+    ");}catch(e){console.warn('[Lumen] gamepad toast failed',e);return false;}})()"
 end
 
 local function send_cmd(c, session, method, params, child_session)
@@ -1513,6 +1540,7 @@ function injector.new(opts)
     ui_ready = false,    -- latched once Steam's main UI is up (post-login/paint)
     on_ui_ready = opts.on_ui_ready,
     visible_views = {},  -- browser ws_url -> true, reported by visibilitychange
+    gamepad_ui = false,  -- refreshed from Steam's current CEF target markers
   }, State)
 end
 
@@ -1560,6 +1588,7 @@ function State:observe_shared_generation(targets)
   self.theme_reload_deadline = nil
   self.backoff = 1
   self.next_attempt = 0
+  self.gamepad_ui = false
   return true
 end
 
@@ -1710,6 +1739,7 @@ function State:_discover()
   end
   self.backoff = 1
   self.next_attempt = 0
+  self.gamepad_ui = injector.targets_have_gamepad_ui(targets)
   if self:observe_shared_generation(targets) then
     log("new SharedJSContext generation -> returning to early bootstrap")
   end
@@ -1720,14 +1750,7 @@ function State:_discover()
     local early = {}
     for _, ch in ipairs(self.channels) do if ch.early then early[#early+1] = ch end end
     if #early > 0 then self:_sync_targets(targets, early, true) end
-    local ready = false
-    for _, t in ipairs(targets) do
-      local hay = (t.title or "") .. " " .. (t.url or "")
-      for _, mark in ipairs(READY_MARKERS) do
-        if hay:find(mark, 1, true) then ready = true; break end
-      end
-      if ready then break end
-    end
+    local ready = injector.targets_ui_ready(targets)
     if not ready then
       self.next_attempt = now + injector.discovery_retry_delay(false, self.backoff)
       return
@@ -1746,6 +1769,26 @@ function State:_discover()
   -- Route each target to its channel's assets (store web views -> luatools.js;
   -- SharedJSContext -> lumen-menu bundle). First matching channel wins.
   self:_sync_targets(targets, self.channels)
+end
+
+function State:is_gamepad_ui()
+  return self.gamepad_ui == true
+end
+
+-- Relay a validated queue event to the SharedJSContext toast bridge. The
+-- caller checks is_gamepad_ui() first; Desktop Mode continues to use
+-- notify-send and never receives a duplicate Steam toast.
+function State:show_gamepad_toast(event)
+  if not self:is_gamepad_ui() then return false end
+  local expr = injector.gamepad_toast_expr(event)
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
 end
 
 -- Open/close the Lumen overlay in every connected context that has it. The menu

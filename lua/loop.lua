@@ -67,6 +67,10 @@ function loop.run(opts)
       end
     end
     inj:tick()
+    if type(opts.on_tick) == "function" then
+      local ok, err = pcall(opts.on_tick, inj, socket.gettime())
+      if not ok then log("tick callback failed: " .. tostring(err)) end
+    end
   end
 end
 
