@@ -14,6 +14,8 @@ local polyfill = require("polyfill")
 local rpc = require("rpc")
 local cefport = require("cefport")
 local b64 = require("b64")
+local cdpreq = require("cdpreq")
+local ryuulogin = require("ryuulogin")
 
 local injector = {}
 
@@ -876,6 +878,41 @@ function Conn:_on_binding(payload_str)
     else
       result = '{"ok":false}'
     end
+  elseif req.fn == "__lumenRyuuLoginAvailable" then
+    -- Gamepad UI cannot host the sign-in, so the UI asks first and offers the
+    -- manual paste directly instead of a button that would blank the screen.
+    -- NOTE: `a and obj:m()` is adjusted to ONE value in Lua, which silently
+    -- dropped the reason here. Call it plainly so both returns survive.
+    local available, why = false, "no_shell"
+    if self.manager then available, why = self.manager:ryuu_login_available() end
+    result = '{"ok":true,"available":' .. (available and "true" or "false")
+      .. ((not available and why) and (',"reason":' .. json.encode(tostring(why))) or "") .. '}'
+  elseif req.fn == "__lumenRyuuLoginOpen" then
+    -- Open Ryuu's Discord sign-in in Steam's own browser window.
+    local ok_open, reason = false, "no_shell"
+    if self.manager then ok_open, reason = self.manager:ryuu_login_open() end
+    result = ok_open and '{"ok":true}'
+      or ('{"ok":false,"reason":' .. json.encode(tostring(reason or "no_shell")) .. '}')
+  elseif req.fn == "__lumenRyuuLoginPoll" then
+    -- One poll tick: read the cookie jar and let the plugin backend verify it
+    -- against Ryuu. The session value never crosses into JavaScript.
+    local session = self.manager and self.manager:ryuu_login_session()
+    local adopt
+    if session and type(self.registry) == "table"
+        and type(self.registry.AdoptRyuuSessionValue) == "function" then
+      local ok_call, raw = pcall(self.registry.AdoptRyuuSessionValue, "", session)
+      if ok_call and type(raw) == "string" then
+        local ok_decode, decoded = pcall(json.decode, raw)
+        if ok_decode then adopt = decoded end
+      end
+    end
+    local state, message = ryuulogin.poll_state(session, adopt)
+    result = '{"ok":true,"state":' .. json.encode(state)
+      .. (message and (',"error":' .. json.encode(message)) or "") .. '}'
+  elseif req.fn == "__lumenRyuuLoginClose" then
+    local closed = 0
+    if self.manager then closed = self.manager:ryuu_login_close() or 0 end
+    result = '{"ok":true,"closed":' .. tostring(closed) .. '}'
   elseif req.fn == "__lumenOpenExternalUrl" then
     -- Open an external URL (the Cloud Saves OAuth page) in the default browser
     -- via Steam's own handler so it comes to the foreground. SteamClient lives
@@ -1860,6 +1897,102 @@ function State:open_library_app(appid)
   end
   return false
 end
+-- ── in-client Ryuu (Discord) sign-in ───────────────────────────────────────
+-- See ryuulogin.lua for why a web view has to be borrowed and why the cookie can
+-- be read from any target. These three run bounded blocking CDP requests
+-- (cdpreq) because they need command RESULTS, which the fire-and-forget
+-- connections above cannot deliver.
+
+function State:_shared_ws()
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then return conn.ws_url end
+  end
+  local targets = list_all_targets()
+  local shared = targets and cdp.find_shared_js_context(targets)
+  return shared and shared.webSocketDebuggerUrl or nil
+end
+
+-- Can this client run the in-client sign-in? Asked by the UI BEFORE it offers
+-- the button, so Big Picture never flips to a blank external-browser view.
+function State:ryuu_login_available()
+  local targets = list_all_targets()
+  return ryuulogin.supported(targets, injector.targets_have_gamepad_ui(targets))
+end
+
+-- Open the Ryuu login in Steam's own browser window. Returns true, or false plus
+-- a machine-readable reason the panel turns into copy.
+function State:ryuu_login_open()
+  local port = cef_port()
+  local targets = list_all_targets()
+  local supported, reason = ryuulogin.supported(targets,
+    injector.targets_have_gamepad_ui(targets))
+  if not supported then return false, reason end
+  local shared = self:_shared_ws()
+  if not shared then return false, "no_shell" end
+
+  local launcher = ryuulogin.pick_launcher(targets)
+  local restore_url = nil
+
+  if not launcher then
+    -- No live store/community view: borrow one in the background. Big Picture
+    -- shells have no MainWindowBrowserManager, and there only the manual paste
+    -- can work.
+    if cdpreq.evaluate(port, shared, ryuulogin.available_expr()) ~= true then
+      return false, "unsupported"
+    end
+    restore_url = cdpreq.evaluate(port, shared, ryuulogin.read_browser_url_expr())
+    if type(restore_url) ~= "string" or restore_url == "" then restore_url = nil end
+    if cdpreq.evaluate(port, shared,
+        ryuulogin.load_background_expr(ryuulogin.LAUNCHER_URL)) ~= true then
+      return false, "unsupported"
+    end
+    for _ = 1, 25 do
+      socket.sleep(0.2)
+      launcher = ryuulogin.pick_launcher(list_all_targets())
+      if launcher then break end
+    end
+    if not launcher then return false, "no_launcher" end
+    -- The view is loading; the anchor needs a document body to click in.
+    socket.sleep(0.4)
+  end
+
+  -- userGesture: CEF's popup blocker drops a gesture-less target=_blank click
+  -- WITHOUT reporting failure, so the flag is what makes the window appear.
+  local clicked = cdpreq.evaluate(port, launcher.webSocketDebuggerUrl,
+    ryuulogin.open_link_expr(ryuulogin.LOGIN_URL), nil, true)
+
+  -- Put the borrowed view back on its previous page either way, so the user's
+  -- Store tab is where they left it.
+  if restore_url then
+    cdpreq.evaluate(port, shared, ryuulogin.load_background_expr(restore_url))
+  end
+  if clicked ~= true then return false, "click_failed" end
+  log("ryuu: sign-in window opened")
+  return true
+end
+
+-- Read the Ryuu session out of Steam's (global) cookie jar. Returns the value or
+-- nil. The secret stays in Lua: it is handed straight to the plugin backend.
+function State:ryuu_login_session()
+  local shared = self:_shared_ws()
+  if not shared then return nil end
+  local result = cdpreq.request(cef_port(), shared, "Network.getCookies",
+    { urls = { ryuulogin.ORIGIN .. "/" } })
+  return ryuulogin.pick_session(result)
+end
+
+-- Close the sign-in window (and the Discord step, if it is still open).
+function State:ryuu_login_close()
+  local port = cef_port()
+  local closed = 0
+  for _, target in ipairs(ryuulogin.login_windows(list_all_targets())) do
+    if cdpreq.request(port, target.webSocketDebuggerUrl, "Page.close", {}) then
+      closed = closed + 1
+    end
+  end
+  return closed
+end
+
 -- Relay an external-URL open into SharedJSContext so Steam raises the browser
 -- (see open_external_url_expr). Fire-and-forget: true if a SharedJSContext conn
 -- exists to run it on.

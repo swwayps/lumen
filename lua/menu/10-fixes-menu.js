@@ -54,6 +54,9 @@
   // Inline icons (currentColor) — FontAwesome isn't loaded in the shell context.
   var FX_ICONS = {
     wrench: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M507 109a13 13 0 00-22-6l-74 74-59-10-10-59 74-74a13 13 0 00-6-22 128 128 0 00-164 152L19 359a64 64 0 0090 90l195-195A128 128 0 00507 109z"/></svg>',
+    key: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M336 0a176 176 0 00-168 228L7 389a24 24 0 00-7 17v82a24 24 0 0024 24h82a24 24 0 0017-7l23-23a24 24 0 007-17v-29h29a24 24 0 0024-24v-29h29a24 24 0 0017-7l32-32A176 176 0 10336 0zm48 176a48 48 0 110-96 48 48 0 010 96z"/></svg>',
+    check: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M470 105a24 24 0 010 34L207 402a24 24 0 01-34 0L42 271a24 24 0 010-34l23-23a24 24 0 0134 0l91 91 223-223a24 24 0 0134 0z"/></svg>',
+    discord: '<svg viewBox="0 0 640 512" width="100%" height="100%" fill="currentColor"><path d="M524 69A487 487 0 00404 32a339 339 0 00-17 34 455 455 0 00-135 0 339 339 0 00-17-34A487 487 0 00116 69C42 179 22 286 32 392a495 495 0 00150 75 361 361 0 0032-52 315 315 0 01-50-24l12-10a354 354 0 00304 0l12 10a318 318 0 01-51 24 358 358 0 0032 52 493 493 0 00151-75c12-123-20-229-100-323zM214 327c-29 0-53-27-53-59s23-59 53-59 54 27 53 59c0 32-24 59-53 59zm212 0c-29 0-53-27-53-59s23-59 53-59 54 27 53 59c0 32-24 59-53 59z"/></svg>',
     globe: '<svg viewBox="0 0 496 512" width="100%" height="100%" fill="currentColor"><path d="M248 8a248 248 0 100 496 248 248 0 000-496zm164 158h-65a312 312 0 00-28-78 193 193 0 0193 78zM248 56c19 0 45 35 56 96H192c11-61 37-96 56-96zM72 248a190 190 0 014-40h74a445 445 0 000 80H76a190 190 0 01-4-40zm32 98h65a312 312 0 0028 78 193 193 0 01-93-78zm65-180h-65a193 193 0 0193-78 312 312 0 00-28 78zm79 290c-19 0-45-35-56-96h112c-11 61-37 96-56 96zm66-144H183a401 401 0 010-80h130a401 401 0 010 80zm9 132a312 312 0 0028-78h65a193 193 0 01-93 78zm37-126a445 445 0 000-80h74a193 193 0 010 80z"/></svg>',
     layers: '<svg viewBox="0 0 576 512" width="100%" height="100%" fill="currentColor"><path d="M288 0L11 124a12 12 0 000 22l277 124 277-124a12 12 0 000-22zm224 220l-53-24-171 76L117 196l-53 24a12 12 0 000 22l224 100 224-100a12 12 0 000-22zm0 124l-53-24-171 76L117 320l-53 24a12 12 0 000 22l224 100 224-100a12 12 0 000-22z"/></svg>',
     trash: '<svg viewBox="0 0 448 512" width="100%" height="100%" fill="currentColor"><path d="M135 21l-13 27H32a16 16 0 000 32h384a16 16 0 000-32h-90l-13-27A32 32 0 00284 0H164a32 32 0 00-29 21zM416 128H32l21 339a48 48 0 0048 45h246a48 48 0 0048-45z"/></svg>',
@@ -118,11 +121,67 @@
     return added[appid] === true;
   }
 
+  // downloader.sh tags HTTP 401/403 with errorCode "authentication" and the
+  // plugin backend clears the stored credential, so a rejected/expired Ryuu
+  // session offers a fresh sign-in instead of a corrupt-archive dead end.
+  function fixesAuthExpired(state) {
+    return !!(state && state.errorCode === "authentication");
+  }
+
+  // Game Mode / Big Picture cannot host the sign-in window (verified on a live
+  // gamescope session), and pasting a 300-character cookie with a gamepad is not
+  // a real option. The credential is shared between modes, so the view becomes a
+  // short notice pointing at Desktop Mode: no form, no polling.
+  function fixesGameModeNotice(S) {
+    S = S || {};
+    return {
+      title: S.authGameModeTitle,
+      copy: S.authGameModeBody,
+      buttons: [S.authGotIt],
+      offersPaste: false,
+      polls: false,
+    };
+  }
+
+  // One poll tick of the in-client sign-in view. The backend already treats the
+  // anonymous pre-sign-in cookie as "waiting" (ryuulogin.poll_state), so this
+  // only adds the deadline — and a verified session still wins on the last tick.
+  function fixesAuthViewState(poll, elapsedMs, limitMs) {
+    var state = (poll && poll.ok) ? poll.state : null;
+    if (state === "configured") return "configured";
+    if (state === "error") return "error";
+    if (elapsedMs >= limitMs) return "timeout";
+    return "waiting";
+  }
+
+  function fixesCrackCardState(crackFix, installed, isNative, S) {
+    crackFix = crackFix || {};
+    S = S || {};
+    var available = !!installed && crackFix.status === 200;
+    var needsAuth = available && crackFix.requiresAuth && !crackFix.authConfigured;
+    var nativeBlocked = available && !!isNative;
+    var off = !available || nativeBlocked;
+    return {
+      available: available,
+      needsAuth: needsAuth,
+      off: off,
+      iconKey: "wrench",
+      desc: nativeBlocked ? S.nativeWarnShort : (needsAuth ? S.ryuuAuthRequired : S.crackDesc),
+      badge: off ? S.unavailable : (needsAuth ? S.authRequiredBadge : null),
+      badgeIcon: (!off && needsAuth) ? "key" : null,
+      warn: nativeBlocked,
+    };
+  }
+
   try {
     window.__lumenFixesAppIdFromImgs = fixesAppIdFromImgs;
     window.__lumenFixesPickGear = fixesPickGear;
     window.__lumenFixesResolveName = fixesResolveName;
     window.__lumenFixesAppAllowed = fixesAppAllowed;
+    window.__lumenFixesCrackCardState = fixesCrackCardState;
+    window.__lumenFixesAuthExpired = fixesAuthExpired;
+    window.__lumenFixesAuthViewState = fixesAuthViewState;
+    window.__lumenFixesGameModeNotice = fixesGameModeNotice;
   } catch (e) {}
 
   // ── styles (Lumen tokens: #23262d surface, #1a9fff accent, Motiva Sans) ─────
@@ -163,6 +222,9 @@
       "overflow:hidden;text-overflow:ellipsis;}",
       // body + grid of tiles
       ".lumen-fx-body{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;padding:16px 16px 18px;}",
+      // A view swapped in over the grid centres itself in the SAME box the grid
+      // occupied (see fxKeepBodyHeight), so the panel never resizes or jumps.
+      ".lumen-fx-body.centred{display:flex;flex-direction:column;justify-content:center;}",
       ".lumen-fx-sub{color:#8f98a0;font-size:12px;line-height:1.4;margin:0 2px 14px;}",
       ".lumen-fx-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}",
       ".lumen-fx-tile{position:relative;display:flex;flex-direction:column;gap:8px;padding:15px 14px;",
@@ -178,7 +240,12 @@
       ".lumen-fx-tile.off{opacity:.42;cursor:default;}",
       ".lumen-fx-tile.off:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08);}",
       ".lumen-fx-tile.off:hover .ic{color:#9aa3ab;}",
-      ".lumen-fx-badge{position:absolute;top:11px;right:11px;font-size:9px;font-weight:700;",
+      // "needs auth" is carried by the badge alone: the tile keeps its own icon
+      // and the normal blue hover, so nothing about it looks broken or disabled.
+      ".lumen-fx-tile.auth .lumen-fx-badge{color:#f3ca62;background:rgba(224,179,65,.13);}",
+      ".lumen-fx-badge .bic{width:9px;height:9px;flex:0 0 auto;}",
+      ".lumen-fx-badge{position:absolute;top:11px;right:11px;display:inline-flex;align-items:center;",
+      "gap:4px;font-size:9px;font-weight:700;",
       "text-transform:uppercase;letter-spacing:.5px;color:#8f98a0;background:rgba(255,255,255,.07);",
       "padding:2px 7px;border-radius:9px;}",
       ".lumen-fx-note{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:12px;",
@@ -193,14 +260,62 @@
       ".lumen-fx-spin{display:inline-block;width:26px;height:26px;box-sizing:border-box;",
       "border:3px solid rgba(255,255,255,.16);border-top-color:#1a9fff;border-radius:50%;",
       "animation:lumen-rot .7s linear infinite;}",
-      ".lumen-fx-foot{flex:0 0 auto;display:flex;justify-content:flex-end;padding:13px 16px;",
+      ".lumen-fx-foot{flex:0 0 auto;display:flex;justify-content:flex-end;gap:9px;padding:13px 16px;",
       "border-top:1px solid rgba(255,255,255,.06);}",
       ".lumen-fx-btn{cursor:pointer;font:600 13px 'Motiva Sans',Arial;color:#fff;background:#1a9fff;",
       "border:1px solid #1a9fff;border-radius:3px;padding:8px 18px;text-decoration:none;transition:.12s;}",
       ".lumen-fx-btn:hover{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-fx-btn.secondary{background:transparent;border-color:#3d4450;color:#b8bcbf;}",
+      ".lumen-fx-btn.secondary:hover{background:rgba(255,255,255,.06);border-color:#4a5663;color:#dcdedf;}",
       ".lumen-fx-lo{display:flex;gap:8px;margin-top:8px;}",
       ".lumen-fx-lo input{flex:1;min-width:0;background:#1a1d23;color:#dcdedf;font:12px monospace;",
       "border:1px solid #3d4450;border-radius:3px;padding:8px 10px;}",
+      // guided Ryuu authentication prompt
+      ".lumen-ryuu-modal{width:470px;box-sizing:border-box;}",
+      ".lumen-ryuu-title{display:flex;align-items:center;gap:10px;color:#fff;font-size:17px;font-weight:700;margin-bottom:10px;}",
+      ".lumen-ryuu-title .key{width:18px;height:18px;color:#e0b341;}",
+      ".lumen-ryuu-copy{color:#b8bcbf;font-size:13px;line-height:1.5;margin-bottom:14px;}",
+      ".lumen-ryuu-label{display:block;color:#dcdedf;font-size:12px;font-weight:700;margin-bottom:6px;}",
+      ".lumen-ryuu-input{width:100%;box-sizing:border-box;background:#1a1d23;color:#dcdedf;",
+      "border:1px solid #3d4450;border-radius:4px;padding:10px 11px;font:13px monospace;}",
+      ".lumen-ryuu-input:focus{outline:none;border-color:#1a9fff;box-shadow:0 0 0 1px #1a9fff;}",
+      ".lumen-ryuu-help{display:inline-block;margin-top:9px;color:#66c0f4;font-size:12px;cursor:pointer;",
+      "background:none;border:0;padding:0;text-decoration:underline;font-family:inherit;}",
+      ".lumen-ryuu-safe{margin:12px 0;color:#8f98a0;font-size:11.5px;line-height:1.45;}",
+      ".lumen-ryuu-error{display:none;margin:10px 0;color:#ec8b8b;font-size:12px;line-height:1.4;}",
+      ".lumen-ryuu-steps{margin:4px 0 16px;padding-left:20px;color:#b8bcbf;font-size:13px;line-height:1.55;}",
+      ".lumen-ryuu-steps li{margin:0 0 7px;}",
+      ".lumen-ryuu-site{color:#66c0f4;text-decoration:underline;cursor:pointer;background:none;border:0;padding:0;font:inherit;}",
+      ".lumen-mbtn:disabled{opacity:.5;cursor:wait;}",
+      // in-panel sign-in view: the Fixes Menu body turns into this, so the user
+      // never leaves the panel they started from.
+      ".lumen-fx-auth{display:flex;flex-direction:column;align-items:center;text-align:center;",
+      "padding:4px 26px;}",
+      ".lumen-fx-auth-ic{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;",
+      "justify-content:center;background:rgba(224,179,65,.12);border:1px solid rgba(224,179,65,.34);",
+      "color:#e0b341;margin-bottom:14px;}",
+      ".lumen-fx-auth-ic svg{width:21px;height:21px;}",
+      ".lumen-fx-auth-ic.busy{background:rgba(102,192,244,.1);border-color:rgba(102,192,244,.3);color:#66c0f4;}",
+      ".lumen-fx-auth-ic.done{background:rgba(121,199,84,.12);border-color:rgba(121,199,84,.34);color:#79c754;}",
+      ".lumen-fx-auth-ic.bad{background:rgba(236,92,92,.12);border-color:rgba(236,92,92,.34);color:#ec5c5c;}",
+      ".lumen-fx-auth-ttl{color:#fff;font-size:17px;font-weight:700;margin-bottom:9px;}",
+      ".lumen-fx-auth-copy{color:#b8bcbf;font-size:13px;line-height:1.55;max-width:400px;}",
+      ".lumen-fx-auth-row{display:flex;gap:9px;justify-content:center;margin-top:20px;}",
+      ".lumen-fx-auth-btn{display:inline-flex;align-items:center;gap:8px;cursor:pointer;",
+      "font:600 13px 'Motiva Sans',Arial;color:#fff;background:#5865f2;border:1px solid #5865f2;",
+      "border-radius:3px;padding:9px 18px;text-decoration:none;transition:.12s;}",
+      ".lumen-fx-auth-btn svg{width:15px;height:15px;}",
+      ".lumen-fx-auth-btn:hover{background:#6b76f5;border-color:#6b76f5;}",
+      ".lumen-fx-auth-btn.ghost{background:transparent;border-color:#3d4450;color:#b8bcbf;}",
+      ".lumen-fx-auth-btn.ghost:hover{background:rgba(255,255,255,.06);color:#dcdedf;}",
+      ".lumen-fx-auth-note{margin-top:18px;color:#8f98a0;font-size:11.5px;line-height:1.5;max-width:400px;}",
+      ".lumen-fx-auth-alt{margin-top:14px;padding-top:13px;border-top:1px solid rgba(255,255,255,.06);",
+      "width:100%;text-align:center;}",
+      ".lumen-fx-auth-alt button{background:none;border:0;padding:0;color:#8f98a0;font:12px inherit;",
+      "text-decoration:underline;cursor:pointer;}",
+      ".lumen-fx-auth-alt button:hover{color:#66c0f4;}",
+      ".lumen-fx-auth-spin{width:19px;height:19px;border:2px solid rgba(102,192,244,.25);",
+      "border-top-color:#66c0f4;border-radius:50%;animation:lumen-rot .7s linear infinite;}",
     ].join("");
     (document.head || document.documentElement).appendChild(s);
   }
@@ -436,6 +551,173 @@
     (document.body || document.documentElement).appendChild(back);
   }
 
+  function fxOpenExternal(url) {
+    call("__lumenOpenExternalUrl", { url: url }).then(function (res) {
+      var p = fxParse(res);
+      if (!(p && p.ok)) {
+        try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {}
+      }
+    }).catch(function () {
+      try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {}
+    });
+  }
+
+  function showRyuuAuthHelp() {
+    var S = fxStrings();
+    injectFixesStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var modal = document.createElement("div");
+    modal.className = "lumen-modal lumen-ryuu-modal";
+
+    var title = document.createElement("div");
+    title.className = "lumen-ryuu-title";
+    title.textContent = S.ryuuHelpTitle;
+    var intro = document.createElement("div");
+    intro.className = "lumen-ryuu-copy";
+    intro.textContent = S.ryuuHelpIntro;
+    var steps = document.createElement("ol");
+    steps.className = "lumen-ryuu-steps";
+
+    var step1 = document.createElement("li");
+    step1.appendChild(document.createTextNode(S.ryuuHelpStep1 + " "));
+    var site = document.createElement("button");
+    site.type = "button";
+    site.className = "lumen-ryuu-site";
+    site.textContent = "generator.ryuu.lol/fixes";
+    site.addEventListener("click", function () {
+      fxOpenExternal("https://generator.ryuu.lol/fixes");
+    });
+    step1.appendChild(site);
+    [S.ryuuHelpStep2, S.ryuuHelpStep3, S.ryuuHelpStep4, S.ryuuHelpStep5].forEach(function (copy) {
+      var li = document.createElement("li");
+      li.textContent = copy;
+      steps.appendChild(li);
+    });
+    steps.insertBefore(step1, steps.firstChild);
+
+    var warning = document.createElement("div");
+    warning.className = "lumen-ryuu-safe";
+    warning.textContent = S.ryuuHelpWarning;
+    var row = document.createElement("div");
+    row.className = "mrow";
+    var ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "lumen-mbtn primary";
+    ok.textContent = "OK";
+    var close = function () { if (back.parentNode) back.remove(); };
+    ok.addEventListener("click", close);
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    row.appendChild(ok);
+    modal.appendChild(title); modal.appendChild(intro); modal.appendChild(steps);
+    modal.appendChild(warning); modal.appendChild(row); back.appendChild(modal);
+    (document.body || document.documentElement).appendChild(back);
+  }
+
+  function showRyuuAuthPrompt(onSaved) {
+    var old = document.getElementById("lumen-ryuu-auth");
+    if (old) old.remove();
+    var S = fxStrings();
+    injectFixesStyles();
+    var back = document.createElement("div");
+    back.id = "lumen-ryuu-auth";
+    back.className = "lumen-modal-back";
+    var modal = document.createElement("div");
+    modal.className = "lumen-modal lumen-ryuu-modal";
+
+    var title = document.createElement("div");
+    title.className = "lumen-ryuu-title";
+    var key = document.createElement("span");
+    key.className = "key";
+    key.innerHTML = FX_ICONS.key;
+    var titleText = document.createElement("span");
+    titleText.textContent = S.ryuuPromptTitle;
+    title.appendChild(key); title.appendChild(titleText);
+    var copy = document.createElement("div");
+    copy.className = "lumen-ryuu-copy";
+    copy.textContent = S.ryuuPromptBody;
+    var label = document.createElement("label");
+    label.className = "lumen-ryuu-label";
+    label.textContent = S.ryuuCredentialLabel;
+    var input = document.createElement("input");
+    input.className = "lumen-ryuu-input";
+    input.type = "password";
+    input.autocomplete = "off";
+    input.placeholder = S.ryuuCredentialPlaceholder;
+    label.appendChild(input);
+    var help = document.createElement("button");
+    help.type = "button";
+    help.className = "lumen-ryuu-help";
+    help.textContent = S.ryuuHowTo;
+    help.addEventListener("click", showRyuuAuthHelp);
+    var safe = document.createElement("div");
+    safe.className = "lumen-ryuu-safe";
+    safe.textContent = S.ryuuCredentialSafety;
+    var error = document.createElement("div");
+    error.className = "lumen-ryuu-error";
+    error.setAttribute("aria-live", "polite");
+    var row = document.createElement("div");
+    row.className = "mrow";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "lumen-mbtn";
+    cancel.textContent = S.cancel;
+    var save = document.createElement("button");
+    save.type = "button";
+    save.className = "lumen-mbtn primary";
+    save.textContent = S.ryuuSaveContinue;
+    var close = function () { if (back.parentNode) back.remove(); };
+    cancel.addEventListener("click", close);
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    var submit = function () {
+      if (save.disabled) return;
+      if (!input.value.trim()) {
+        error.textContent = S.ryuuCredentialEmpty;
+        error.style.display = "block";
+        input.focus();
+        return;
+      }
+      save.disabled = true;
+      save.textContent = S.ryuuSaving;
+      error.style.display = "none";
+      call("SaveRyuuAuthCredential", {
+        contentScriptQuery: "", credential: input.value,
+      }).then(function (res) {
+        var p = fxParse(res);
+        if (p && p.success && p.configured) {
+          input.value = "";
+          close();
+          if (typeof onSaved === "function") onSaved(p);
+          return;
+        }
+        error.textContent = (p && p.error) ? String(p.error) : S.ryuuSaveError;
+        error.style.display = "block";
+        save.disabled = false;
+        save.textContent = S.ryuuSaveContinue;
+      }).catch(function () {
+        error.textContent = S.ryuuSaveError;
+        error.style.display = "block";
+        save.disabled = false;
+        save.textContent = S.ryuuSaveContinue;
+      });
+    };
+    save.addEventListener("click", submit);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); submit(); }
+    });
+    row.appendChild(cancel); row.appendChild(save);
+    modal.appendChild(title); modal.appendChild(copy); modal.appendChild(label);
+    modal.appendChild(help); modal.appendChild(safe); modal.appendChild(error);
+    modal.appendChild(row); back.appendChild(modal);
+    (document.body || document.documentElement).appendChild(back);
+    setTimeout(function () { try { input.focus(); } catch (e) {} }, 0);
+  }
+
+  try {
+    window.__lumenShowRyuuAuthPrompt = showRyuuAuthPrompt;
+    window.__lumenShowRyuuAuthHelp = showRyuuAuthHelp;
+  } catch (e) {}
+
   function openFixesMenu() {
     if (document.getElementById(FX_OVERLAY_ID)) return;
     var appid = currentFixesAppId();
@@ -499,7 +781,8 @@
   // One fix tile. opts: { iconKey, off, danger, badge }.
   function fxTile(label, desc, opts, onClick) {
     var t = document.createElement("div");
-    t.className = "lumen-fx-tile" + (opts.danger ? " danger" : "") + (opts.off ? " off" : "");
+    t.className = "lumen-fx-tile" + (opts.danger ? " danger" : "") +
+      (opts.auth ? " auth" : "") + (opts.off ? " off" : "");
     var ic = document.createElement("div");
     ic.className = "ic";
     ic.innerHTML = FX_ICONS[opts.iconKey] || FX_ICONS.wrench;
@@ -516,7 +799,16 @@
     if (opts.badge) {
       var b = document.createElement("div");
       b.className = "lumen-fx-badge";
-      b.textContent = opts.badge;
+      // The key rides on the badge, next to the label — the tile icon stays put.
+      if (opts.badgeIcon && FX_ICONS[opts.badgeIcon]) {
+        var bic = document.createElement("span");
+        bic.className = "bic";
+        bic.innerHTML = FX_ICONS[opts.badgeIcon];
+        b.appendChild(bic);
+      }
+      var btext = document.createElement("span");
+      btext.textContent = opts.badge;
+      b.appendChild(btext);
       t.appendChild(b);
     }
     t.addEventListener("click", function (e) {
@@ -527,8 +819,216 @@
     return t;
   }
 
+  // The Fixes Menu body turns into the sign-in view: same panel, same banner, so
+  // the flow never becomes "window opens -> window closes -> panel vanished".
+  // On success it goes straight on with the download the user asked for.
+  var FX_AUTH_LIMIT = 180000; // give up polling after 3 minutes
+  var FX_AUTH_TICK = 2500;
+
+  function fxRenderAuthView(win, body, appid, ctx, fixes, gameName, proceed) {
+    var S = fxStrings();
+    var polling = false;    // the poll loop is live
+    var abandoned = false;  // the user left this view; never resume behind them
+    body.innerHTML = "";
+    fxKeepBodyHeight(body, true);
+
+    var wrap = document.createElement("div");
+    wrap.className = "lumen-fx-auth";
+    var icon = document.createElement("div");
+    icon.className = "lumen-fx-auth-ic";
+    icon.innerHTML = FX_ICONS.key;
+    var title = document.createElement("div");
+    title.className = "lumen-fx-auth-ttl";
+    title.textContent = S.authViewTitle;
+    var copy = document.createElement("div");
+    copy.className = "lumen-fx-auth-copy";
+    copy.textContent = S.authViewBody;
+    var row = document.createElement("div");
+    row.className = "lumen-fx-auth-row";
+    var note = document.createElement("div");
+    note.className = "lumen-fx-auth-note";
+    note.textContent = S.authViewNote;
+    var alt = document.createElement("div");
+    alt.className = "lumen-fx-auth-alt";
+    var manual = document.createElement("button");
+    manual.type = "button";
+    manual.textContent = S.authManual;
+    manual.addEventListener("click", function () {
+      showRyuuAuthPrompt(function () { abandoned = true; polling = false; proceed(); });
+    });
+    alt.appendChild(manual);
+    wrap.appendChild(icon); wrap.appendChild(title); wrap.appendChild(copy);
+    wrap.appendChild(row); wrap.appendChild(note); wrap.appendChild(alt);
+    body.appendChild(wrap);
+
+    var back = function () {
+      abandoned = true;
+      polling = false;
+      call("__lumenRyuuLoginClose", {}).catch(function () {});
+      fxRenderMenu(win, body, appid, ctx, fixes, gameName);
+    };
+
+    var button = function (label, iconKey, ghost, onClick) {
+      var b = document.createElement("a");
+      b.href = "#";
+      b.className = "lumen-fx-auth-btn" + (ghost ? " ghost" : "");
+      if (iconKey && FX_ICONS[iconKey]) {
+        var ic = document.createElement("span");
+        ic.innerHTML = FX_ICONS[iconKey];
+        ic.style.cssText = "display:inline-flex;align-items:center;";
+        b.appendChild(ic);
+      }
+      var text = document.createElement("span");
+      text.textContent = label;
+      b.appendChild(text);
+      b.addEventListener("click", function (e) { e.preventDefault(); onClick(); });
+      return b;
+    };
+
+    var setIcon = function (variant, markup) {
+      icon.className = "lumen-fx-auth-ic" + (variant ? " " + variant : "");
+      icon.innerHTML = markup;
+    };
+
+    var render = {};
+
+    render.intro = function () {
+      setIcon("", FX_ICONS.key);
+      title.textContent = S.authViewTitle;
+      copy.textContent = S.authViewBody;
+      note.style.display = "";
+      alt.style.display = "";
+      row.innerHTML = "";
+      row.appendChild(button(S.authSignIn, "discord", false, start));
+      row.appendChild(button(S.cancel, null, true, back));
+    };
+
+    // Game Mode / Big Picture: a notice, not a form. Nothing to type, nothing to
+    // poll — just where to do it instead (see fixesGameModeNotice).
+    render.gameMode = function () {
+      var notice = fixesGameModeNotice(S);
+      setIcon("", FX_ICONS.key);
+      title.textContent = notice.title;
+      copy.textContent = notice.copy;
+      note.style.display = "none";
+      alt.style.display = "none";
+      row.innerHTML = "";
+      row.appendChild(button(notice.buttons[0], null, false, back));
+    };
+
+    render.opening = function () {
+      setIcon("busy", '<div class="lumen-fx-auth-spin"></div>');
+      title.textContent = S.authOpening;
+      copy.textContent = S.authOpeningHint;
+      note.style.display = "none";
+      alt.style.display = "none";
+      row.innerHTML = "";
+    };
+
+    render.waiting = function () {
+      setIcon("busy", '<div class="lumen-fx-auth-spin"></div>');
+      title.textContent = S.authWaiting;
+      copy.textContent = S.authWaitingHint;
+      note.style.display = "none";
+      alt.style.display = "";
+      row.innerHTML = "";
+      row.appendChild(button(S.cancel, null, true, back));
+    };
+
+    render.done = function () {
+      setIcon("done", FX_ICONS.check || FX_ICONS.key);
+      title.textContent = S.authDone;
+      copy.textContent = S.authDoneHint;
+      note.style.display = "none";
+      alt.style.display = "none";
+      row.innerHTML = "";
+    };
+
+    render.failed = function (message) {
+      setIcon("bad", FX_ICONS.key);
+      title.textContent = S.authFailed;
+      copy.textContent = message || S.authFailedHint;
+      note.style.display = "none";
+      alt.style.display = "";
+      row.innerHTML = "";
+      row.appendChild(button(S.authRetry, "discord", false, start));
+      row.appendChild(button(S.cancel, null, true, back));
+    };
+
+    var finish = function () {
+      call("__lumenRyuuLoginClose", {}).catch(function () {});
+      if (fixes.crackFix) fixes.crackFix.authConfigured = true;
+      render.done();
+      // Let the success state be readable before the download takes the panel.
+      setTimeout(function () { if (!abandoned) proceed(); }, 900);
+    };
+
+    var poll = function (startedAt) {
+      if (!polling || abandoned) return;
+      call("__lumenRyuuLoginPoll", {}).then(fxParse).catch(function () { return null; })
+        .then(function (p) {
+          if (!polling || abandoned) return;
+          var state = fixesAuthViewState(p, Date.now() - startedAt, FX_AUTH_LIMIT);
+          if (state === "configured") { polling = false; finish(); return; }
+          if (state === "error") { polling = false; render.failed(p && p.error); return; }
+          if (state === "timeout") { polling = false; render.failed(S.authTimeout); return; }
+          setTimeout(function () { poll(startedAt); }, FX_AUTH_TICK);
+        });
+    };
+
+    function start() {
+      polling = true;
+      abandoned = false;
+      render.opening();
+      call("__lumenRyuuLoginOpen", {}).then(fxParse).catch(function () { return null; })
+        .then(function (p) {
+          if (abandoned) return;
+          if (!(p && p.ok)) {
+            polling = false;
+            var reason = p && p.reason;
+            render.failed(reason === "unsupported" ? S.authUnsupported : S.authOpenFailed);
+            return;
+          }
+          render.waiting();
+          setTimeout(function () { poll(Date.now()); }, FX_AUTH_TICK);
+        });
+    }
+
+    render.intro();
+    // Ask the backend whether this shell can host the sign-in at all. Default to
+    // the guided flow while the answer is in flight; only downgrade on a clear no.
+    call("__lumenRyuuLoginAvailable", {}).then(fxParse).catch(function () { return null; })
+      .then(function (p) {
+        if (p && p.ok && p.available === false && !abandoned) render.gameMode();
+      });
+  }
+
+  // The rendered result set, so the poll loop can invalidate the stored-session
+  // flag when Ryuu rejects it (fxPoll has no access to fxRenderMenu's scope).
+  var fxLastFixes = null;
+
+  // Freeze the body at the height the tile grid gave it, and release it when the
+  // grid comes back. Without this the panel resizes every time a view is swapped
+  // in (the sign-in view is ~80px taller than the grid), which reads as the whole
+  // window jumping and sitting off-centre.
+  function fxKeepBodyHeight(body, keep) {
+    if (!body) return;
+    try {
+      if (keep) {
+        var base = Number(body.getAttribute("data-lumen-base-h")) || 0;
+        if (base > 0) body.style.minHeight = base + "px";
+        body.classList.add("centred");
+      } else {
+        body.style.minHeight = "";
+        body.classList.remove("centred");
+      }
+    } catch (e) {}
+  }
+
   function fxRenderMenu(win, body, appid, ctx, fixes, gameName) {
     var S = fxStrings();
+    fxLastFixes = fixes;
+    fxKeepBodyHeight(body, false);
     var installed = !!ctx.isInstalled;
     var underProton = !!ctx.runsUnderProton;
     var crackStatus = (fixes.crackFix && fixes.crackFix.status) || 0;
@@ -556,12 +1056,20 @@
     // On a native-Linux game the Windows crack/online fix won't take effect, so
     // mark the tile UNAVAILABLE (dimmed + badge) with the amber reason in the
     // description — it becomes available once the user forces a Proton tool.
-    var crackNative = crackAvail && isNative;
-    var crackOff = !crackAvail || isNative;
-    grid.appendChild(fxTile(S.crackLabel, crackNative ? S.nativeWarnShort : S.crackDesc,
-      { iconKey: "wrench", off: crackOff, badge: crackOff ? S.unavailable : null, warn: crackNative },
+    var crackState = fixesCrackCardState(fixes.crackFix, installed, isNative, S);
+    grid.appendChild(fxTile(S.crackLabel, crackState.desc,
+      { iconKey: crackState.iconKey, off: crackState.off,
+        badge: crackState.badge, badgeIcon: crackState.badgeIcon,
+        warn: crackState.warn, auth: crackState.needsAuth },
       function () {
         if (!crackUrl) { fxAlert(S.crackNone); return; }
+        if (crackState.needsAuth) {
+          // Turn the panel into the sign-in view instead of stacking a modal.
+          fxRenderAuthView(win, body, appid, ctx, fixes, gameName, function () {
+            protonGate(function () { fxApply(appid, crackUrl, S.crackLabel, ctx, win); });
+          });
+          return;
+        }
         protonGate(function () { fxApply(appid, crackUrl, S.crackLabel, ctx, win); });
       }));
 
@@ -609,6 +1117,14 @@
       }));
 
     body.appendChild(grid);
+    // Record the grid's natural height so swapped-in views can reuse the box.
+    setTimeout(function () {
+      try {
+        if (!body.style.minHeight && body.offsetHeight > 0) {
+          body.setAttribute("data-lumen-base-h", String(body.offsetHeight));
+        }
+      } catch (e) {}
+    }, 0);
 
     if (!installed) {
       var note = document.createElement("div");
@@ -646,6 +1162,27 @@
     win.appendChild(f);
   }
 
+  // Footer for an expired Ryuu session: Close plus a primary action that
+  // collects a fresh credential and restarts the same download.
+  function fxFooterReauth(win, onRetry) {
+    fxFooterClose(win);
+    var f = win.querySelector(".lumen-fx-foot");
+    if (!f) return;
+    var close = f.querySelector(".lumen-fx-btn");
+    if (close) close.className = "lumen-fx-btn secondary";
+    var a = document.createElement("a");
+    a.href = "#";
+    a.className = "lumen-fx-btn";
+    a.textContent = fxStrings().ryuuUpdateAuth;
+    a.addEventListener("click", function (e) {
+      e.preventDefault();
+      showRyuuAuthPrompt(function () {
+        if (typeof onRetry === "function") onRetry();
+      });
+    });
+    f.appendChild(a);
+  }
+
   // AIO / SpaceFix — FakeAppId 480, no download, no Proton gate.
   function fxApplySpace(appid) {
     var S = fxStrings();
@@ -671,7 +1208,13 @@
       var p = fxParse(res);
       if (p && p.success) {
         fxShowProgress(win, fixType);
-        fxPoll(appid, fixType, ctx, win);
+        fxPoll(appid, url, fixType, ctx, win);
+      } else if (fixesAuthExpired(p)) {
+        // The tile believed a credential existed but the backend found none
+        // (removed elsewhere, or cleared after a rejected session).
+        showRyuuAuthPrompt(function () {
+          fxApply(appid, url, fixType, ctx, win);
+        });
       } else {
         fxAlert((p && p.error) ? String(p.error) : S.applyErr);
       }
@@ -682,6 +1225,8 @@
     var S = fxStrings();
     var body = win.querySelector(".lumen-fx-body");
     if (!body) return;
+    // Same frozen box as the grid and the sign-in view, so the panel holds still.
+    fxKeepBodyHeight(body, true);
     body.innerHTML =
       '<div class="lumen-fx-status"><div class="lumen-fx-msg" id="lumen-fx-pmsg"></div>' +
       '<div class="lumen-fx-pbar"><i></i></div></div>';
@@ -690,7 +1235,7 @@
     if (f) f.remove();
   }
 
-  function fxPoll(appid, fixType, ctx, win) {
+  function fxPoll(appid, url, fixType, ctx, win) {
     var S = fxStrings();
     var poll = function () {
       if (!document.getElementById(FX_OVERLAY_ID)) return; // closed
@@ -715,6 +1260,18 @@
           fxApplyOverrides(appid, ctx, win);
           fxFooterClose(win);
         } else if (st.status === "failed") {
+          if (fixesAuthExpired(st)) {
+            // The backend cleared the stored session, so the tile must show
+            // "needs auth" again when the user goes back to the grid.
+            if (fxLastFixes && fxLastFixes.crackFix) {
+              fxLastFixes.crackFix.authConfigured = false;
+            }
+            if (msg) msg.textContent = S.ryuuAuthExpired;
+            fxFooterReauth(win, function () {
+              fxApply(appid, url, fixType, ctx, win);
+            });
+            return;
+          }
           if (msg) msg.textContent = S.failed.replace("{error}", st.error || S.unknownError);
           fxFooterClose(win);
         } else if (st.status === "cancelled") {

@@ -87,6 +87,8 @@ local ALLOWLIST = {
   "StartAddViaLuaToolsSmart",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
   "DeleteManifest","ClearManifests",
+  "GetRyuuAuthStatus","SaveRyuuAuthCredential","ClearRyuuAuthCredential",
+  "AdoptRyuuSessionValue",
 }
 
 local present = {}

@@ -2,6 +2,11 @@
 // LM-FRAGMENT source fragment of lumen_menu, assembled in order into ONE IIFE
 // LM-FRAGMENT by boot.lua (read_menu_js). Not a standalone module. See 01-core.js.
 
+  function ryuuConfiguredFromStatus(status) {
+    return !!(status && status.success && status.configured === true);
+  }
+  try { window.__lumenRyuuConfiguredFromStatus = ryuuConfiguredFromStatus; } catch (e) {}
+
   function makeRow(entry, value, S, onChange) {
     var row = document.createElement("div");
     row.className = "lumen-row";
@@ -173,4 +178,76 @@
         }
       })
       .catch(function () {});
+
+    // Ryuu bearer credentials are managed by dedicated RPCs. The raw value is
+    // deliberately never returned to this JavaScript context.
+    var keyRow = document.createElement("div");
+    keyRow.className = "lumen-row";
+    keyRow.style.display = "none"; // plugin backend may be absent (--noplugin)
+    var keyWrap = document.createElement("div");
+    keyWrap.className = "lumen-lblwrap";
+    var keyLbl = document.createElement("div");
+    keyLbl.className = "lbl";
+    keyLbl.textContent = P.ryuuKeyLabel;
+    var keyDesc = document.createElement("div");
+    keyDesc.className = "lumen-desc";
+    keyDesc.textContent = P.ryuuKeyDesc;
+    var keyState = document.createElement("div");
+    keyState.className = "lumen-auth-state";
+    keyWrap.appendChild(keyLbl);
+    keyWrap.appendChild(keyDesc);
+    keyWrap.appendChild(keyState);
+    keyRow.appendChild(keyWrap);
+
+    var keyCtrl = document.createElement("span");
+    keyCtrl.className = "lumen-ctrl lumen-key-ctrl";
+    var keyConfigure = document.createElement("button");
+    keyConfigure.type = "button";
+    keyConfigure.className = "lumen-cloud-btn";
+    var keyRemove = document.createElement("button");
+    keyRemove.type = "button";
+    keyRemove.className = "lumen-cloud-btn secondary";
+    keyRemove.textContent = P.ryuuRemove;
+    var configured = false;
+
+    var renderAuthState = function (on) {
+      configured = !!on;
+      keyState.textContent = configured ? P.ryuuConfigured : P.ryuuNotConfigured;
+      keyState.className = "lumen-auth-state" + (configured ? " configured" : "");
+      keyConfigure.textContent = configured ? P.ryuuReplace : P.ryuuConfigure;
+      keyRemove.style.display = configured ? "" : "none";
+    };
+    var refreshAuthState = function () {
+      call("GetRyuuAuthStatus", {})
+        .then(function (res) {
+          var p; try { p = JSON.parse(res); } catch (e) {}
+          if (p && p.success) {
+            renderAuthState(ryuuConfiguredFromStatus(p));
+            keyRow.style.display = "";
+          }
+        })
+        .catch(function () {});
+    };
+    keyConfigure.addEventListener("click", function () {
+      if (typeof window.__lumenShowRyuuAuthPrompt === "function") {
+        window.__lumenShowRyuuAuthPrompt(function () { renderAuthState(true); });
+      }
+    });
+    keyRemove.addEventListener("click", function () {
+      keyRemove.disabled = true;
+      call("ClearRyuuAuthCredential", { contentScriptQuery: "" })
+        .then(function (res) {
+          var p; try { p = JSON.parse(res); } catch (e) {}
+          if (p && p.success) renderAuthState(false);
+          keyRemove.disabled = false;
+        })
+        .catch(function () { keyRemove.disabled = false; });
+    });
+    keyCtrl.appendChild(keyConfigure);
+    keyCtrl.appendChild(keyRemove);
+    keyRow.appendChild(keyCtrl);
+    body.appendChild(keyRow);
+
+    renderAuthState(false);
+    refreshAuthState();
   }
