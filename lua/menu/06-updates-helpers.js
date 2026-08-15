@@ -341,90 +341,15 @@
     };
   }
 
-  // Prompt shown when a build is pinned for an ALREADY-INSTALLED game. A verify
-  // can't switch the installed build to the pin (Steam computes a zero delta and
-  // keeps the current files), so the only reliable way is to uninstall and
-  // reinstall fresh. Offers Steam's own uninstall flow; the pin is already
-  // saved, so a later reinstall comes down at the pinned build. Relayed into
-  // SharedJSContext via injector __lumenUninstallApp.
-  // A non-dismissable loading modal (spinner + message) shown for `ms`, then it
-  // auto-closes and runs `cb`. Used to bridge an action whose real completion we
-  // can't observe (e.g. Steam's own native uninstall dialog) so the next modal
-  // doesn't pop instantly on top of it.
-  function showLoadingThen(message, ms, cb) {
-    injectStyles();
-    var back = document.createElement("div");
-    back.className = "lumen-modal-back";
-    var card = document.createElement("div");
-    card.className = "lumen-modal";
-    card.style.cssText = "display:flex;align-items:center;gap:14px;";
-    var sp = document.createElement("span");
-    sp.className = "lumen-spin";
-    var tx = document.createElement("div");
-    tx.className = "mb";
-    tx.style.margin = "0";
-    tx.textContent = message;
-    card.appendChild(sp); card.appendChild(tx);
-    back.appendChild(card);
-    (document.body || document.documentElement).appendChild(back);
-    setTimeout(function () {
-      if (back.parentNode) back.remove();
-      if (cb) cb();
-    }, ms || 3000);
-  }
-
-  function showUninstallPrompt(appid, applyPin) {
-    var GU = guStrings();
-    injectStyles();
-    var back = document.createElement("div");
-    back.className = "lumen-modal-back";
-    var card = document.createElement("div");
-    card.className = "lumen-modal";
-    var t = document.createElement("div");
-    t.className = "mt";
-    t.textContent = GU.uninstallTitle;
-    var b = document.createElement("div");
-    b.className = "mb";
-    b.textContent = GU.uninstallBody;
-    var row = document.createElement("div");
-    row.className = "mrow";
-    var close = function () { if (back.parentNode) back.remove(); };
-    var decline = document.createElement("button");
-    decline.className = "lumen-mbtn";
-    decline.textContent = GU.uninstallDecline;
-    // "Not now"/dismiss CANCELS the pin: applyPin is never called, so the
-    // selection stays on the previous build (no half-applied pin).
-    decline.addEventListener("click", function (e) { e.stopPropagation(); close(); });
-    var confirm = document.createElement("button");
-    confirm.className = "lumen-mbtn primary";
-    confirm.textContent = GU.uninstallConfirm;
-    confirm.addEventListener("click", function (e) {
-      e.stopPropagation();
-      close();
-      // Only now that the user committed to uninstalling do we write the pin,
-      // then drive the uninstall + restart flow. Steam's own uninstall dialog
-      // isn't observable from here and can take a moment on a slower PC, so a
-      // short loading modal bridges to the restart prompt instead of popping it
-      // instantly over (or behind) the native dialog.
-      Promise.resolve(applyPin ? applyPin() : null).then(function () {
-        call("__lumenUninstallApp", { appid: appid }).catch(function (err) { log("uninstall", err); });
-        // The pin applies live (slsteam-moon's reconcile hook reads the config
-        // on the fly), so no Steam restart is needed: once the uninstall
-        // finishes, reinstalling brings the pinned build. A short loading modal
-        // bridges Steam's own (unobservable) uninstall dialog before the hint.
-        showLoadingThen(GU.uninstallWait, 3500, function () {
-          showConfirm({
-            title: GU.uninstallReinstallTitle, body: GU.uninstallReinstallBody,
-            confirmText: GU.restartOk,
-          });
-        });
-      }).catch(function (err) { log("apply-before-uninstall", err); });
-    });
-    back.addEventListener("click", function (e) { if (e.target === back) close(); });
-    row.appendChild(decline); row.appendChild(confirm);
-    card.appendChild(t); card.appendChild(b); card.appendChild(row);
-    back.appendChild(card);
-    (document.body || document.documentElement).appendChild(back);
+  // Save a build selection first, then offer validation only when switching an
+  // installed game to a different build. If saving fails, keep the current UI
+  // and do not offer an action that would validate the wrong selection.
+  function applyPinForInstalledGame(appid, applyPin, shouldValidate) {
+    return Promise.resolve(applyPin ? applyPin() : null)
+      .then(function () {
+        if (shouldValidate) showValidatePrompt(appid);
+      })
+      .catch(function (err) { log("apply-pin", err); });
   }
 
   // Pinning a build for a NOT-installed game now takes effect LIVE: slsteam-moon

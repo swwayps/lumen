@@ -112,19 +112,14 @@
         var row = verRow({
           label: fmtDate(v.date), gid: v.gid, selected: isSelected, badges: badges,
           onClick: function () {
-            // Write the pin (and move the selection) ONLY if the user follows
-            // through the modal; "Not now"/"Later"/dismiss cancels it and the
-            // previous selection stands.
             var applyPin = function () {
               return call("SetDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot, gid: v.gid }) })
-                .then(function () { invalidateGameUpdatesCache(); select(row); })
-                .catch(function (e) { log("SetDlcPin", e); });
+                .then(function () { invalidateGameUpdatesCache(); select(row); });
             };
             if (isGameInstalled(game)) {
-              if (v.installed) applyPin();                      // already on this gid
-              else showUninstallPrompt(game.appid, applyPin);   // confirm uninstall first
+              applyPinForInstalledGame(game.appid, applyPin, !v.installed);
             } else {
-              showPinRestartPrompt(applyPin);                   // confirm restart first
+              showPinRestartPrompt(applyPin);
             }
           },
         });
@@ -293,19 +288,14 @@
       var row = verRow({
         label: fmtDate(b.date), selected: isSelected, badges: badges,
         onClick: function () {
-          // Write the pin (and lock/move the selection) ONLY if the user follows
-          // through the modal; "Not now"/"Later"/dismiss cancels it and the
-          // previous selection stands (no half-applied pin).
           var applyPin = function () {
             return call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
-              .then(function () { invalidateGameUpdatesCache(); select(row); setLocked(true); })
-              .catch(function (e) { log("SetGamePin", e); });
+              .then(function () { invalidateGameUpdatesCache(); select(row); setLocked(true); });
           };
           if (isGameInstalled(game)) {
-            if (b.installed) applyPin();                       // already on this build
-            else showUninstallPrompt(game.appid, applyPin);    // confirm uninstall first
+            applyPinForInstalledGame(game.appid, applyPin, !b.installed);
           } else {
-            showPinRestartPrompt(applyPin);                    // confirm restart first
+            showPinRestartPrompt(applyPin);
           }
         },
       });
