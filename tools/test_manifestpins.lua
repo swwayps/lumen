@@ -955,6 +955,49 @@ do
 end
 
 -- ── 15. InspectLua: read-only pre-check for the Load-.lua flow ────────────
+-- Recommended LuaTools installs use the same app-scoped ManifestPins contract
+-- as Game Updates, but must not be marked as a manual "Import games" title.
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local stplug = root .. "/stplug-in"; mkdir(stplug)
+  local cfg = root .. "/config.yaml"
+  local imports = root .. "/imports.txt"
+  local cf = assert(io.open(cfg, "wb"))
+  cf:write("AdditionalApps:\n  - 3764200\nLogLevel: 2\n"); cf:close()
+  local ctx = {
+    config_path = cfg,
+    stplug_dir = stplug,
+    imports_path = imports,
+  }
+  local recommended_lua = table.concat({
+    "-- official LuaTools manifest",
+    "addappid(3764200)",
+    'addappid(3764201, 1, "' .. string.rep("a", 64) .. '")',
+    'setManifestid(3764201, "9166256367562763038")',
+  }, "\n") .. "\n"
+
+  local ok, result = mp.install_luatools_manifest(ctx, 3764200, recommended_lua)
+  check(ok == true, "recommended: Lua and pins publish atomically")
+  eq(result and result.pinned, 1, "recommended: reports one pinned depot")
+  local installed = io.open(stplug .. "/3764200.lua", "rb")
+  check(installed ~= nil, "recommended: official Lua is installed")
+  if installed then
+    local body = installed:read("*a"); installed:close()
+    eq(body, recommended_lua, "recommended: official Lua body is preserved")
+  end
+  local rf = assert(io.open(cfg, "rb")); local body = rf:read("*a"); rf:close()
+  local pins = mp.parse_pins(body)
+  check(pins[3764200] and pins[3764200].locked == true,
+    "recommended: app is locked before Steam plans installation")
+  eq(pins[3764200] and pins[3764200].depots[3764201],
+    "9166256367562763038", "recommended: setManifestid becomes ManifestPins")
+  check(io.open(imports, "rb") == nil,
+    "recommended: title is not marked as a manual Import games entry")
+
+  os.execute("rm -rf '" .. root .. "'")
+end
+
 -- The top "Load .lua" button must decide between a plain import and the
 -- reinstall-confirm modal BEFORE writing anything, so it needs the .lua's base
 -- appid and whether the game is currently installed (appmanifest present).

@@ -2457,6 +2457,47 @@ function mp.sync_game_pins_rpc(ctx, json_str)
   return json.encode({ success = true, appid = appid, pinned = count })
 end
 
+-- Atomically install an official LuaTools manifest and synchronize every
+-- setManifestid declaration into the app-scoped ManifestPins map. This is the
+-- backend contract used by the recommended-version Add flow: Steam must see
+-- both the depot keys and the locked target gids before its next install plan.
+-- Unlike ImportLuaFull, this does not mark the title as a manual file import.
+function mp.install_luatools_manifest(ctx, requested_appid, text)
+  ctx = ctx or mp.default_ctx()
+  if type(text) ~= "string" then return false, "bad manifest" end
+  local requested = positive_id(requested_appid)
+  local _, parsed, import_err = canonicalize_import_lua(ctx, text, requested)
+  if not parsed then return false, import_err end
+  local appid = parsed.base
+  if not appid then return false, "could not determine app id from .lua" end
+
+  local depot_gids, count = {}, 0
+  for depot, info in pairs(parsed.depots) do
+    if info.manifestid then
+      depot_gids[depot] = info.manifestid
+      count = count + 1
+    end
+  end
+
+  local cfg = read_file(ctx.config_path)
+  if not looks_like_config(cfg) then
+    return false, "config.yaml not found or invalid"
+  end
+  local pins = mp.parse_pins(cfg)
+  if count > 0 then mp.set_game_pin(pins, appid, depot_gids)
+  else mp.clear_game_pin(pins, appid) end
+  if not mkdir_p(ctx.stplug_dir) then
+    return false, "could not create stplug-in directory"
+  end
+  local published, publish_err = publish_import({
+    { path = ctx.stplug_dir .. "/" .. tostring(appid) .. ".lua", data = text },
+    { path = ctx.config_path, data = mp.splice_pins(cfg, pins) },
+  })
+  if not published then return false, publish_err end
+  mp.invalidate_appinfo_cache(ctx, appid)
+  return true, { appid = appid, pinned = count }
+end
+
 -- ImportLuaFull{appid?, lua}: import a LuaTools .lua for a game NOT yet added
 -- via the LuaTools plugin. Writes the .lua to stplug-in/<appid>.lua (depot
 -- keys) — the canonical registration slsteam-moon discovers from the filename

@@ -39,6 +39,7 @@ class El {
   addEventListener(type, handler) {
     (this.listeners[type] = this.listeners[type] || []).push(handler);
   }
+  setAttribute(name, value) { this[name] = String(value); }
   click() {
     (this.listeners.click || []).forEach((handler) => handler({
       target: this,
@@ -94,7 +95,7 @@ function run(restartResponse, options = {}) {
   root.appendChild(body);
   const calls = [];
   const confirms = [];
-  const window = { __lumenCloud: options.cloud !== false };
+  const window = { __lumenCloud: options.cloud !== false, __lumenNoPlugin: true };
   const document = {
     body,
     documentElement: root,
@@ -119,7 +120,7 @@ function run(restartResponse, options = {}) {
     "(function(){",
     "var OVERLAY_ID='lumen-overlay';",
     "var I18N={en:" + JSON.stringify(strings) + "};",
-    "var MOON_SVG='', GU_SVG='', CLOUD_SVG='', ABOUT_SVG='';",
+    "var MOON_SVG='', GU_SVG='', CLOUD_SVG='', ABOUT_SVG='', LUA_TOOLS_FIXES_SVG='', LUA_TOOLS_BACK_SVG='';",
     "var _guClearBtnRef=null;",
     "function pickLang(){return 'en';}",
     "function injectStyles(){}",
@@ -127,6 +128,7 @@ function run(restartResponse, options = {}) {
     "function closeOverlay(){}",
     "function guStrings(){return {tab:'Game Updates',title:'Game Updates',experimental:'Experimental',experimentalHint:'',clearManifests:'Clear',clearHint:'',clearConfirm:'Confirm',clearFail:'Failed'};}",
     "function cloudStrings(){return {tab:'Cloud',title:'Cloud'};}",
+    "function luaToolsStrings(){return {fixesTab:'Fixes',accountTitle:'Account',back:'Back'};}",
     "function renderConfig(body){body.textContent='CONFIG';}",
     "function renderGameUpdates(body){body.textContent='UPDATES LOADING';call('GetGameUpdates',{}).then(function(){body.textContent='UPDATES';});}",
     "function reloadGameUpdates(body){renderGameUpdates(body);}",

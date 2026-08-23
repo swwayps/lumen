@@ -52,14 +52,9 @@
   function makeButton() {
     var b = document.createElement("div");
     b.id = BTN_ID;
-    b.textContent = MOON;
-    b.title = "Lumen settings";
+    decorateAutoFixButton(b);
     b.addEventListener("click", function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      // Broadcast so the overlay opens in whichever view is on top (store /
-      // community web views composite above this menubar window).
-      requestOpen();
+      handleMoonButtonClick(e);
     });
     return b;
   }
@@ -75,6 +70,7 @@
     while (helpWrapper && helpWrapper.parentElement !== bar) helpWrapper = helpWrapper.parentElement;
     if (helpWrapper && helpWrapper.nextSibling) bar.insertBefore(btn, helpWrapper.nextSibling);
     else bar.appendChild(btn);
+    startMoonPillBootMessage();
     return true;
   }
 

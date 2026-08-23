@@ -60,11 +60,17 @@ local ALLOWLIST = {
   "HasLuaToolsForApp","OpenExternalUrl","OpenGameFolder","ReadLoadedApps",
   "RemoveApi","RenameApi","ReorderApis","RestartSteam","ToggleApi","UnFixGame",
   "SearchSteamGames","StartAddViaLuaTools",
-  "StartAddViaLuaToolsSmart","StartGameDraft",
+  "StartAddViaLuaToolsSmart","StartAddViaLuaToolsSource","StartGameDraft",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
   "DeleteManifest","ClearManifests",
   "GetRyuuAuthStatus","SaveRyuuAuthCredential","ClearRyuuAuthCredential",
   "AdoptRyuuSessionValue",
+  "GetLuaToolsAuthStatus","LoginLuaToolsWithCode","StartLuaToolsDiscordLogin",
+  "PollLuaToolsDiscordLogin","CancelLuaToolsDiscordLogin","LogoutLuaTools",
+  "AdoptLuaToolsSessionValue",
+  "GetLuaToolsFixesCatalogue","GetLuaToolsFixesForGame","GetLuaToolsAddRecommendation",
+  "StartLuaToolsRecommendedAdd","StartLuaToolsFix",
+  "CompleteLuaToolsFixApply",
 }
 
 local present = {}
@@ -216,6 +222,11 @@ local gamepad_toast_js = utils.read_file(lua_dir .. "/gamepad-toasts.js")
 if not gamepad_toast_js then
   io.stderr:write("[lumen] WARN: gamepad toast bridge not found\n")
 end
+local auto_fix_launch_guard_js = utils.read_file(
+  lua_dir .. "/auto-fix-launch-guard.js")
+if not auto_fix_launch_guard_js then
+  io.stderr:write("[lumen] WARN: auto-fix launch guard not found\n")
+end
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
 -- split into ordered source fragments under menu/ (one concern per file) for
@@ -228,7 +239,8 @@ end
 local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
-  "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "12-cloud-tab.js",
+  "08-about-tab.js", "09-luatools-account.js", "09-overlay.js",
+  "10-auto-fix-status.js", "10-fixes-menu.js", "12-cloud-tab.js",
   "13-sls-check.js", "11-menubar.js",
 }
 
@@ -301,6 +313,7 @@ offers_assets = {
   js = parental_unlock_enabled and { SPECIAL_OFFERS_UNLOCK_JS } or {},
 }
 local notifyqueue = require("notifyqueue")
+local plugin_tick = require("plugintick").new(lifecycle, { interval = 5 })
 local next_notify_poll = 0
 loop.run({
   registry = registry,
@@ -313,9 +326,17 @@ loop.run({
     -- also renders queued service alerts inside Gamepad UI.
     { titles = { ["SharedJSContext"] = true }, control = true,
       assets = { polyfill = nil, css = {},
-        js = gamepad_toast_js and { gamepad_toast_js } or {} } },
+        js = {
+          gamepad_toast_js,
+          auto_fix_launch_guard_js,
+        } } },
   },
   on_tick = function(inj, now)
+    local plugin_result = plugin_tick:run(now, inj)
+    if type(plugin_result) == "table" and plugin_result.success == false then
+      io.stderr:write("[lumen] plugin background tick failed: "
+        .. tostring(plugin_result.error or plugin_result.errorCode or "unknown") .. "\n")
+    end
     if now < next_notify_poll then return end
     next_notify_poll = now + 0.25
     local events = notifyqueue.drain()

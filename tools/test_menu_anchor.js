@@ -22,7 +22,7 @@ const MENU_DIR = path.join(__dirname, "..", "lua", "menu");
 const PARTS = [
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
-  "08-about-tab.js", "09-overlay.js", "10-fixes-menu.js", "12-cloud-tab.js",
+  "08-about-tab.js", "09-overlay.js", "10-auto-fix-status.js", "10-fixes-menu.js", "12-cloud-tab.js",
   "13-sls-check.js", "11-menubar.js",
 ];
 const SOURCE = PARTS.map((p) => fs.readFileSync(path.join(MENU_DIR, p), "utf8")).join("\n");
@@ -39,6 +39,7 @@ class El {
     this.title = "";
     this.className = "";
     this.style = {};
+    this.attributes = {};
     this.classList = { add() {}, remove() {}, toggle() {} };
     this._listeners = {};
   }
@@ -76,6 +77,8 @@ class El {
   get lastElementChild() { const c = this.children; return c[c.length - 1] || null; }
   addEventListener(t, fn) { (this._listeners[t] = this._listeners[t] || []).push(fn); }
   removeEventListener() {}
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name]; }
   querySelectorAll() { return walk(this); }
 }
 

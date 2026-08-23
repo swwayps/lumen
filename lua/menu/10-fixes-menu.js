@@ -36,6 +36,7 @@
   var FX_SPACER_ID = "lumen-fixes-spacer";
   var FX_OVERLAY_ID = "lumen-fixes-overlay";
   var FX_STYLE_ID = "lumen-fixes-styles";
+  var FX_FALLBACK_RECEIPT_KIND = "online_fix_fallback";
 
   // The icon cluster we tightened (see ensureFixesButton): keep a handle + its
   // original left margin so removing the entry restores Steam's spacing.
@@ -51,8 +52,18 @@
     window.__lumenFixesMenuEnabled = true;
   }
 
-  // Inline icons (currentColor) — FontAwesome isn't loaded in the shell context.
+  // Inline brand/action icons (currentColor) — no icon font is loaded here.
   var FX_ICONS = {
+    luatools: '<svg viewBox="0 0 24 24" width="100%" height="100%" shape-rendering="geometricPrecision" aria-hidden="true">' +
+      '<defs><linearGradient id="lumen-lt-logo-gradient" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="#AC4EAD"/><stop offset=".48" stop-color="#9A249A"/>' +
+      '<stop offset="1" stop-color="#670867"/></linearGradient>' +
+      '<clipPath id="lumen-lt-logo-edge"><circle cx="12" cy="12" r="11.5"/></clipPath></defs>' +
+      '<g clip-path="url(#lumen-lt-logo-edge)"><circle cx="12" cy="12" r="12" fill="#fff"/>' +
+      '<g transform="rotate(90 12 12)"><path class="lumen-lt-logo-mono" fill="#090A0C" d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.911c0 .052.004.105.004.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 15.27C1.862 20.307 6.486 24 11.979 24c6.627 0 11.999-5.373 11.999-12S18.605 0 11.979 0zM7.54 18.21l-1.473-.61c.262.543.714.999 1.314 1.25 1.297.539 2.793-.076 3.332-1.375.263-.63.264-1.319.005-1.949s-.75-1.121-1.377-1.383c-.624-.26-1.29-.249-1.878-.03l1.523.63c.956.4 1.409 1.5 1.009 2.455-.397.957-1.497 1.41-2.454 1.012H7.54zm11.415-9.303c0-1.662-1.353-3.015-3.015-3.015-1.665 0-3.015 1.353-3.015 3.015 0 1.665 1.35 3.015 3.015 3.015 1.663 0 3.015-1.35 3.015-3.015zm-5.273-.005c0-1.252 1.013-2.266 2.265-2.266 1.249 0 2.266 1.014 2.266 2.266 0 1.251-1.017 2.265-2.266 2.265-1.253 0-2.265-1.014-2.265-2.265z"/>' +
+      '<path class="lumen-lt-logo-brand" fill="url(#lumen-lt-logo-gradient)" d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.911c0 .052.004.105.004.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 15.27C1.862 20.307 6.486 24 11.979 24c6.627 0 11.999-5.373 11.999-12S18.605 0 11.979 0zM7.54 18.21l-1.473-.61c.262.543.714.999 1.314 1.25 1.297.539 2.793-.076 3.332-1.375.263-.63.264-1.319.005-1.949s-.75-1.121-1.377-1.383c-.624-.26-1.29-.249-1.878-.03l1.523.63c.956.4 1.409 1.5 1.009 2.455-.397.957-1.497 1.41-2.454 1.012H7.54zm11.415-9.303c0-1.662-1.353-3.015-3.015-3.015-1.665 0-3.015 1.353-3.015 3.015 0 1.665 1.35 3.015 3.015 3.015 1.663 0 3.015-1.35 3.015-3.015zm-5.273-.005c0-1.252 1.013-2.266 2.265-2.266 1.249 0 2.266 1.014 2.266 2.266 0 1.251-1.017 2.265-2.266 2.265-1.253 0-2.265-1.014-2.265-2.265z"/></g></g>' +
+      '<circle class="lumen-lt-logo-mono lumen-lt-logo-edge" cx="12" cy="12" r="11.55" fill="none" stroke="#090A0C" stroke-width=".65"/>' +
+      '<circle class="lumen-lt-logo-brand lumen-lt-logo-edge" cx="12" cy="12" r="11.55" fill="none" stroke="url(#lumen-lt-logo-gradient)" stroke-width=".65"/></svg>',
     wrench: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M507 109a13 13 0 00-22-6l-74 74-59-10-10-59 74-74a13 13 0 00-6-22 128 128 0 00-164 152L19 359a64 64 0 0090 90l195-195A128 128 0 00507 109z"/></svg>',
     key: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M336 0a176 176 0 00-168 228L7 389a24 24 0 00-7 17v82a24 24 0 0024 24h82a24 24 0 0017-7l23-23a24 24 0 007-17v-29h29a24 24 0 0024-24v-29h29a24 24 0 0017-7l32-32A176 176 0 10336 0zm48 176a48 48 0 110-96 48 48 0 010 96z"/></svg>',
     check: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M470 105a24 24 0 010 34L207 402a24 24 0 01-34 0L42 271a24 24 0 010-34l23-23a24 24 0 0134 0l91 91 223-223a24 24 0 0134 0z"/></svg>',
@@ -160,17 +171,93 @@
     var available = !!installed && crackFix.status === 200;
     var needsAuth = available && crackFix.requiresAuth && !crackFix.authConfigured;
     var nativeBlocked = available && !!isNative;
-    var off = !available || nativeBlocked;
+    var preparationBlocked = available && crackFix.requiresPreparation === true;
+    var off = !available || nativeBlocked || preparationBlocked;
     return {
       available: available,
       needsAuth: needsAuth,
       off: off,
       iconKey: "wrench",
-      desc: nativeBlocked ? S.nativeWarnShort : (needsAuth ? S.ryuuAuthRequired : S.crackDesc),
+      desc: nativeBlocked ? S.nativeWarnShort : (preparationBlocked ? S.preparationRequired
+        : (needsAuth ? S.ryuuAuthRequired : S.crackDesc)),
       badge: off ? S.unavailable : (needsAuth ? S.authRequiredBadge : null),
       badgeIcon: (!off && needsAuth) ? "key" : null,
       warn: nativeBlocked,
     };
+  }
+
+  function fixesGroupCategories(entries) {
+    var groups = [], byKey = {};
+    entries = entries && typeof entries.length === "number" ? entries : [];
+    for (var i = 0; i < entries.length; i++) {
+      var fix = entries[i] || {};
+      var key = String(fix.category || "other");
+      var normalizedKey = key.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (normalizedKey === "steamtools-achievements-fix"
+          || normalizedKey === "steamtools-achievement-fix") continue;
+      if (!byKey[key]) {
+        byKey[key] = { key: key, fixes: [] };
+        groups.push(byKey[key]);
+      }
+      byKey[key].fixes.push(fix);
+    }
+    return groups;
+  }
+
+  function fixesNewestRelease(entries) {
+    entries = entries && typeof entries.length === "number" ? entries : [];
+    var newest = null, newestAt = -Infinity;
+    for (var i = 0; i < entries.length; i++) {
+      var fix = entries[i] || {};
+      var createdAt = Date.parse(String(fix.createdAt || ""));
+      if (!isFinite(createdAt)) createdAt = -Infinity;
+      if (!newest || createdAt > newestAt) {
+        newest = fix;
+        newestAt = createdAt;
+      }
+    }
+    return newest;
+  }
+
+  function fixesDefaultCategory(official, groups) {
+    official = official || {};
+    groups = groups || fixesGroupCategories(official.fixes);
+    var preferred = official.recommended && String(official.recommended.category || "");
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].key === preferred) return preferred;
+    }
+    return groups.length ? groups[0].key : "";
+  }
+
+  function fixesCategoryLabel(key) {
+    var labels = {
+      voices38: "voices38", bypass: "Bypass", online_fix: "Online Fix",
+      freetp: "FreeTP", denuvowo: "DenuvOwO", other: "Other",
+    };
+    return labels[String(key || "")] || String(key || "Other");
+  }
+
+  // Applied is already communicated by the receipt badge. Keep the featured
+  // action's Steam identity stable instead of turning its main icon into state.
+  function fixesOfficialIconKey() {
+    return "luatools";
+  }
+
+  function fixesLuaToolsIcon() {
+    return FX_ICONS.luatools;
+  }
+
+  function fixesAppliedStates(fixes) {
+    fixes = fixes || {};
+    return {
+      fallbackOnline: fixes.fallbackOnlineApplied === true,
+      spacewar: fixes.spacewarApplied === true,
+    };
+  }
+
+  function fixesFallbackReceiptKind() {
+    return FX_FALLBACK_RECEIPT_KIND;
   }
 
   try {
@@ -182,6 +269,13 @@
     window.__lumenFixesAuthExpired = fixesAuthExpired;
     window.__lumenFixesAuthViewState = fixesAuthViewState;
     window.__lumenFixesGameModeNotice = fixesGameModeNotice;
+    window.__lumenFixesGroupCategories = fixesGroupCategories;
+    window.__lumenFixesDefaultCategory = fixesDefaultCategory;
+    window.__lumenFixesNewestRelease = fixesNewestRelease;
+    window.__lumenFixesOfficialIconKey = fixesOfficialIconKey;
+    window.__lumenFixesLuaToolsIcon = fixesLuaToolsIcon;
+    window.__lumenFixesAppliedStates = fixesAppliedStates;
+    window.__lumenFixesFallbackReceiptKind = fixesFallbackReceiptKind;
   } catch (e) {}
 
   // ── styles (Lumen tokens: #23262d surface, #1a9fff accent, Motiva Sans) ─────
@@ -226,15 +320,28 @@
       // occupied (see fxKeepBodyHeight), so the panel never resizes or jumps.
       ".lumen-fx-body.centred{display:flex;flex-direction:column;justify-content:center;}",
       ".lumen-fx-sub{color:#8f98a0;font-size:12px;line-height:1.4;margin:0 2px 14px;}",
-      ".lumen-fx-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}",
+      ".lumen-fx-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(150px,1fr);",
+      "grid-template-rows:repeat(3,minmax(82px,1fr));gap:10px;align-items:stretch;}",
       ".lumen-fx-tile{position:relative;display:flex;flex-direction:column;gap:8px;padding:15px 14px;",
       "border-radius:4px;cursor:pointer;background:rgba(255,255,255,.04);",
       "border:1px solid rgba(255,255,255,.08);transition:background .12s,border-color .12s;}",
       ".lumen-fx-tile .ic{width:22px;height:22px;color:#9aa3ab;transition:color .12s;}",
       ".lumen-fx-tile .tl{font-size:14px;font-weight:700;color:#fff;}",
       ".lumen-fx-tile .ds{font-size:11.5px;line-height:1.36;color:#8f98a0;}",
+      ".lumen-fx-tile.featured{grid-column:1;grid-row:1/4;min-height:266px;padding:22px 20px;justify-content:flex-start;}",
+      ".lumen-fx-tile.featured .ic{width:44px;height:44px;margin-bottom:4px;}",
+      ".lumen-lt-logo-mono,.lumen-lt-logo-brand{transition:opacity .16s ease-out;}",
+      ".lumen-lt-logo-brand{opacity:0;}",
+      ".lumen-fx-tile.featured .tl{font-size:18px}",
+      ".lumen-fx-tile.featured .ds{max-width:88%;font-size:12.5px;line-height:1.48;}",
+      ".lumen-fx-grid>.lumen-fx-tile:not(.featured){min-height:0;padding:11px 12px;gap:5px;justify-content:center;}",
+      ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .ic{width:17px;height:17px}",
+      ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .tl{font-size:12.5px}",
+      ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .ds{font-size:10.5px;line-height:1.28;}",
       ".lumen-fx-tile:hover{background:rgba(255,255,255,.07);border-color:#1a9fff;}",
       ".lumen-fx-tile:hover .ic{color:#fff;}",
+      ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-mono{opacity:0;}",
+      ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-brand{opacity:1;}",
       ".lumen-fx-tile.danger:hover{border-color:#ec5c5c;}",
       ".lumen-fx-tile.danger:hover .ic{color:#ec5c5c;}",
       ".lumen-fx-tile.off{opacity:.42;cursor:default;}",
@@ -243,11 +350,25 @@
       // "needs auth" is carried by the badge alone: the tile keeps its own icon
       // and the normal blue hover, so nothing about it looks broken or disabled.
       ".lumen-fx-tile.auth .lumen-fx-badge{color:#f3ca62;background:rgba(224,179,65,.13);}",
+      ".lumen-fx-tile.applied{border-color:rgba(121,199,84,.42);}",
+      ".lumen-fx-tile.applied .lumen-fx-badge{color:#9bdc7c;background:rgba(92,156,62,.18);}",
       ".lumen-fx-badge .bic{width:9px;height:9px;flex:0 0 auto;}",
       ".lumen-fx-badge{position:absolute;top:11px;right:11px;display:inline-flex;align-items:center;",
       "gap:4px;font-size:9px;font-weight:700;",
       "text-transform:uppercase;letter-spacing:.5px;color:#8f98a0;background:rgba(255,255,255,.07);",
       "padding:2px 7px;border-radius:9px;}",
+      ".lumen-fx-category-row{position:absolute;top:13px;right:13px;display:flex;justify-content:flex-end;margin:0;}",
+      ".lumen-fx-category-badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #46515e;",
+      "border-radius:999px;background:#2b3038;color:#cdd3da;padding:5px 10px;font:700 10px 'Motiva Sans',Arial;",
+      "letter-spacing:.35px;text-transform:uppercase;cursor:default;}",
+      "button.lumen-fx-category-badge{cursor:pointer;}button.lumen-fx-category-badge:hover{border-color:#1a9fff;color:#fff;}",
+      ".lumen-fx-category-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:8;min-width:150px;padding:5px;",
+      "border:1px solid #46515e;border-radius:5px;background:#20242b;box-shadow:0 10px 24px rgba(0,0,0,.42);}",
+      ".lumen-fx-category-menu button{display:block;width:100%;border:0;border-radius:3px;background:transparent;",
+      "color:#b8bcbf;padding:7px 9px;text-align:left;font:600 11px 'Motiva Sans',Arial;cursor:pointer;}",
+      ".lumen-fx-category-menu button:hover,.lumen-fx-category-menu button.active{background:#303844;color:#fff;}",
+      ".lumen-fx-tile.featured>.lumen-fx-badge{top:auto;right:14px;bottom:13px;}",
+      "@media(max-width:620px){.lumen-fx-grid{grid-template-columns:minmax(0,1.6fr) minmax(130px,1fr)}.lumen-fx-tile.featured .ds{max-width:100%;}}",
       ".lumen-fx-note{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:12px;",
       "line-height:1.45;color:#e0b341;}",
       // centred loading / status / progress
@@ -256,7 +377,8 @@
       ".lumen-fx-status{padding:18px 2px 6px;}",
       ".lumen-fx-msg{font-size:14px;color:#dcdedf;line-height:1.5;margin-bottom:14px;}",
       ".lumen-fx-pbar{height:6px;border-radius:3px;background:#1a1d23;border:1px solid #3d4450;overflow:hidden;}",
-      ".lumen-fx-pbar > i{display:block;height:100%;width:0;background:#1a9fff;transition:width .25s ease;}",
+      ".lumen-fx-pbar > i{display:block;height:100%;width:100%;background:#1a9fff;transform:scaleX(0);",
+      "transform-origin:left center;transition:transform .25s cubic-bezier(.22,1,.36,1);}",
       ".lumen-fx-spin{display:inline-block;width:26px;height:26px;box-sizing:border-box;",
       "border:3px solid rgba(255,255,255,.16);border-top-color:#1a9fff;border-radius:50%;",
       "animation:lumen-rot .7s linear infinite;}",
@@ -782,7 +904,9 @@
   function fxTile(label, desc, opts, onClick) {
     var t = document.createElement("div");
     t.className = "lumen-fx-tile" + (opts.danger ? " danger" : "") +
-      (opts.auth ? " auth" : "") + (opts.off ? " off" : "");
+      (opts.auth ? " auth" : "") + (opts.applied ? " applied" : "") +
+      (opts.featured ? " featured" : "") +
+      (opts.off ? " off" : "");
     var ic = document.createElement("div");
     ic.className = "ic";
     ic.innerHTML = FX_ICONS[opts.iconKey] || FX_ICONS.wrench;
@@ -1031,9 +1155,10 @@
     fxKeepBodyHeight(body, false);
     var installed = !!ctx.isInstalled;
     var underProton = !!ctx.runsUnderProton;
-    var crackStatus = (fixes.crackFix && fixes.crackFix.status) || 0;
-    var crackUrl = fixes.crackFix && fixes.crackFix.url;
-    var crackAvail = installed && crackStatus === 200;
+    var official = fixes.luaToolsFixes || {};
+    var appliedStates = fixesAppliedStates(fixes);
+    var categoryGroups = fixesGroupCategories(official.fixes);
+    var selectedCategory = fixesDefaultCategory(official, categoryGroups);
 
     body.innerHTML = "";
     var sub = document.createElement("div");
@@ -1053,61 +1178,141 @@
     var grid = document.createElement("div");
     grid.className = "lumen-fx-grid";
 
-    // On a native-Linux game the Windows crack/online fix won't take effect, so
-    // mark the tile UNAVAILABLE (dimmed + badge) with the amber reason in the
-    // description — it becomes available once the user forces a Proton tool.
-    var crackState = fixesCrackCardState(fixes.crackFix, installed, isNative, S);
-    grid.appendChild(fxTile(S.crackLabel, crackState.desc,
-      { iconKey: crackState.iconKey, off: crackState.off,
-        badge: crackState.badge, badgeIcon: crackState.badgeIcon,
-        warn: crackState.warn, auth: crackState.needsAuth },
-      function () {
-        if (!crackUrl) { fxAlert(S.crackNone); return; }
-        if (crackState.needsAuth) {
-          // Turn the panel into the sign-in view instead of stacking a modal.
-          fxRenderAuthView(win, body, appid, ctx, fixes, gameName, function () {
-            protonGate(function () { fxApply(appid, crackUrl, S.crackLabel, ctx, win); });
-          });
+    var categoryRow = document.createElement("div");
+    categoryRow.className = "lumen-fx-category-row";
+    var categoryBadge = null, categoryMenu = null, officialTile = null;
+    var selectedGroup = function () {
+      for (var i = 0; i < categoryGroups.length; i++) {
+        if (categoryGroups[i].key === selectedCategory) return categoryGroups[i];
+      }
+      return categoryGroups[0] || null;
+    };
+    var selectedFix = function () {
+      var group = selectedGroup();
+      return group ? fixesNewestRelease(group.fixes) : null;
+    };
+    var drawOfficialTile = function () {
+      var candidate = selectedFix();
+      var needsAuth = !!candidate && official.authConfigured !== true;
+      var preparationBlocked = !!candidate && candidate.requiresPreparation === true;
+      var nativeBlocked = !!candidate && candidate.hasFix === true && isNative;
+      var off = !installed || !candidate || preparationBlocked || nativeBlocked;
+      var applied = !!candidate && candidate.applied === true;
+      var desc = !candidate ? S.crackNone
+        : (nativeBlocked ? S.nativeWarnShort
+          : (preparationBlocked ? S.preparationRequired
+            : (candidate.description || S.crackDesc)));
+      var tile = fxTile(S.luaToolsLabel,
+        (nativeBlocked || preparationBlocked) ? desc : (candidate ? S.luaToolsDesc : desc), {
+        iconKey: fixesOfficialIconKey(), off: off, warn: nativeBlocked,
+        auth: needsAuth, applied: applied, featured: true,
+        badge: applied ? S.appliedBadge : (off ? S.unavailable
+          : (needsAuth ? S.authRequiredBadge : null)),
+        badgeIcon: needsAuth && !applied ? "key" : null,
+      }, function () {
+        if (!candidate) { fxAlert(S.crackNone); return; }
+        if (needsAuth) {
+          fxClose();
+          if (typeof window.__lumenOpenLuaToolsAccount === "function") {
+            window.__lumenOpenLuaToolsAccount();
+          }
           return;
         }
-        protonGate(function () { fxApply(appid, crackUrl, S.crackLabel, ctx, win); });
-      }));
+        if (preparationBlocked) { fxAlert(S.preparationRequired); return; }
+        var apply = function () {
+          fxApplyLuaTools(appid, candidate.id, candidate.title || S.crackLabel, ctx, win);
+        };
+        if (candidate.hasFix === true) protonGate(apply); else apply();
+      });
+      if (categoryGroups.length) tile.appendChild(categoryRow);
+      if (officialTile && officialTile.parentNode) {
+        officialTile.parentNode.replaceChild(tile, officialTile);
+      } else {
+        grid.insertBefore(tile, grid.firstChild);
+      }
+      officialTile = tile;
+    };
 
-    // Online Fix — availability is resolved UP FRONT from the perondepot mirror
-    // (like Crack/Bypass), instead of only after a click. The tile shows a
-    // brief "checking" state, then settles to enabled (a fix exists) or a
-    // disabled UNAVAILABLE tile (none) — mirroring the crack tile. When found,
-    // the resolved URL is applied directly on click (no second lookup).
-    var onlineTile = fxTile(S.onlineLabel, S.onlineDesc,
-      { iconKey: "globe", off: true, badge: installed ? S.checkingBadge : S.unavailable }, function () {});
-    grid.appendChild(onlineTile);
-    var replaceOnline = function (t2) {
-      if (onlineTile.parentNode) onlineTile.parentNode.replaceChild(t2, onlineTile);
-      onlineTile = t2;
+    if (categoryGroups.length) {
+      categoryBadge = document.createElement(categoryGroups.length > 1 ? "button" : "span");
+      if (categoryGroups.length > 1) categoryBadge.type = "button";
+      categoryBadge.className = "lumen-fx-category-badge";
+      var drawCategoryBadge = function () {
+        categoryBadge.textContent = fixesCategoryLabel(selectedCategory)
+          + (categoryGroups.length > 1 ? "  ▾" : "");
+      };
+      drawCategoryBadge();
+      categoryRow.appendChild(categoryBadge);
+      if (categoryGroups.length > 1) {
+        categoryMenu = document.createElement("div");
+        categoryMenu.className = "lumen-fx-category-menu";
+        categoryMenu.hidden = true;
+        categoryGroups.forEach(function (group) {
+          var option = document.createElement("button");
+          option.type = "button";
+          option.textContent = fixesCategoryLabel(group.key);
+          option.className = group.key === selectedCategory ? "active" : "";
+          option.addEventListener("click", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            selectedCategory = group.key;
+            var options = categoryMenu.querySelectorAll("button");
+            for (var i = 0; i < options.length; i++) options[i].className = "";
+            option.className = "active";
+            categoryMenu.hidden = true;
+            drawCategoryBadge(); drawOfficialTile();
+          });
+          categoryMenu.appendChild(option);
+        });
+        categoryBadge.addEventListener("click", function (e) {
+          e.preventDefault(); e.stopPropagation(); categoryMenu.hidden = !categoryMenu.hidden;
+        });
+        categoryRow.appendChild(categoryMenu);
+      }
+    }
+    drawOfficialTile();
+
+    // The unauthenticated mirror remains available as a clearly secondary
+    // fallback. It never replaces or outranks the official category selection.
+    var fallbackOnline = fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
+      { iconKey: "globe", off: true, applied: appliedStates.fallbackOnline,
+        badge: appliedStates.fallbackOnline ? S.appliedBadge
+          : (installed ? S.checkingBadge : S.unavailable) },
+      function () {});
+    grid.appendChild(fallbackOnline);
+    var replaceFallbackOnline = function (next) {
+      if (fallbackOnline.parentNode) fallbackOnline.parentNode.replaceChild(next, fallbackOnline);
+      fallbackOnline = next;
     };
     if (installed) {
       call("ResolveOnlineFix", { appid: appid, gameName: gameName || "", contentScriptQuery: "" })
-        .then(fxParse).then(function (p) {
-          if (p && p.success && p.found && p.url) {
-            var url = p.url;
-            replaceOnline(fxTile(S.onlineLabel, isNative ? S.nativeWarnShort : S.onlineDesc,
-              { iconKey: "globe", off: isNative, badge: isNative ? S.unavailable : null, warn: isNative },
-              function () {
-                protonGate(function () { fxApply(appid, url, S.onlineLabel, ctx, win); });
+        .then(fxParse).then(function (result) {
+          if (result && result.success && result.found && result.url) {
+            replaceFallbackOnline(fxTile(S.fallbackOnlineLabel,
+              isNative ? S.nativeWarnShort : S.fallbackOnlineDesc,
+              { iconKey: "globe", off: isNative, warn: isNative,
+                applied: appliedStates.fallbackOnline,
+                badge: appliedStates.fallbackOnline ? S.appliedBadge
+                  : (isNative ? S.unavailable : null) }, function () {
+                protonGate(function () {
+                  fxApply(appid, result.url, S.fallbackOnlineLabel, ctx, win,
+                    FX_FALLBACK_RECEIPT_KIND);
+                });
               }));
           } else {
-            replaceOnline(fxTile(S.onlineLabel, S.onlineDesc,
-              { iconKey: "globe", off: true, badge: S.unavailable }, function () {}));
+            replaceFallbackOnline(fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
+              { iconKey: "globe", off: true, applied: appliedStates.fallbackOnline,
+                badge: appliedStates.fallbackOnline ? S.appliedBadge : S.unavailable }, function () {}));
           }
-        })
-        .catch(function () {
-          replaceOnline(fxTile(S.onlineLabel, S.onlineDesc,
-            { iconKey: "globe", off: true, badge: S.unavailable }, function () {}));
+        }).catch(function () {
+          replaceFallbackOnline(fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
+            { iconKey: "globe", off: true, applied: appliedStates.fallbackOnline,
+              badge: appliedStates.fallbackOnline ? S.appliedBadge : S.unavailable }, function () {}));
         });
     }
 
     grid.appendChild(fxTile(S.aioLabel, S.aioDesc,
-      { iconKey: "layers", off: !installed }, function () {
+      { iconKey: "layers", off: !installed, applied: appliedStates.spacewar,
+        badge: appliedStates.spacewar ? S.appliedBadge : null }, function () {
         fxApplySpace(appid);
       }));
 
@@ -1198,17 +1403,19 @@
   // fxApply with the resolved URL.)
 
   // Crack / Online apply: start the background download, then poll status.
-  function fxApply(appid, url, fixType, ctx, win) {
+  function fxApply(appid, url, fixType, ctx, win, receiptKind) {
     var S = fxStrings();
     if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
     call("ApplyGameFix", {
       appid: appid, downloadUrl: url, installPath: ctx.installPath,
       fixType: fixType, gameName: ctx.gameName || "", contentScriptQuery: "",
+      receiptKind: receiptKind || "",
     }).then(function (res) {
       var p = fxParse(res);
       if (p && p.success) {
         fxShowProgress(win, fixType);
-        fxPoll(appid, url, fixType, ctx, win);
+        fxPoll(appid, url, fixType, ctx, win,
+          receiptKind === FX_FALLBACK_RECEIPT_KIND ? FX_FALLBACK_RECEIPT_KIND : null);
       } else if (fixesAuthExpired(p)) {
         // The tile believed a credential existed but the backend found none
         // (removed elsewhere, or cleared after a rejected session).
@@ -1218,6 +1425,30 @@
       } else {
         fxAlert((p && p.error) ? String(p.error) : S.applyErr);
       }
+    }).catch(function () { fxAlert(S.applyErr); });
+  }
+
+  function fxApplyLuaTools(appid, fixId, fixType, ctx, win) {
+    var S = fxStrings();
+    if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
+    call("StartLuaToolsFix", {
+      appid: appid, fixId: fixId, installPath: ctx.installPath,
+      gameName: ctx.gameName || "", contentScriptQuery: "",
+    }).then(function (res) {
+      var p = fxParse(res);
+      if (p && p.success) {
+        fxShowProgress(win, fixType);
+        fxPoll(appid, null, fixType, ctx, win, fixId);
+        return;
+      }
+      if (p && (p.errorCode === "not_signed_in" || p.errorCode === "session_expired")) {
+        fxClose();
+        if (typeof window.__lumenOpenLuaToolsAccount === "function") {
+          window.__lumenOpenLuaToolsAccount();
+        }
+        return;
+      }
+      fxAlert((p && p.error) ? String(p.error) : S.applyErr);
     }).catch(function () { fxAlert(S.applyErr); });
   }
 
@@ -1235,7 +1466,7 @@
     if (f) f.remove();
   }
 
-  function fxPoll(appid, url, fixType, ctx, win) {
+  function fxPoll(appid, url, fixType, ctx, win, officialFixId) {
     var S = fxStrings();
     var poll = function () {
       if (!document.getElementById(FX_OVERLAY_ID)) return; // closed
@@ -1248,17 +1479,33 @@
         if (st.status === "downloading") {
           var pct = (st.totalBytes > 0) ? Math.floor((st.bytesRead / st.totalBytes) * 100) : 0;
           if (msg) msg.textContent = S.downloading.replace("{percent}", pct);
-          if (bar) bar.style.width = (pct || 4) + "%";
+          if (bar) bar.style.transform = "scaleX(" + ((pct || 4) / 100) + ")";
           setTimeout(poll, 600);
         } else if (st.status === "extracting") {
           if (msg) msg.textContent = S.extracting;
-          if (bar) bar.style.width = "100%";
+          if (bar) bar.style.transform = "scaleX(1)";
           setTimeout(poll, 600);
         } else if (st.status === "done") {
-          if (msg) msg.textContent = S.appliedOk.replace("{fix}", fixType);
-          if (bar) bar.style.width = "100%";
-          fxApplyOverrides(appid, ctx, win);
-          fxFooterClose(win);
+          if (bar) bar.style.transform = "scaleX(1)";
+          fxApplyOverrides(appid, ctx, win).then(function (launchApplied) {
+            if (!officialFixId || !launchApplied) return { success: launchApplied };
+            return call("CompleteLuaToolsFixApply", {
+              appid: appid, fixId: officialFixId, contentScriptQuery: "",
+            }).then(fxParse);
+          }).then(function (completed) {
+            if (officialFixId && !(completed && completed.success)) {
+              if (msg && !win.querySelector(".lumen-fx-lo")) {
+                msg.textContent = S.failed.replace("{error}",
+                  (completed && completed.error) || S.launchApplyFailed);
+              }
+            } else if (msg) {
+              msg.textContent = S.appliedOk.replace("{fix}", fixType);
+            }
+            fxFooterClose(win);
+          }).catch(function () {
+            if (msg) msg.textContent = S.failed.replace("{error}", S.launchApplyFailed);
+            fxFooterClose(win);
+          });
         } else if (st.status === "failed") {
           if (fixesAuthExpired(st)) {
             // The backend cleared the stored session, so the tile must show
@@ -1289,21 +1536,23 @@
   // WINEDLLOVERRIDES launch option, set through the Lumen relay (SteamClient
   // lives in SharedJSContext). If the relay can't set it, show the line to paste.
   function fxApplyOverrides(appid, ctx, win) {
-    call("GetFixLaunchOptions", {
+    return call("GetFixLaunchOptions", {
       appid: appid, compatToolName: "", currentLaunchOptions: "",
       installPath: ctx.installPath || "", contentScriptQuery: "",
     }).then(function (res) {
       var p = fxParse(res);
-      if (!(p && p.success && p.apply && p.launchOptions)) return;
+      if (!(p && p.success)) return false;
+      if (!(p.apply && p.launchOptions)) return true;
       var opts = String(p.launchOptions);
-      call("__lumenSetLaunchOptions", { appid: Number(appid), options: opts })
+      return call("__lumenSetLaunchOptions", { appid: Number(appid), options: opts })
         .then(function (r) {
           var ok = false;
           try { ok = (typeof r === "string" ? JSON.parse(r) : r).ok; } catch (e) {}
           if (!ok) fxLaunchHint(win, opts);
+          return ok;
         })
-        .catch(function () { fxLaunchHint(win, opts); });
-    }).catch(function () {});
+        .catch(function () { fxLaunchHint(win, opts); return false; });
+    }).catch(function () { return false; });
   }
 
   // Fallback: render the launch-option line with a Copy button into the window.

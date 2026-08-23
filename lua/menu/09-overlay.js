@@ -41,7 +41,28 @@
     // Cloud Saves tab only when CloudRedirect is installed (window.__lumenCloud,
     // set by boot.lua). Absent -> the tab isn't created and nothing cloud runs.
     var tabCloud = window.__lumenCloud ? mkTab(cloudStrings().tab, CLOUD_SVG) : null;
+    var tabFixes = window.__lumenNoPlugin ? null : mkTab(luaToolsStrings().fixesTab, LUA_TOOLS_FIXES_SVG);
     var tabAbout = mkTab(((I18N[pickLang()] || I18N.en).about || I18N.en.about).tab, ABOUT_SVG);
+    var sideSpacer = document.createElement("div");
+    sideSpacer.className = "lumen-side-spacer";
+    side.appendChild(sideSpacer);
+    var accountEntry = null, accountName = null, accountCopy = null, accountAvatar = null;
+    if (!window.__lumenNoPlugin) {
+      accountEntry = document.createElement("button");
+      accountEntry.type = "button";
+      accountEntry.className = "lumen-account-entry";
+      accountAvatar = document.createElement("span");
+      accountAvatar.className = "lumen-account-avatar";
+      accountAvatar.innerHTML = LUA_TOOLS_USER_SVG;
+      var accountText = document.createElement("span");
+      accountName = document.createElement("strong");
+      accountName.textContent = luaToolsStrings().signIn;
+      accountCopy = document.createElement("small");
+      accountCopy.textContent = luaToolsStrings().unlock;
+      accountText.appendChild(accountName); accountText.appendChild(accountCopy);
+      accountEntry.appendChild(accountAvatar); accountEntry.appendChild(accountText);
+      side.appendChild(accountEntry);
+    }
 
     // content
     var content = document.createElement("div");
@@ -50,11 +71,18 @@
     ctop.className = "lumen-ctop";
     var h = document.createElement("div");
     h.className = "h";
+    var accountBack = document.createElement("button");
+    accountBack.type = "button";
+    accountBack.className = "lumen-account-back";
+    accountBack.innerHTML = LUA_TOOLS_BACK_SVG;
+    accountBack.title = luaToolsStrings().back;
+    accountBack.setAttribute("aria-label", luaToolsStrings().back);
+    accountBack.style.display = "none";
     var x = document.createElement("div");
     x.className = "x";
     x.textContent = "\u2715";
     x.addEventListener("click", requestClose);
-    var slsBody, guBody, cloudBody, aboutBody;
+    var slsBody, guBody, cloudBody, fixesBody, aboutBody, accountBody;
 
     // Reset-to-defaults button: header-right (slsteam-moon tab only). Two-click
     // confirm so it can't fire by accident; on success the backend returns fresh
@@ -167,7 +195,7 @@
         });
     });
 
-    ctop.appendChild(h); ctop.appendChild(clearBtn); ctop.appendChild(restartBtn); ctop.appendChild(resetBtn); ctop.appendChild(x);
+    ctop.appendChild(accountBack); ctop.appendChild(h); ctop.appendChild(clearBtn); ctop.appendChild(restartBtn); ctop.appendChild(resetBtn); ctop.appendChild(x);
 
     content.appendChild(ctop);
     function makePanel(name) {
@@ -181,7 +209,9 @@
     slsBody = makePanel("sls");
     guBody = makePanel("gu");
     cloudBody = tabCloud ? makePanel("cloud") : null;
+    fixesBody = tabFixes ? makePanel("fixes") : null;
     aboutBody = makePanel("about");
+    accountBody = accountEntry ? makePanel("account") : null;
     win.appendChild(side);
     win.appendChild(content);
     overlay.appendChild(win);
@@ -190,8 +220,32 @@
     // Each tab owns a persistent panel and initializes at most once. Async
     // responses can therefore finish in the background without clearing or
     // replacing whichever tab the user is currently viewing.
-    var initialized = { sls: false, gu: false, cloud: false, about: false };
+    var initialized = { sls: false, gu: false, cloud: false, fixes: false, about: false, account: false };
     var preloadStarted = false;
+    var currentTab = "sls";
+    var accountPreviousTab = "sls";
+
+    function updateAccountEntry(status) {
+      if (!accountEntry) return;
+      var configured = !!(status && status.configured);
+      var displayName = configured && status.account && status.account.displayName;
+      accountName.textContent = displayName || luaToolsStrings().signIn;
+      accountCopy.textContent = configured ? luaToolsStrings().connected : luaToolsStrings().unlock;
+      accountEntry.classList.toggle("connected", configured);
+      accountAvatar.textContent = "";
+      var avatarUrl = configured && luaToolsSafeAvatar(status.account && status.account.avatarUrl);
+      if (avatarUrl) {
+        var image = document.createElement("img"); image.src = avatarUrl; image.alt = "";
+        accountAvatar.appendChild(image);
+      } else accountAvatar.innerHTML = LUA_TOOLS_USER_SVG;
+    }
+
+    function invalidateFixes() {
+      if (!fixesBody) return;
+      initialized.fixes = false;
+      fixesBody.textContent = "";
+      if (currentTab === "fixes") ensureTab("fixes");
+    }
 
     function preloadRemainingTabs() {
       if (preloadStarted) return;
@@ -232,7 +286,12 @@
       if (which === "sls") loading = loadSlsConfig();
       else if (which === "gu") loading = renderGameUpdates(guBody);
       else if (which === "cloud" && cloudBody) loading = renderCloud(cloudBody);
+      else if (which === "fixes" && fixesBody) loading = renderLuaToolsFixes(fixesBody);
       else if (which === "about") loading = renderAbout(aboutBody);
+      else if (which === "account" && accountBody) loading = renderLuaToolsAccount(accountBody, {
+        onStatus: updateAccountEntry,
+        onAuthChanged: invalidateFixes,
+      });
       initialized[which] = Promise.resolve(loading);
       return initialized[which];
     }
@@ -240,17 +299,22 @@
     // Tab switching: update active state, header title, reset-button visibility,
     // then render the tab's body.
     function selectTab(which) {
+      currentTab = which;
       disarm();
       cdisarm();
       tabSls.classList.toggle("active", which === "sls");
       tabGu.classList.toggle("active", which === "gu");
       if (tabCloud) tabCloud.classList.toggle("active", which === "cloud");
+      if (tabFixes) tabFixes.classList.toggle("active", which === "fixes");
       tabAbout.classList.toggle("active", which === "about");
+      if (accountEntry) accountEntry.classList.toggle("active", which === "account");
       guSetTabActive(which === "gu");
       slsBody.style.display = which === "sls" ? "block" : "none";
       guBody.style.display = which === "gu" ? "block" : "none";
       if (cloudBody) cloudBody.style.display = which === "cloud" ? "block" : "none";
+      if (fixesBody) fixesBody.style.display = which === "fixes" ? "block" : "none";
       aboutBody.style.display = which === "about" ? "block" : "none";
+      if (accountBody) accountBody.style.display = which === "account" ? "block" : "none";
       var warm = !!initialized[which];
       ensureTab(which);
       // The panel keeps its DOM, so coming back to an already-loaded Game
@@ -258,6 +322,7 @@
       // background so a game added meanwhile (LuaTools, the Fixes menu) appears
       // without the user having to reopen the overlay.
       if (which === "gu" && warm) revalidateGameUpdates();
+      accountBack.style.display = which === "account" ? "inline-flex" : "none";
       if (which === "gu") {
         h.textContent = "";
         var gt = document.createElement("span");
@@ -279,8 +344,18 @@
         resetBtn.style.display = "none";
         restartBtn.style.display = "none";
         clearBtn.style.display = "none";
+      } else if (which === "fixes") {
+        h.textContent = luaToolsStrings().fixesTab;
+        resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
+        clearBtn.style.display = "none";
       } else if (which === "about") {
         h.textContent = ((I18N[pickLang()] || I18N.en).about || I18N.en.about).title;
+        resetBtn.style.display = "none";
+        restartBtn.style.display = "none";
+        clearBtn.style.display = "none";
+      } else if (which === "account") {
+        h.textContent = luaToolsStrings().accountTitle;
         resetBtn.style.display = "none";
         restartBtn.style.display = "none";
         clearBtn.style.display = "none";
@@ -294,8 +369,19 @@
     tabSls.addEventListener("click", function () { selectTab("sls"); });
     tabGu.addEventListener("click", function () { selectTab("gu"); });
     if (tabCloud) tabCloud.addEventListener("click", function () { selectTab("cloud"); });
+    if (tabFixes) tabFixes.addEventListener("click", function () { selectTab("fixes"); });
     tabAbout.addEventListener("click", function () { selectTab("about"); });
-    selectTab("sls");
+    if (accountEntry) accountEntry.addEventListener("click", function () {
+      if (currentTab !== "account") accountPreviousTab = currentTab;
+      selectTab("account");
+    });
+    accountBack.addEventListener("click", function () { selectTab(accountPreviousTab); });
+    var requestedTab = window.__lumenSettingsInitialTab;
+    window.__lumenSettingsInitialTab = null;
+    selectTab(requestedTab === "account" && accountBody ? "account" : "sls");
+    if (accountEntry) {
+      call("GetLuaToolsAuthStatus", {}).then(luaToolsParse).then(updateAccountEntry).catch(function () {});
+    }
 
     var onKey = function (e) {
       if (e.key === "Escape") { requestClose(); }
@@ -311,3 +397,7 @@
   // the shell is told to open only when no web view is covering its content.
   window.__lumenOpenOverlay = openOverlay;
   window.__lumenCloseOverlay = closeOverlay;
+  window.__lumenOpenLuaToolsAccount = function () {
+    window.__lumenSettingsInitialTab = "account";
+    openOverlay();
+  };

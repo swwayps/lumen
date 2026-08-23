@@ -222,6 +222,58 @@ do
 end
 
 -- ── get_versions orchestration ───────────────────────────────────────────────
+-- Non-blocking boot update probe. The menubar must not run six synchronous
+-- release requests in an RPC handler: all transfers start first, then cheap
+-- polls make progress without holding Lumen's loop or any Steam worker.
+local has_async_probe = type(about.new_update_probe) == "function"
+  and type(about.poll_update_probe) == "function"
+check("exports non-blocking update probe", has_async_probe)
+if has_async_probe then
+  local started, first_poll_started = 0, nil
+  local function release_body(url)
+    local plugin = url:find("luatools%-moon") ~= nil
+    local name = url:find("/lumen/", 1, true) and "lumen-linux.zip"
+      or plugin and "luatools-linux.zip"
+      or "slsteam-moon-linux-2.8-lumen.zip"
+    return '{"tag_name":"v2.8","assets":[{"name":"' .. name
+      .. '","id":' .. (plugin and "2" or "1") .. ',"size":100}]}'
+  end
+  local async_http = {
+    start = function(url)
+      started = started + 1
+      return { url = url, polls = 0 }
+    end,
+    poll = function(handle)
+      first_poll_started = first_poll_started or started
+      handle.polls = handle.polls + 1
+      if handle.polls == 1 then return false end
+      if handle.url:find("/contents/", 1, true) then
+        return true, { status = 404, body = "{}" }
+      end
+      return true, { status = 200, body = release_body(handle.url) }
+    end,
+  }
+  local probe = about.new_update_probe({
+    http = async_http,
+    versions_path = "/versions",
+    channels_path = "/channels",
+    read_file = function(path)
+      if path == "/channels" then return '{"channel":"stable"}' end
+      return '{"slsteam_moon":{"tag":"v2.8","id":1},'
+        .. '"plugin":{"tag":"v2.8","id":1},'
+        .. '"lumen":{"tag":"v2.8","id":1}}'
+    end,
+  })
+  check("boot probe starts every required release request concurrently",
+    probe ~= nil and started == 3)
+  local pending = about.poll_update_probe(probe)
+  check("first boot probe poll is pending and non-blocking",
+    pending and pending.pending == true and first_poll_started == 3)
+  local complete = about.poll_update_probe(probe)
+  check("boot probe detects an available component update",
+    complete and complete.pending == false and complete.available == true)
+end
+
 do
   -- installed plugin asset_at is OLDER than the API's -> "update" (same tag,
   -- re-uploaded asset). slsteam_moon matches exactly -> "current". lumen has no
@@ -378,6 +430,8 @@ do
     },
   })
   check("register exposes SetAboutChannel", type(registry.SetAboutChannel) == "function")
+  check("register exposes non-blocking boot update status",
+    type(registry.GetAboutUpdateStatus) == "function")
   if type(registry.SetAboutChannel) == "function" then
     local good = json.decode(registry.SetAboutChannel('{"channel":"beta"}'))
     local saved = wrote and json.decode(wrote) or {}

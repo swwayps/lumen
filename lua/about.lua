@@ -358,6 +358,88 @@ function about.get_versions(opts)
   }
 end
 
+-- Start every release lookup concurrently for the tiny menubar boot status.
+-- The returned handles are advanced only by poll_update_probe(), so neither an
+-- RPC handler nor any Steam thread waits on network I/O.
+function about.new_update_probe(opts)
+  opts = opts or {}
+  local http_mod = opts.http or require("http")
+  if type(http_mod.start) ~= "function" or type(http_mod.poll) ~= "function" then
+    return nil, "asynchronous HTTP is unavailable"
+  end
+  local probe = {
+    http = http_mod,
+    installed = about.read_installed(
+      opts.versions_path or about.versions_path(), opts.read_file),
+    channels = about.read_channels(
+      opts.channels_path or about.channels_path(), opts.read_file),
+    tasks = {},
+  }
+  local include_plugin = opts.include_plugin ~= false
+  local request_opts = {
+    timeout = 6,
+    max_bytes = 2 * 1024 * 1024,
+    headers = { ["Accept"] = "application/vnd.github+json", ["User-Agent"] = "lumen" },
+  }
+  local function start(url)
+    local ok, handle = pcall(http_mod.start, url, request_opts)
+    return { handle = ok and handle or nil, done = not (ok and handle) }
+  end
+  for _, component in ipairs(about.COMPONENTS) do
+    if include_plugin or component.key ~= "plugin" then
+      probe.tasks[#probe.tasks + 1] = {
+        component = component,
+        stable = start(about.api_url(component.repo)),
+        beta = probe.channels[component.key] == "beta"
+          and start(about.beta_api_url(component)) or { done = true },
+      }
+    end
+  end
+  return probe
+end
+
+local function poll_update_slot(http_mod, slot)
+  if slot.done then return end
+  local ok, done, response = pcall(http_mod.poll, slot.handle)
+  if not ok then slot.done = true; return end
+  if done ~= true then return end
+  slot.done = true
+  slot.response = response
+  slot.handle = nil
+end
+
+function about.poll_update_probe(probe)
+  if type(probe) ~= "table" or type(probe.tasks) ~= "table"
+      or type(probe.http) ~= "table" then
+    return { success = false, pending = false, available = false }
+  end
+  if probe.result then return probe.result end
+  local pending = false
+  for _, task in ipairs(probe.tasks) do
+    poll_update_slot(probe.http, task.stable)
+    poll_update_slot(probe.http, task.beta)
+    if not task.stable.done or not task.beta.done then pending = true end
+  end
+  if pending then return { success = true, pending = true, available = false } end
+
+  local available = false
+  for _, task in ipairs(probe.tasks) do
+    local stable_response = task.stable.response
+    local beta_response = task.beta.response
+    local stable_latest = stable_response and stable_response.status == 200
+      and about.parse_latest_info(stable_response.body, task.component.asset_pat) or nil
+    local beta_latest = beta_response and beta_response.status == 200
+      and about.parse_beta_info(beta_response.body) or nil
+    local requested = probe.channels[task.component.key]
+    local latest = requested == "beta" and beta_latest or stable_latest
+    if requested == "beta" and not beta_latest then latest = stable_latest end
+    local installed = about.installed_entry(probe.installed, task.component.key)
+    if about.compare_state(installed, latest) == "update" then available = true end
+  end
+  probe.result = { success = true, pending = false, available = available }
+  return probe.result
+end
+
 -- ── Update All: open the user's terminal running the installer ──────────────
 
 -- Known terminal emulators, in preference order, with how each runs a program:
@@ -510,6 +592,7 @@ function about.register(registry, opts)
   opts = opts or {}
   local no_plugin = opts.no_plugin and true or false
   local channel_path = opts.channels_path or about.channels_path()
+  local update_probe, update_result, update_checked_at
   registry.GetAboutVersions = function()
     return json.encode(about.get_versions({
       include_plugin = not no_plugin,
@@ -518,6 +601,29 @@ function about.register(registry, opts)
       read_file = opts.read_file,
       http = opts.http,
     }))
+  end
+  registry.GetAboutUpdateStatus = function()
+    local now = os.time()
+    if update_result and update_checked_at and now - update_checked_at < 300 then
+      return json.encode(update_result)
+    end
+    if not update_probe then
+      update_probe = about.new_update_probe({
+        include_plugin = not no_plugin,
+        versions_path = opts.versions_path,
+        channels_path = channel_path,
+        read_file = opts.read_file,
+        http = opts.http,
+      })
+      if not update_probe then
+        return json.encode({ success = false, pending = false, available = false })
+      end
+    end
+    local status = about.poll_update_probe(update_probe)
+    if status.pending ~= true then
+      update_result, update_checked_at, update_probe = status, now, nil
+    end
+    return json.encode(status)
   end
   registry.SetAboutChannel = function(raw)
     local ok_decode, req = pcall(json.decode, raw or "")

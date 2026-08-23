@@ -16,6 +16,7 @@ local cefport = require("cefport")
 local b64 = require("b64")
 local cdpreq = require("cdpreq")
 local ryuulogin = require("ryuulogin")
+local luatoolslogin = require("luatoolslogin")
 
 local injector = {}
 
@@ -631,6 +632,28 @@ function Conn:_on_binding(payload_str)
   if req.fn == "__lumenOpen" or req.fn == "__lumenClose" then
     if self.manager then self.manager:broadcast_overlay(req.fn == "__lumenOpen") end
     result = '{"ok":true}'
+  elseif req.fn == "__lumenAutoFixLaunchWait" then
+    local appid = tonumber((req.args or {}).appid)
+    if appid and self.manager then
+      self.manager:broadcast_auto_fix_modal(appid, true)
+    end
+    result = '{"ok":true}'
+  elseif req.fn == "__lumenAutoFixLaunchTimeout" then
+    local appid = tonumber((req.args or {}).appid)
+    if appid and self.manager then
+      self.manager:broadcast_auto_fix_timeout(appid)
+    end
+    result = '{"ok":true}'
+  elseif req.fn == "__lumenReleaseAutoFixLaunch" then
+    local appid = tonumber((req.args or {}).appid)
+    result = (appid and self.manager
+        and self.manager:release_auto_fix_launch(appid))
+      and '{"ok":true}' or '{"ok":false}'
+  elseif req.fn == "__lumenCancelAutoFixLaunch" then
+    local appid = tonumber((req.args or {}).appid)
+    result = (appid and self.manager
+        and self.manager:cancel_auto_fix_launch(appid))
+      and '{"ok":true}' or '{"ok":false}'
   elseif req.fn == "__lumenSlsWarn" then
     -- Show the "slsteam-moon not loaded" warning in the on-top context (store
     -- web view when it's composited above the shell). Triggered from the shell
@@ -716,6 +739,23 @@ function Conn:_on_binding(payload_str)
     local closed = 0
     if self.manager then closed = self.manager:ryuu_login_close() or 0 end
     result = '{"ok":true,"closed":' .. tostring(closed) .. '}'
+  elseif req.fn == "__lumenLuaToolsLoginOpen" then
+    local a = req.args or {}
+    local ok_open, reason = false, "no_shell"
+    if self.manager then
+      ok_open, reason = self.manager:lua_tools_login_open(tostring(a.url or ""))
+    end
+    result = ok_open and '{"ok":true}'
+      or ('{"ok":false,"reason":' .. json.encode(tostring(reason or "invalid_url")) .. '}')
+  elseif req.fn == "__lumenLuaToolsLoginClose" then
+    local closed = 0
+    if self.manager then closed = self.manager:lua_tools_login_close() or 0 end
+    result = '{"ok":true,"closed":' .. tostring(closed) .. '}'
+  elseif req.fn == "__lumenClearDiscordSession" then
+    local cookies, origins = 0, 0
+    if self.manager then cookies, origins = self.manager:clear_discord_session() end
+    result = '{"ok":true,"cookies":' .. tostring(cookies or 0)
+      .. ',"origins":' .. tostring(origins or 0) .. '}'
   elseif req.fn == "__lumenOpenExternalUrl" then
     -- Open an external URL (the Cloud Saves OAuth page) in the default browser
     -- via Steam's own handler so it comes to the foreground. SteamClient lives
@@ -1060,6 +1100,90 @@ function State:set_launch_options(appid, options)
   return false
 end
 
+-- A queued automatic fix must not race Steam's post-install action or a Play
+-- click. This query runs only while a ready job exists and is bounded tightly;
+-- the normal no-job loop never opens an extra CDP connection.
+function State:is_app_busy(appid)
+  appid = tonumber(appid)
+  if not appid or appid <= 0 then return false end
+  local shared = self:_shared_ws()
+  if not shared then return false end
+  local expr = "(async function(){try{if(!window.SteamClient||!SteamClient.Apps||"
+    .. "typeof SteamClient.Apps.GetActiveGameActions!=='function')return false;"
+    .. "var actions=await SteamClient.Apps.GetActiveGameActions();"
+    .. "if(!Array.isArray(actions))return false;var want='" .. tostring(math.floor(appid)) .. "';"
+    .. "return actions.some(function(a){if(!a)return false;var raw=a.gameid!=null?a.gameid:"
+    .. "(a.gameID!=null?a.gameID:a.appid);var text=String(raw==null?'':raw);"
+    .. "if(text===want)return true;try{return String(BigInt(text)&0xffffffn)===want;}"
+    .. "catch(_){return false;}});}catch(_){return false;}})()"
+  return cdpreq.evaluate(cef_port(), shared, expr, 0.75) == true
+end
+
+-- Keep the SharedJS RunGame guard synchronized with only the AppIDs whose
+-- automatic work is actively blocking. SteamClient.Apps.RunGame exists in
+-- SharedJSContext (not the visible shell). When an AppID stops blocking, its
+-- exact deferred native call resumes once the work completes. The JS guard
+-- cancels every deferred call before an uninstall and also cancels attempts
+-- that reach their timeout, so a saved Play cannot cross either boundary.
+function State:update_auto_fix_guard(jobs)
+  jobs = type(jobs) == "table" and jobs or {}
+  local expr = "window.__lumenUpdateAutoFixGuard&&window.__lumenUpdateAutoFixGuard("
+    .. json.encode(jobs) .. ")"
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+
+-- The compact progress UI lives in the Lumen menu bundle (desktop shell plus
+-- Store/Community overlay copies). SharedJS owns the launch guard but has no
+-- visible UI, so avoid sending it the once-per-second progress repaint.
+function State:update_auto_fix_ui(jobs)
+  jobs = type(jobs) == "table" and jobs or {}
+  local expr = "window.__lumenUpdateAutoFixUI&&window.__lumenUpdateAutoFixUI({jobs:"
+    .. json.encode(jobs) .. "})"
+  local sent = false
+  for _, conn in pairs(self.conns) do
+    local url = tostring(conn.url or "")
+    local menu_context = conn.title == "Steam"
+      or url:find("store.steampowered.com", 1, true)
+      or url:find("steamcommunity.com", 1, true)
+    if conn.sock and menu_context then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      sent = true
+    end
+  end
+  return sent
+end
+
+local function auto_fix_guard_action(self, function_name, appid)
+  appid = tonumber(appid)
+  if not appid or appid <= 0 then return false end
+  local expr = "window." .. function_name .. "&&window." .. function_name
+    .. "(" .. tostring(math.floor(appid)) .. ")"
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+
+function State:release_auto_fix_launch(appid)
+  return auto_fix_guard_action(self, "__lumenReleaseAutoFixLaunch", appid)
+end
+
+function State:cancel_auto_fix_launch(appid)
+  return auto_fix_guard_action(self, "__lumenCancelAutoFixLaunch", appid)
+end
+
 -- Relay a steam://validate/<appid> into SharedJSContext (the only context with
 -- SteamClient) to verify a game's local files. Fire-and-forget: returns true if
 -- we have a SharedJSContext control conn to run it on.
@@ -1126,7 +1250,7 @@ end
 
 -- Open the Ryuu login in Steam's own browser window. Returns true, or false plus
 -- a machine-readable reason the panel turns into copy.
-function State:ryuu_login_open()
+function State:_open_internal_oauth(url, label)
   local port = cef_port()
   local targets = list_all_targets()
   local supported, reason = ryuulogin.supported(targets,
@@ -1164,7 +1288,7 @@ function State:ryuu_login_open()
   -- userGesture: CEF's popup blocker drops a gesture-less target=_blank click
   -- WITHOUT reporting failure, so the flag is what makes the window appear.
   local clicked = cdpreq.evaluate(port, launcher.webSocketDebuggerUrl,
-    ryuulogin.open_link_expr(ryuulogin.LOGIN_URL), nil, true)
+    ryuulogin.open_link_expr(url), nil, true)
 
   -- Put the borrowed view back on its previous page either way, so the user's
   -- Store tab is where they left it.
@@ -1172,8 +1296,12 @@ function State:ryuu_login_open()
     cdpreq.evaluate(port, shared, ryuulogin.load_background_expr(restore_url))
   end
   if clicked ~= true then return false, "click_failed" end
-  log("ryuu: sign-in window opened")
+  log(tostring(label or "oauth") .. ": sign-in window opened")
   return true
+end
+
+function State:ryuu_login_open()
+  return self:_open_internal_oauth(ryuulogin.LOGIN_URL, "ryuu")
 end
 
 -- Read the Ryuu session out of Steam's (global) cookie jar. Returns the value or
@@ -1196,6 +1324,52 @@ function State:ryuu_login_close()
     end
   end
   return closed
+end
+
+function State:lua_tools_login_open(url)
+  url = luatoolslogin.safe_auth_url(url)
+  if not url then return false, "invalid_url" end
+  return self:_open_internal_oauth(url, "lua.tools")
+end
+
+function State:lua_tools_login_close()
+  local port = cef_port()
+  local closed = 0
+  for _, target in ipairs(luatoolslogin.login_windows(list_all_targets())) do
+    if cdpreq.request(port, target.webSocketDebuggerUrl, "Page.close", {}) then
+      closed = closed + 1
+    end
+  end
+  return closed
+end
+
+-- Remove Discord state from Steam's CEF only. Cookies are enumerated first and
+-- deleted one by one for exact Discord domains; origin storage is cleared from
+-- a fixed allowlist. Steam, lua.tools, Ryuu and unrelated browser state are
+-- never part of either request.
+function State:clear_discord_session()
+  local shared = self:_shared_ws()
+  if not shared then return 0, 0 end
+  local port = cef_port()
+  local origins = luatoolslogin.discord_storage_origins()
+  local urls = {}
+  for _, origin in ipairs(origins) do urls[#urls + 1] = origin .. "/" end
+  local cookie_result = cdpreq.request(port, shared, "Network.getCookies", { urls = urls })
+  local deleted = 0
+  for _, params in ipairs(luatoolslogin.discord_cookie_deletions(cookie_result)) do
+    if cdpreq.request(port, shared, "Network.deleteCookies", params) then
+      deleted = deleted + 1
+    end
+  end
+  local cleared = 0
+  for _, origin in ipairs(origins) do
+    if cdpreq.request(port, shared, "Storage.clearDataForOrigin", {
+        origin = origin, storageTypes = "all",
+      }) then
+      cleared = cleared + 1
+    end
+  end
+  return deleted, cleared
 end
 
 -- Relay an external-URL open into SharedJSContext so Steam raises the browser
@@ -1272,6 +1446,18 @@ function State:broadcast_overlay(open)
     return
   end
   self:_fire_on_top("window.__lumenOpenOverlay&&window.__lumenOpenOverlay()")
+end
+
+function State:broadcast_auto_fix_modal(appid, launch_pending)
+  local id = math.floor(tonumber(appid) or 0)
+  self:_fire_on_top("window.__lumenShowAutoFixModal&&window.__lumenShowAutoFixModal("
+    .. tostring(id) .. "," .. (launch_pending and "true" or "false") .. ")")
+end
+
+function State:broadcast_auto_fix_timeout(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  self:_fire_on_top("window.__lumenShowAutoFixTimeout&&window.__lumenShowAutoFixTimeout("
+    .. tostring(id) .. ")")
 end
 
 -- Show the "slsteam-moon not loaded" warning in whichever view is on top, so it
