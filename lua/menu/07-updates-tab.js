@@ -566,10 +566,12 @@
         return startSourceDraft(app.appid, function (state) {
           status(sourceProgressMessage(state));
         }).then(function (source) {
-          return call("EnrichGameImport", { json: JSON.stringify({
-            session: session, appid: app.appid, lua: source.draft.lua,
-          }) }).then(parseRpc).then(function () {
-            return call("CancelGameDraft", { appid: app.appid, session: source.session }).catch(function () {});
+          return call("EnrichGameImportFromDraft", {
+            appid: app.appid, importSession: session, draftSession: source.session,
+          }).then(parseRpc).then(function () {
+            return cancelGameDraft(app.appid, source.session);
+          }).catch(function (error) {
+            return cancelGameDraft(app.appid, source.session).then(function () { throw error; });
           });
         }).catch(function (error) {
           warnings.push(guStrings().sourceSkipped.replace("{appid}", app.appid)

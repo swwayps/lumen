@@ -19,6 +19,13 @@ ok(/accept\s*=\s*["'][^"']*\.lua[^"']*\.manifest[^"']*\.zip/.test(ui),
 ok(ui.includes('call("BeginGameImport"') && ui.includes('call("UploadGameImportChunk"')
   && ui.includes('call("PrepareGameImport"') && ui.includes('call("CommitGameImport"'),
   "importer uses staged chunked backend transaction");
+ok(ui.includes('call("EnrichGameImportFromDraft"')
+  && /importSession:\s*session/.test(ui) && /draftSession:\s*source\.session/.test(ui),
+  "importer attaches the complete source draft through a server-side handoff");
+ok(!/call\("EnrichGameImport"[\s\S]{0,180}source\.draft\.lua/.test(ui),
+  "importer does not discard source manifests by sending only Lua through CEF");
+ok(/local ALLOWLIST[\s\S]*["']EnrichGameImportFromDraft["']/.test(boot),
+  "Lumen formally allowlists the private draft handoff RPC");
 ok(/identitySource|identityConfidence|identity source|confidence/.test(ui),
   "import review carries the resolved base identity and confidence");
 ok(/identityMetadataUnavailable\s*:\s*["'][^"']+["']/.test(i18n)

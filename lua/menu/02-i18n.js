@@ -42,6 +42,15 @@
         timeoutTitle: "Launch cancelled",
         timeoutBody: "The fix is taking longer than expected, so this launch attempt was cancelled. You can follow its progress here and click Play again when it finishes.",
       },
+      installReadiness: {
+        eyebrow: "Installation paused",
+        title: "Manifest unavailable",
+        body: "The manifests required to start this installation are not available yet. The game will remain in your library and preparation will continue in the background.",
+        risk: "If you install anyway, Steam may show No Internet Connection due to the missing manifests.",
+        installAnyway: "Install anyway",
+        close: "Close",
+        ready: "The manifest is ready. You can install this game now.",
+      },
       about: {
         tab: "About",
         title: "About",
@@ -441,6 +450,15 @@
         skipFailed: "Não foi possível ignorar a correção automática com segurança.",
         timeoutTitle: "Abertura cancelada",
         timeoutBody: "A correção está demorando mais que o esperado, então esta tentativa de abertura foi cancelada. Você pode acompanhar o progresso aqui e clicar em Jogar novamente quando terminar.",
+      },
+      installReadiness: {
+        eyebrow: "Instalação pausada",
+        title: "Manifest indisponível",
+        body: "Os manifests necessários para iniciar esta instalação ainda não estão disponíveis. O jogo continuará na sua biblioteca e a preparação seguirá em segundo plano.",
+        risk: "Ao instalar mesmo assim, a Steam pode mostrar No Internet Connection devido à falta de manifests.",
+        installAnyway: "Instalar mesmo assim",
+        close: "Fechar",
+        ready: "O manifest está pronto. Este jogo já pode ser instalado.",
       },
       about: {
         tab: "Sobre",
@@ -851,6 +869,11 @@
   function autoFixStrings() {
     var L = I18N[pickLang()];
     return (L && L.autoFix) || I18N.en.autoFix;
+  }
+
+  function installReadinessStrings() {
+    var L = I18N[pickLang()];
+    return (L && L.installReadiness) || I18N.en.installReadiness;
   }
 
   // Debug aids, live-introspectable over CDP like the other window.__lumen*.

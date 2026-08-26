@@ -1088,6 +1088,7 @@ function mp.default_ctx()
     metadata_cache_dir = (h ~= "" and (h .. "/.local/share/Lumen/cache/game-updates")) or nil,
     imports_path = (h ~= "" and (h .. "/.config/SLSsteam/lumen_lua_imports.txt")) or nil,
     import_root = (h ~= "" and (h .. "/.local/share/Lumen/imports")) or nil,
+    offline_path = (h ~= "" and (h .. "/.config/SLSsteam/offline")) or nil,
     steam_root = root,
   }
 end
@@ -2139,9 +2140,107 @@ local function build_import_plan(ctx, session, state)
   }
 end
 
--- EnrichGameImport{session, appid, lua}: attach the canonical source-generated
--- Lua to an uploaded app without publishing it. The next Prepare/Commit merges
--- source keys and DLCs under the user's uploaded manifest choices.
+local function import_session_has_app(entries, appid)
+  local has_app = false
+  for _, entry in ipairs(entries) do
+    if tostring(entry.name):lower():match("%.lua$") then
+      local parsed = mp.resolve_lua_identity(entry.data or "", { filename = entry.name })
+      if parsed and parsed.base == appid then has_app = true; break end
+    end
+  end
+  return has_app
+end
+
+-- Attach a server-side source snapshot to an existing import transaction.
+-- Binary manifests never cross the browser/CDP bridge: LuaTools hands this
+-- function already-validated private draft bytes, which are independently
+-- inspected again before being appended as ordinary private import files.
+function mp.enrich_game_import_snapshot(ctx, session, appid, snapshot)
+  ctx = ctx or mp.default_ctx()
+  appid = positive_id(appid)
+  if not appid or type(snapshot) ~= "table" or type(snapshot.lua) ~= "string" then
+    return false, "bad source snapshot"
+  end
+  local state, serr = read_import_state(ctx, session)
+  if not state then return false, serr end
+  local entries, cerr = collect_import_entries(ctx, session, state)
+  if not entries then return false, cerr end
+  if not import_session_has_app(entries, appid) then
+    return false, "import session does not contain app " .. appid
+  end
+
+  local canonical, merr = mp.merge_lua_text(appid, snapshot.lua)
+  if not canonical then return false, merr end
+  local source_entries = {}
+  for index, item in ipairs(type(snapshot.manifests) == "table"
+      and snapshot.manifests or {}) do
+    if type(item) ~= "table" or type(item.data) ~= "string" then
+      return false, "invalid source manifest at item " .. index
+    end
+    if #item.data > IMPORT_MAX_FILE then return false, "source manifest is too large" end
+    source_entries[#source_entries + 1] = {
+      name = "source_" .. index .. ".manifest", data = item.data,
+    }
+  end
+  local source_inspected, source_error = mp.inspect_import_entries(source_entries)
+  if not source_inspected then return false, source_error end
+  local combined = {}
+  for _, entry in ipairs(entries) do combined[#combined + 1] = entry end
+  for _, entry in ipairs(source_entries) do combined[#combined + 1] = entry end
+  local inspected, inspect_error = mp.inspect_import_entries(combined)
+  if not inspected then return false, inspect_error end
+
+  local existing = {}
+  local current_inspected = assert(mp.inspect_import_entries(entries))
+  for _, item in ipairs(current_inspected.manifests) do
+    existing[item.name] = true
+  end
+  local appended, extra_total = {}, 0
+  for _, item in ipairs(source_inspected.manifests) do
+    if not existing[item.name] then
+      appended[#appended + 1] = item
+      extra_total = extra_total + #item.data
+      existing[item.name] = true
+    end
+  end
+  if #state.files + #appended > IMPORT_MAX_FILES then
+    return false, "too many source manifests"
+  end
+  if (tonumber(state.total) or 0) + extra_total > IMPORT_MAX_TOTAL then
+    return false, "source snapshot is too large"
+  end
+
+  local dir = import_session_dir(ctx, session)
+  local written = {}
+  for _, item in ipairs(appended) do
+    local index = #state.files + 1
+    local path = dir .. "/file_" .. index
+    local stored, store_error = write_plain_atomic(path, item.data)
+    if not stored then
+      for _, prior in ipairs(written) do os.remove(prior) end
+      return false, store_error
+    end
+    written[#written + 1] = path
+    state.files[index] = {
+      name = item.name, size = #item.data, received = #item.data,
+      next_chunk = 1, complete = true,
+    }
+  end
+  state.total = (tonumber(state.total) or 0) + extra_total
+  state.enrichment = type(state.enrichment) == "table" and state.enrichment or {}
+  state.enrichment[tostring(appid)] = canonical
+  state.prepared = false
+  local sw, se = write_import_state(ctx, session, state)
+  if not sw then
+    for _, path in ipairs(written) do os.remove(path) end
+    return false, se
+  end
+  return true, { appid = appid, manifests = #appended }
+end
+
+-- EnrichGameImport{session, appid, lua}: legacy data-only enrichment. Kept for
+-- compatibility with older plugin packages; new callers use the private
+-- snapshot handoff above so available binary manifests are preserved.
 function mp.enrich_game_import_rpc(ctx, json_str)
   ctx = ctx or mp.default_ctx()
   local ok, req = pcall(json.decode, json_str)
@@ -2154,14 +2253,9 @@ function mp.enrich_game_import_rpc(ctx, json_str)
   if not state then return err(serr) end
   local entries, cerr = collect_import_entries(ctx, req.session, state)
   if not entries then return err(cerr) end
-  local has_app = false
-  for _, entry in ipairs(entries) do
-    if tostring(entry.name):lower():match("%.lua$") then
-      local parsed = mp.resolve_lua_identity(entry.data or "", { filename = entry.name })
-      if parsed and parsed.base == appid then has_app = true; break end
-    end
+  if not import_session_has_app(entries, appid) then
+    return err("import session does not contain app " .. appid)
   end
-  if not has_app then return err("import session does not contain app " .. appid) end
   local canonical, merr = mp.merge_lua_text(appid, req.lua)
   if not canonical then return err(merr) end
   state.enrichment = type(state.enrichment) == "table" and state.enrichment or {}
@@ -2455,6 +2549,71 @@ function mp.sync_game_pins_rpc(ctx, json_str)
   if not wok then return err(werr) end
   mp.invalidate_appinfo_cache(ctx, appid)
   return json.encode({ success = true, appid = appid, pinned = count })
+end
+
+local function has_exact_manifest(ctx, steam_root, depot, gid)
+  local candidates = {}
+  if ctx and ctx.manifests_dir then
+    candidates[#candidates + 1] = ctx.manifests_dir .. "/" .. depot .. "_" .. gid .. ".manifest"
+  end
+  if steam_root and steam_root ~= "" then
+    candidates[#candidates + 1] = tostring(steam_root):gsub("/+$", "")
+      .. "/depotcache/" .. depot .. "_" .. gid .. ".manifest"
+  end
+  for _, path in ipairs(candidates) do
+    local bytes = read_file(path)
+    if bytes and mp.parse_manifest(bytes, depot, gid) then return true end
+  end
+  return false
+end
+
+-- Read-only preflight for the account/recommended Add flow. Missing manifests
+-- are allowed while providers are healthy because slsteam's background queue
+-- can materialize them. Missing + open provider circuit requires an explicit
+-- Latest/cancel choice before any pins or auto-fix state are published.
+function mp.recommended_manifest_availability(ctx, requested_appid, text, steam_root)
+  ctx = ctx or mp.default_ctx()
+  local appid = positive_id(requested_appid)
+  local parsed, parse_error = mp.resolve_lua_identity(text, { appid = appid })
+  if not appid or not parsed then
+    return { ready = false, offline = false, missing = 0,
+      invalid = true, error = parse_error or "invalid recommended manifest" }
+  end
+  local missing, targets = 0, 0
+  for depot, info in pairs(parsed.depots or {}) do
+    if info.manifestid then
+      targets = targets + 1
+      if not has_exact_manifest(ctx, steam_root or ctx.steam_root,
+          depot, info.manifestid) then
+        missing = missing + 1
+      end
+    end
+  end
+  return {
+    ready = targets > 0 and missing == 0,
+    offline = read_file(ctx.offline_path) ~= nil,
+    missing = missing,
+    targets = targets,
+  }
+end
+
+-- Automatic fixes are build-specific. A queued fix may start only after the
+-- installed appmanifest reports every exact app-scoped pin; merely having the
+-- manifest bytes locally is not enough if the user installed a fallback build.
+function mp.app_at_pinned_gids(ctx, appid)
+  ctx = ctx or mp.default_ctx()
+  appid = positive_id(appid)
+  if not appid then return false end
+  local cfg = read_file(ctx.config_path)
+  if not cfg then return false end
+  local app_pins = mp.parse_pins(cfg)[appid]
+  if type(app_pins) ~= "table" or type(app_pins.depots) ~= "table"
+      or next(app_pins.depots) == nil then return false end
+  local installed = installed_gids(ctx.steam_root, appid)
+  for depot, gid in pairs(app_pins.depots) do
+    if installed[depot] ~= tostring(gid) then return false end
+  end
+  return true
 end
 
 -- Atomically install an official LuaTools manifest and synchronize every

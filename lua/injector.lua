@@ -654,6 +654,16 @@ function Conn:_on_binding(payload_str)
     result = (appid and self.manager
         and self.manager:cancel_auto_fix_launch(appid))
       and '{"ok":true}' or '{"ok":false}'
+  elseif req.fn == "__lumenInstallBlocked" then
+    local appid = tonumber((req.args or {}).appid)
+    if appid and self.manager then
+      self.manager:broadcast_install_readiness_blocked(appid)
+    end
+    result = '{"ok":true}'
+  elseif req.fn == "__lumenInstallAnyway" then
+    local appid = tonumber((req.args or {}).appid)
+    result = (appid and self.manager and self.manager:install_anyway(appid))
+      and '{"ok":true}' or '{"ok":false}'
   elseif req.fn == "__lumenSlsWarn" then
     -- Show the "slsteam-moon not loaded" warning in the on-top context (store
     -- web view when it's composited above the shell). Triggered from the shell
@@ -1139,6 +1149,23 @@ function State:update_auto_fix_guard(jobs)
   return false
 end
 
+-- Keep the synchronous SharedJS install guard supplied with a short-lived map.
+-- The map is prepared off-click by the sidecar; the wrapper itself performs no
+-- disk, RPC or network work. Missing/stale state therefore fails open.
+function State:update_install_readiness_guard(apps)
+  apps = type(apps) == "table" and apps or {}
+  local expr = "window.__lumenUpdateInstallReadinessGuard&&"
+    .. "window.__lumenUpdateInstallReadinessGuard(" .. json.encode(apps) .. ")"
+  for _, conn in pairs(self.conns) do
+    if conn.sock and conn.title == "SharedJSContext" then
+      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
+        { expression = expr, returnByValue = true })
+      return true
+    end
+  end
+  return false
+end
+
 -- The compact progress UI lives in the Lumen menu bundle (desktop shell plus
 -- Store/Community overlay copies). SharedJS owns the launch guard but has no
 -- visible UI, so avoid sending it the once-per-second progress repaint.
@@ -1182,6 +1209,10 @@ end
 
 function State:cancel_auto_fix_launch(appid)
   return auto_fix_guard_action(self, "__lumenCancelAutoFixLaunch", appid)
+end
+
+function State:install_anyway(appid)
+  return auto_fix_guard_action(self, "__lumenInstallAnyway", appid)
 end
 
 -- Relay a steam://validate/<appid> into SharedJSContext (the only context with
@@ -1458,6 +1489,20 @@ function State:broadcast_auto_fix_timeout(appid)
   local id = math.floor(tonumber(appid) or 0)
   self:_fire_on_top("window.__lumenShowAutoFixTimeout&&window.__lumenShowAutoFixTimeout("
     .. tostring(id) .. ")")
+end
+
+function State:broadcast_install_readiness_blocked(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  self:_fire_on_top(
+    "window.__lumenShowInstallReadinessBlocked&&"
+      .. "window.__lumenShowInstallReadinessBlocked(" .. tostring(id) .. ")")
+end
+
+function State:broadcast_install_readiness_ready(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  self:_fire_on_top(
+    "window.__lumenShowInstallReadinessReady&&"
+      .. "window.__lumenShowInstallReadinessReady(" .. tostring(id) .. ")")
 end
 
 -- Show the "slsteam-moon not loaded" warning in whichever view is on top, so it

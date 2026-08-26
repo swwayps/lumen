@@ -25,6 +25,15 @@ local function varint(n)
   until n == 0
   return table.concat(out)
 end
+local function test_manifest(depot, gid, created)
+  local function section(magic, body)
+    return string.pack("<I4I4", magic, #body) .. body
+  end
+  local metadata = "\x08" .. varint(depot) .. "\x10" .. varint(tonumber(gid))
+    .. "\x18" .. varint(created)
+  return section(0x71F617D0, "payload") .. section(0x1F4812BE, metadata)
+    .. string.pack("<I4", 0x32C415AB)
+end
 
 -- ── 1. creation_time parse (synthetic ContentManifestMetadata) ─────────────
 do
@@ -969,13 +978,35 @@ do
     config_path = cfg,
     stplug_dir = stplug,
     imports_path = imports,
+    manifests_dir = root .. "/manifests",
+    steam_root = root,
+    offline_path = root .. "/offline",
   }
+  mkdir(ctx.manifests_dir); mkdir(root .. "/steamapps")
   local recommended_lua = table.concat({
     "-- official LuaTools manifest",
     "addappid(3764200)",
     'addappid(3764201, 1, "' .. string.rep("a", 64) .. '")',
     'setManifestid(3764201, "9166256367562763038")',
   }, "\n") .. "\n"
+
+  local availability = mp.recommended_manifest_availability(
+    ctx, 3764200, recommended_lua, root)
+  check(availability.ready == false and availability.offline == false,
+    "recommended: a missing exact manifest is observable while providers are online")
+  local offline = assert(io.open(ctx.offline_path, "wb")); offline:write("1\n"); offline:close()
+  availability = mp.recommended_manifest_availability(
+    ctx, 3764200, recommended_lua, root)
+  check(availability.ready == false and availability.offline == true,
+    "recommended: an offline provider with a missing exact manifest requests fallback")
+  local exact = test_manifest(3764201, "9166256367562763038", 1700000200)
+  local exact_file = assert(io.open(
+    ctx.manifests_dir .. "/3764201_9166256367562763038.manifest", "wb"))
+  exact_file:write(exact); exact_file:close()
+  availability = mp.recommended_manifest_availability(
+    ctx, 3764200, recommended_lua, root)
+  check(availability.ready == true and availability.missing == 0,
+    "recommended: an exact local manifest remains usable while providers are offline")
 
   local ok, result = mp.install_luatools_manifest(ctx, 3764200, recommended_lua)
   check(ok == true, "recommended: Lua and pins publish atomically")
@@ -994,6 +1025,14 @@ do
     "9166256367562763038", "recommended: setManifestid becomes ManifestPins")
   check(io.open(imports, "rb") == nil,
     "recommended: title is not marked as a manual Import games entry")
+
+  check(mp.app_at_pinned_gids(ctx, 3764200) == false,
+    "recommended: automatic fix waits until the pinned build is installed")
+  local acf = assert(io.open(root .. "/steamapps/appmanifest_3764200.acf", "wb"))
+  acf:write('"AppState"\n{\n"InstalledDepots"\n{\n"3764201"\n{\n'
+    .. '"manifest" "9166256367562763038"\n}\n}\n}\n'); acf:close()
+  check(mp.app_at_pinned_gids(ctx, 3764200) == true,
+    "recommended: automatic fix may run only on the exact pinned build")
 
   os.execute("rm -rf '" .. root .. "'")
 end
@@ -1283,13 +1322,18 @@ do
   check(eu.success, "enrich: incomplete Lua upload accepted")
   local source_lua = 'addappid(750)\naddappid(752)\naddappid(751,1,"'
     .. string.rep("c", 64) .. '")\n'
-  local enriched = json.decode(mp.enrich_game_import_rpc(ctx, json.encode({
-    session = eb.session, appid = 750, lua = source_lua,
-  })))
-  check(enriched.success, "enrich: validated source Lua attached to private session")
+  local source_manifest = manifest(751, "7501", 1700000100)
+  local enriched, enrich_result = mp.enrich_game_import_snapshot(
+    ctx, eb.session, 750, {
+      lua = source_lua,
+      manifests = { { name = "source.manifest", data = source_manifest } },
+    })
+  check(enriched and enrich_result.manifests == 1,
+    "enrich: validated source snapshot attached to private session")
   local ep = json.decode(mp.prepare_game_import_rpc(ctx, json.encode({ session = eb.session })))
-  check(ep.success and ep.apps[1].keys == 1 and ep.apps[1].pins == 1,
-    "enrich: prepare sees source key and uploaded pin")
+  check(ep.success and ep.apps[1].keys == 1 and ep.apps[1].pins == 1
+      and #ep.manifests == 1,
+    "enrich: prepare sees source key, uploaded pin, and source manifest")
   check(read(ctx.stplug_dir .. "/750.lua") == nil,
     "enrich: source lookup publishes nothing before commit")
   local ec = json.decode(mp.commit_game_import_rpc(ctx, json.encode({ session = eb.session })))
@@ -1298,6 +1342,8 @@ do
     "enrich: commit publishes missing source key")
   check(enriched_lua:find('setManifestid(751,"7501")', 1, true) ~= nil,
     "enrich: uploaded manifest choice wins")
+  check(read(ctx.manifests_dir .. "/751_7501.manifest") == source_manifest,
+    "enrich: commit preserves the source manifest bytes")
 
   -- The creator's blank GID means Latest even when the app was previously
   -- locked. SyncGamePins must remove that old YAML entry, not merely omit a new
