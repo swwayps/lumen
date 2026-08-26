@@ -59,7 +59,7 @@ local ALLOWLIST = {
   "GetSettingsConfig","GetThemes","GetTranslations","GetUnfixStatus",
   "HasLuaToolsForApp","OpenExternalUrl","OpenGameFolder","ReadLoadedApps",
   "RemoveApi","RenameApi","ReorderApis","RestartSteam","ToggleApi","UnFixGame",
-  "SearchSteamGames","StartAddViaLuaTools",
+  "SearchSteamGames","GetSteamAppDetails","StartAddViaLuaTools",
   "StartAddViaLuaToolsSmart","StartAddViaLuaToolsSource","StartGameDraft",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
   "DeleteManifest","ClearManifests",

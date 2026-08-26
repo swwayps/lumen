@@ -57,6 +57,13 @@ ok(ui.includes('call("SearchSteamGames"') && ui.includes("renderStoreResults"),
   "creator searches the Steam catalog through the local backend and lets the user choose a result");
 ok(/local ALLOWLIST[\s\S]*["']SearchSteamGames["']/.test(boot),
   "Lumen formally allowlists the Steam catalog RPC");
+ok(ui.includes('call("GetSteamAppDetails"')
+  && /local ALLOWLIST[\s\S]*["']GetSteamAppDetails["']/.test(boot),
+  "creator resolves global product identity through the local backend");
+ok(!/fetch\(["']https:\/\/store\.steampowered\.com\/api\/appdetails/.test(ui),
+  "creator identity never depends on the user's Steam Store region");
+ok(/lumen-game-details-v2:/.test(ui),
+  "global identity uses a new cache generation");
 ok(!/fetch\(["']https:\/\/store\.steampowered\.com\/api\/storesearch/.test(ui),
   "creator never calls the CORS-blocked Steam catalog directly from CEF");
 ok(ui.includes("scheduleGameSearch") && /setTimeout\([^,]+,\s*280\)/.test(ui),
@@ -67,6 +74,25 @@ ok(ui.includes('role", "combobox"') && ui.includes('role", "listbox"')
 ok(ui.includes("sourceProgressMessage") && ui.includes("bytesRead")
   && ui.includes("totalBytes"),
   "source lookup reports real transfer progress instead of a static wait state");
+const openAppStart = ui.indexOf("var openApp = function");
+const openAppEnd = ui.indexOf("var run = function", openAppStart);
+const openAppFlow = ui.slice(openAppStart, openAppEnd);
+ok(openAppStart >= 0
+  && openAppFlow.indexOf('call("StartGameDraft"') < openAppFlow.indexOf("detailsRequest = fetchAppDetails(id)")
+  && openAppFlow.indexOf("detailsRequest = fetchAppDetails(id)") < openAppFlow.indexOf("pollGameDraft")
+  && /Promise\.all\(\[draftRequest,\s*detailsRequest\]\)/.test(openAppFlow),
+  "global identity lookup overlaps the slower source draft");
+ok(/loadingGlobalDetails\s*:\s*"Loading global Steam details/.test(i18n)
+  && /loadingGlobalDetails\s*:\s*"Carregando detalhes globais da Steam/.test(i18n),
+  "global metadata loading copy is localized");
+ok(/status\.setAttribute\("role",\s*"status"\)/.test(ui)
+  && /status\.setAttribute\("aria-live",\s*"polite"\)/.test(ui)
+  && /detailsPending[\s\S]*loadingGlobalDetails[\s\S]*sourceProgressMessage/.test(openAppFlow),
+  "global metadata loading remains visible and accessible beside source progress");
+ok(/metadataAvailable\s*!==\s*true[\s\S]*identity_metadata_unavailable/.test(openAppFlow)
+  && /e\s*&&\s*e\.code\s*===\s*["']identity_metadata_unavailable["']/.test(openAppFlow)
+  && /cancelGameDraft\(active\.appid,\s*active\.session\)/.test(openAppFlow),
+  "global metadata failure cancels the draft and surfaces immediately");
 ok(ui.includes("steamdb.info/depot/") && ui.includes("/manifests/"),
   "creator links each valid depot to its SteamDB manifest history");
 ok(ui.includes("manifestSourceHint") && ui.includes("manifestLatestHint")

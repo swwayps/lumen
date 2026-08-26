@@ -586,7 +586,7 @@
       .replace("{appid}", appid);
   }
 
-  // Store metadata is the identity authority for imported apps. Do not infer a
+  // Global Steam product metadata is the identity authority for imported apps. Do not infer a
   // missing type from the Lua shape: a DLC can otherwise be published as a
   // base game, and a self-referential fullgame field is not a usable relation.
   // Return a blocking message, or null when the identity is structurally valid.
@@ -808,7 +808,7 @@
 
   var APP_DETAILS_TTL = 7 * 24 * 60 * 60 * 1000;
   function fetchAppDetails(appid) {
-    var key = "lumen-game-details-v1:" + appid;
+    var key = "lumen-game-details-v2:" + appid;
     try {
       var cached = JSON.parse(localStorage.getItem(key) || "null");
       if (cached && cached.savedAt && Date.now() - cached.savedAt < APP_DETAILS_TTL) {
@@ -821,16 +821,15 @@
     };
     var request;
     try {
-      request = fetch("https://store.steampowered.com/api/appdetails?appids=" + appid)
-        .then(function (response) { return response.json(); })
-        .then(function (json) {
-          var data = json && json[appid] && json[appid].success && json[appid].data;
-          if (!data) return fallback;
-          var fullgame = data.fullgame && data.fullgame.appid;
+      request = call("GetSteamAppDetails", { appid: appid })
+        .then(parseRpc)
+        .then(function (data) {
+          if (!data || data.metadataAvailable !== true) return fallback;
+          var fullgame = data.fullgameAppid;
           var fullgameAppid = /^\d+$/.test(String(fullgame || "")) ? Number(fullgame) : null;
           var value = {
             name: data.name || fallback.name,
-            image: data.header_image || data.capsule_image || fallback.image,
+            image: data.image || fallback.image,
             type: typeof data.type === "string" ? data.type : null,
             fullgameAppid: fullgameAppid,
             metadataAvailable: true,
@@ -1193,6 +1192,9 @@
     search.className = "lumen-mbtn primary"; search.textContent = GU.searchSources;
     var status = document.createElement("div");
     status.className = "lumen-builder-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("aria-atomic", "true");
     var error = document.createElement("div");
     error.className = "lumen-err";
     var results = document.createElement("div");
@@ -1256,34 +1258,61 @@
     var openApp = function (id) {
       if (searchTimer) clearTimeout(searchTimer);
       closeStoreResults(); error.textContent = "";
+      var detailsRequest = null;
+      var detailsPending = false;
+      var sourceStatusMessage = GU.loadChecking;
       search.disabled = true; appid.disabled = true;
       status.className = "lumen-builder-status loading";
       status.innerHTML = '<span class="lumen-spin"></span><span></span>';
-      status.lastChild.textContent = GU.loadChecking;
+      var paintLoadingStatus = function () {
+        if (cancelled || !status.lastChild) return;
+        var messages = sourceStatusMessage ? [sourceStatusMessage] : [];
+        if (detailsPending) messages.push(GU.loadingGlobalDetails);
+        status.lastChild.textContent = messages.join("  \u00b7  ");
+      };
+      paintLoadingStatus();
       call("StartGameDraft", { appid: id }).then(parseRpc).then(function (start) {
         active = { appid: id, session: start.session };
         if (cancelled) {
           call("CancelGameDraft", { appid: id, session: start.session }).catch(function () {});
           return Promise.reject(new Error("cancelled"));
         }
-        return pollGameDraft(id, start.session, function (state) {
+        detailsPending = true;
+        paintLoadingStatus();
+        detailsRequest = fetchAppDetails(id).then(function (details) {
+          detailsPending = false;
+          paintLoadingStatus();
+          if (!details || details.metadataAvailable !== true) {
+            var detailsError = new Error(importedIdentityMetadataError(id));
+            detailsError.code = "identity_metadata_unavailable";
+            throw detailsError;
+          }
+          return details;
+        });
+        var draftRequest = pollGameDraft(id, start.session, function (state) {
           if (!status.lastChild) return;
-          status.lastChild.textContent = sourceProgressMessage(state);
-        }).then(function (draft) { return { draft: draft, session: start.session }; });
+          sourceStatusMessage = sourceProgressMessage(state);
+          paintLoadingStatus();
+        }).then(function (draft) {
+          sourceStatusMessage = "";
+          paintLoadingStatus();
+          return draft;
+        });
+        return Promise.all([draftRequest, detailsRequest]).then(function (ready) {
+          return { draft: ready[0], details: ready[1], session: start.session };
+        });
       }).then(function (source) {
         if (cancelled) return;
         active = { appid: id, session: source.session, draft: source.draft };
-        status.lastChild.textContent = GU.loadingDetails;
-        return fetchAppDetails(id).then(function (details) {
-          if (!cancelled) renderGameCreatorEditor(body, active, details);
-        });
+        renderGameCreatorEditor(body, active, source.details);
       }).catch(function (e) {
         if (cancelled) return;
         if (active) cancelGameDraft(active.appid, active.session);
         search.disabled = false; appid.disabled = false;
         status.textContent = ""; status.className = "lumen-builder-status";
-        error.textContent = e && e.code === "not_found"
-          ? GU.sourceNotFound : GU.sourceFail + " " + ((e && e.message) || e);
+        error.textContent = e && e.code === "not_found" ? GU.sourceNotFound
+          : (e && e.code === "identity_metadata_unavailable"
+            ? e.message : GU.sourceFail + " " + ((e && e.message) || e));
       });
     };
     var run = function () {
