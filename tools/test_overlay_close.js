@@ -29,11 +29,13 @@ const source = [
 function harness() {
   const relays = [];
   let overlayPresent = true;
+  let clock = 1000;
   const overlay = { remove() { overlayPresent = false; } };
   const window = {
     Millennium: {
       callServerMethod(plugin, fn) {
-        // A relay that never settles stands in for the blocked sidecar loop.
+        // A relay that never settles stands in for the blocked sidecar loop, and
+        // for the answer being dropped outright on a context recreation.
         const relay = { fn };
         relay.promise = new Promise((resolve) => { relay.settle = resolve; });
         relays.push(relay);
@@ -45,13 +47,16 @@ function harness() {
     getElementById: () => (overlayPresent ? overlay : null),
     removeEventListener() {},
   };
-  vm.runInNewContext(source, { window, document, Promise, JSON, Error, console },
+  vm.runInNewContext(source,
+    { window, document, Promise, JSON, Error, console, Date: { now: () => clock } },
     { filename: "overlay-close.js" });
   return {
     relays,
     api: window.__t,
     isOpen: () => overlayPresent,
     reopen: () => { overlayPresent = true; },
+    advance: (ms) => { clock += ms; },
+    names: () => relays.map((relay) => relay.fn),
   };
 }
 
@@ -70,26 +75,38 @@ async function main() {
   h.api.requestClose();
   h.api.requestClose();
   assert.strictEqual(h.relays.length, 1,
-    "repeated closes must not queue relays behind the blocked call");
+    "a burst of closes collapses into one fan-out");
 
-  h.relays[0].settle("{}");
-  await tick();
+  // The first relay is still unsettled — and stays that way, standing in for a
+  // dropped answer. Once the coalescing window passes, relays must go out again:
+  // gating on the reply instead would wedge the window shut/open for good.
+  h.advance(300);
   h.reopen();
   h.api.requestClose();
   assert.strictEqual(h.relays.length, 2,
-    "a later close fans out again once the previous relay has settled");
+    "a later close fans out even though the previous relay never answered");
   assert.strictEqual(h.isOpen(), false);
 
+  // Reopening right after closing is the case that broke: the open must reach the
+  // sidecar, not be swallowed because an earlier relay is unanswered.
+  h.reopen();
+  h.api.requestOpen();
+  assert.deepStrictEqual(h.names(), ["__lumenClose", "__lumenClose", "__lumenOpen"],
+    "an open right after a close is relayed, not dropped");
+
   // Open cannot be handled locally (it has to target whichever view is on top),
-  // but it must not pile up either.
+  // but a double-click must not pile up either.
   const o = harness();
   o.api.requestOpen();
   o.api.requestOpen();
   o.api.requestOpen();
-  assert.deepStrictEqual(o.relays.map((relay) => relay.fn), ["__lumenOpen"],
-    "repeated opens must not queue relays either");
+  assert.deepStrictEqual(o.names(), ["__lumenOpen"], "a double-click sends one open");
+  o.advance(300);
+  o.api.requestOpen();
+  assert.deepStrictEqual(o.names(), ["__lumenOpen", "__lumenOpen"],
+    "a deliberate second open still goes out");
 
-  console.log("ok   the X closes the window instantly and never queues relays");
+  console.log("ok   the X closes the window instantly, and relays never wedge or pile up");
 }
 
 main().catch((error) => {

@@ -9,6 +9,16 @@
     var s = document.createElement("style");
     s.id = STYLE_ID;
     s.textContent = [
+      // Gamepad focus ring. Steam's own focus ring is drawn by its React
+      // components, so anything Lumen injects has to paint its own — otherwise
+      // the D-pad moves an invisible selection. Applies to every Lumen surface
+      // (menubar entry, settings window, Fixes Menu, guard modals) via the
+      // .active-focus class the gamepad navigation sets.
+      // Gamepad UI runs at a device scale factor, and a 2px outline on a small
+      // control rounds down to a hairline. Keep the ring readable everywhere.
+      ".active-focus{outline:3px solid #66c0f4 !important;outline-offset:2px !important;",
+      "border-radius:4px;box-shadow:0 0 0 4px rgba(102,192,244,.20) !important;",
+      "position:relative;z-index:2;}",
       "#" + BTN_ID + "{display:inline-flex;align-items:center;justify-content:flex-start;gap:0;",
       "cursor:pointer;font-size:13px;line-height:1;height:22px;padding:0;margin:0 2px;overflow:hidden;",
       "opacity:.8;-webkit-app-region:no-drag;user-select:none;border-radius:999px;white-space:nowrap;}",
@@ -93,13 +103,20 @@
       ".lumen-account-avatar{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;",
       "box-sizing:border-box;flex:0 0 32px;border:1px solid rgba(255,255,255,.13);border-radius:50%;",
       "background:rgba(255,255,255,.05);color:#a6afb9;overflow:hidden;}",
-      ".lumen-account-entry.connected .lumen-account-avatar{border-color:rgba(102,192,244,.42);",
-      "background:rgba(26,159,255,.16);color:#66c0f4;}",
+      // A rim, not a ring: at full accent this read as a bright blue circle
+      // drawn around the avatar rather than as part of it.
+      ".lumen-account-entry.connected .lumen-account-avatar{border-color:rgba(102,192,244,.24);",
+      "background:rgba(26,159,255,.1);color:#66c0f4;}",
       ".lumen-account-avatar svg{width:17px;height:17px}.lumen-account-avatar img{width:100%;height:100%;object-fit:cover;}",
       ".lumen-account-entry>span:last-child{display:flex;min-width:0;flex-direction:column;gap:3px;}",
       ".lumen-account-entry strong{color:#f1f3f5;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
       ".lumen-account-entry small{color:#9aa3ad;font-size:10.5px;line-height:1.3;display:-webkit-box;",
       "-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}",
+      // While the auth status is still being fetched the row says so, with the
+      // shared spinner in place of the avatar, instead of guessing "signed out".
+      ".lumen-account-entry.checking strong{color:#c5cad0;}",
+      ".lumen-account-entry.checking .lumen-account-avatar{border-style:dashed;}",
+      ".lumen-account-entry .lumen-spin{width:13px;height:13px;}",
       // Connected reads as status, not as body copy — same dot + green as the
       // account panel's own "Connected" line in the content area.
       ".lumen-account-entry.connected small{display:flex;align-items:center;gap:6px;",
@@ -147,10 +164,7 @@
       "background:#1a1d23;color:#dcdedf;border:1px solid #3d4450;border-radius:3px;",
       "padding:6px 8px;min-width:130px;font-size:13px;font-family:inherit;}",
       ".lumen-row select:hover,.lumen-row input:hover{border-color:#4a5663;}",
-      ".lumen-key-ctrl{gap:8px;}",
-      ".lumen-key-ctrl .lumen-cloud-btn{padding:6px 12px;}",
-      ".lumen-auth-state{margin-top:5px;color:#8f98a0;font-size:11.5px;font-weight:600;}",
-      ".lumen-auth-state.configured{color:#79c754;}",
+
       ".lumen-sw{position:relative;display:inline-block;width:38px;height:20px;flex:0 0 auto;}",
       ".lumen-sw input{opacity:0;width:0;height:0;position:absolute;}",
       ".lumen-sw .sl{position:absolute;inset:0;background:#3d4450;border-radius:20px;transition:.15s;cursor:pointer;}",

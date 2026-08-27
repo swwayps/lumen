@@ -50,15 +50,21 @@
     if (!window.__lumenNoPlugin) {
       accountEntry = document.createElement("button");
       accountEntry.type = "button";
-      accountEntry.className = "lumen-account-entry";
+      // Start as "checking", not as "sign in". The auth status is a backend call
+      // and at boot it waits its turn behind everything else the open kicked off,
+      // so claiming "Sign in to lua.tools" first meant a connected account was
+      // told it was signed out for a second before the row corrected itself.
+      accountEntry.className = "lumen-account-entry checking";
       accountAvatar = document.createElement("span");
       accountAvatar.className = "lumen-account-avatar";
-      accountAvatar.innerHTML = LUA_TOOLS_USER_SVG;
+      var accountSpinner = document.createElement("span");
+      accountSpinner.className = "lumen-spin";
+      accountAvatar.appendChild(accountSpinner);
       var accountText = document.createElement("span");
       accountName = document.createElement("strong");
-      accountName.textContent = luaToolsStrings().signIn;
+      accountName.textContent = "lua.tools";
       accountCopy = document.createElement("small");
-      accountCopy.textContent = luaToolsStrings().unlock;
+      accountCopy.textContent = luaToolsStrings().checking;
       accountText.appendChild(accountName); accountText.appendChild(accountCopy);
       accountEntry.appendChild(accountAvatar); accountEntry.appendChild(accountText);
       side.appendChild(accountEntry);
@@ -231,6 +237,7 @@
       var displayName = configured && status.account && status.account.displayName;
       accountName.textContent = displayName || luaToolsStrings().signIn;
       accountCopy.textContent = configured ? luaToolsStrings().connected : luaToolsStrings().unlock;
+      accountEntry.classList.remove("checking");
       accountEntry.classList.toggle("connected", configured);
       accountAvatar.textContent = "";
       var avatarUrl = configured && luaToolsSafeAvatar(status.account && status.account.avatarUrl);
@@ -247,12 +254,23 @@
       if (currentTab === "fixes") ensureTab("fixes");
     }
 
+    // Warming the other tabs is only worth anything while the window is open.
+    // The sidecar handles one call at a time, and this round of preloads includes
+    // a manifest-archive scan (GetGameUpdates) and a version check that reaches
+    // the network (GetAboutVersions). Left running after a close, they held the
+    // loop for seconds — so reopening right after closing did nothing until they
+    // finished, which read as "the button stopped working".
+    function overlayLive() {
+      return !!document.getElementById(OVERLAY_ID);
+    }
+
     function preloadRemainingTabs() {
       if (preloadStarted) return;
       preloadStarted = true;
       var cloudWarm = cloudBody ? ensureTab("cloud") : Promise.resolve();
       Promise.resolve(cloudWarm).catch(function (e) { log("preload Cloud Saves", e); })
         .then(function () {
+          if (!overlayLive()) return;
           ensureTab("gu");
           ensureTab("about");
         });
@@ -281,6 +299,9 @@
 
     function ensureTab(which) {
       if (initialized[which]) return initialized[which];
+      // Nothing gets queued for a window that is already gone. `initialized`
+      // stays false, so the tab loads normally on the next open.
+      if (!overlayLive()) return Promise.resolve();
       initialized[which] = true;
       var loading;
       if (which === "sls") loading = loadSlsConfig();
@@ -388,6 +409,12 @@
     };
     _escHandler = onKey;
     document.addEventListener("keydown", onKey, true);
+    // Gamepad UI: register the window with Steam's own focus navigation so the
+    // D-pad walks the tabs and controls instead of the library behind it.
+    // Guarded because unit tests load this fragment without 04-overlay-helpers.
+    if (typeof setSettingsFocusTrap === "function") {
+      setSettingsFocusTrap(overlay, requestClose);
+    }
   }
 
   // Exposed so the sidecar (injector State:broadcast_overlay) can open/close the
