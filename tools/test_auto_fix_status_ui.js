@@ -45,7 +45,13 @@ class El {
     if (this.disabled) return;
     for (const fn of this._listeners.click || []) fn({ preventDefault() {}, stopPropagation() {}, target: this });
   }
-  focus() { this.focused = true; }
+  focus() { this.focused = true; document.activeElement = this; }
+  contains(target) { return walk(this).includes(target); }
+  querySelectorAll(selector) {
+    if (selector !== "button.focusable:not([disabled])") return [];
+    return walk(this).filter((el) => el.tagName === "BUTTON"
+      && el.classList.contains("focusable") && !el.disabled);
+  }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name]; }
   set textContent(value) { this._text = String(value == null ? "" : value); this.children = []; }
@@ -59,14 +65,28 @@ function walk(root) {
 }
 
 const body = new El("body");
+const documentListeners = {};
 const document = {
   body,
   documentElement: body,
+  activeElement: body,
   createElement: (tag) => new El(tag),
   getElementById: (id) => walk(body).find((el) => el.id === id) || null,
-  addEventListener() {},
-  removeEventListener() {},
+  addEventListener(type, fn) { (documentListeners[type] ||= []).push(fn); },
+  removeEventListener(type, fn) {
+    documentListeners[type] = (documentListeners[type] || []).filter((item) => item !== fn);
+  },
 };
+function dispatchKey(key) {
+  const event = {
+    key, defaultPrevented: false, propagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.propagationStopped = true; },
+    stopImmediatePropagation() { this.propagationStopped = true; },
+  };
+  for (const fn of [...(documentListeners.keydown || [])]) fn(event);
+  return event;
+}
 
 const calls = [];
 let settingsOpened = 0;
@@ -124,6 +144,13 @@ vm.createContext(context);
 vm.runInContext(fs.readFileSync("lua/menu/03-styles.js", "utf8"), context, {
   filename: "lua/menu/03-styles.js",
 });
+vm.runInContext(fs.readFileSync("lua/menu/04-overlay-helpers.js", "utf8"), context, {
+  filename: "lua/menu/04-overlay-helpers.js",
+});
+// This fragment normally relays to the sidecar. Keep the existing unit-test
+// seam for the idle moon; focus trapping itself still comes from the real
+// overlay helper above.
+context.requestOpen = function () { settingsOpened++; };
 vm.runInContext(fs.readFileSync(path, "utf8"), context, { filename: path });
 
 let failures = 0;
@@ -173,6 +200,13 @@ async function main() {
       && scans > 0);
   check("U5 a queued Play clearly says it will resume automatically",
     pendingModal.textContent.toLowerCase().includes("open automatically"));
+  context.window.GamepadNav = undefined;
+  const behind = new El("button");
+  behind.focus();
+  const arrow = dispatchKey("ArrowRight");
+  check("U6 keyboard-backed gamepad navigation cannot stay behind the modal",
+    arrow.defaultPrevented && pendingModal.contains(document.activeElement)
+      && document.activeElement.dataset.action);
 
   context.window.__lumenUpdateAutoFixUI({ jobs: {
     "990080": {
@@ -186,12 +220,12 @@ async function main() {
   } });
   context.window.__lumenShowAutoFixModal(990080, true);
   const skip = action("launch-without-fix");
-  check("U6 launch without fix is offered only before file application starts",
+  check("U7 launch without fix is offered only before file application starts",
     skip && !skip.disabled);
   skip.click();
   await Promise.resolve();
   await Promise.resolve();
-  check("U7 safe skip cancels queued work before releasing the exact launch",
+  check("U8 safe skip cancels queued work before releasing the exact launch",
     calls.some((c) => c.fn === "CancelLuaToolsAutoFix" && c.args.appid === 990080)
       && calls.some((c) => c.fn === "__lumenReleaseAutoFixLaunch" && c.args.appid === 990080));
 
@@ -207,12 +241,57 @@ async function main() {
     },
   } });
   const timeoutModal = document.getElementById("lumen-auto-fix-overlay");
-  check("U8 timeout cancels launch but keeps live fix progress and timeout guidance",
+  check("U9 timeout cancels launch but keeps live fix progress and timeout guidance",
     timeoutModal && timeoutModal.textContent.includes("longer than expected")
       && timeoutModal.textContent.includes("43%")
       && action("wait") && !action("cancel-launch"));
 
+  // A cancelled launch is a dead end when the queued fix cannot progress: the
+  // guard already refused the launch, so a job that is still safe to skip must
+  // keep offering that escape instead of leaving Close as the only way out.
+  context.window.__lumenShowAutoFixTimeout(990080);
+  context.window.__lumenUpdateAutoFixUI({ jobs: {
+    "990080": {
+      appid: 990080,
+      gameName: "Hogwarts Legacy",
+      phase: "waiting_install",
+      stage: "preparing",
+      progress: 0,
+      canSkip: true,
+    },
+  } });
+  const stuckSkip = action("launch-without-fix");
+  check("U9b a cancelled launch still offers the safe skip while it is waiting",
+    stuckSkip && !stuckSkip.disabled && action("wait"));
+  if (stuckSkip) {
+    calls.length = 0;
+    stuckSkip.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    check("U9c skipping from the cancelled launch cancels the job and releases play",
+      calls.some((c) => c.fn === "CancelLuaToolsAutoFix" && c.args.appid === 990080)
+        && calls.some((c) => c.fn === "__lumenReleaseAutoFixLaunch"
+          && c.args.appid === 990080));
+  }
+
+  context.window.__lumenShowAutoFixTimeout(990080);
+  context.window.__lumenUpdateAutoFixUI({ jobs: {
+    "990080": {
+      appid: 990080,
+      gameName: "Hogwarts Legacy",
+      phase: "applying",
+      stage: "applying",
+      progress: 96,
+      canSkip: false,
+    },
+  } });
+  check("U9d a cancelled launch never offers to skip files already being written",
+    !action("launch-without-fix") && action("wait"));
+
   context.window.__lumenUpdateAutoFixUI({ jobs: {} });
+  const releasedArrow = dispatchKey("ArrowRight");
+  check("U10 closing the auto-fix modal releases global navigation",
+    !releasedArrow.defaultPrevented);
   check("U9 completed work starts a smooth contraction without erasing its copy",
     !button.classList.contains("lumen-auto-fix-active")
       && button.textContent.includes("Applying fix"));
