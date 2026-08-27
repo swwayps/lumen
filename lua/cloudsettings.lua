@@ -13,6 +13,8 @@
 -- config IO are split from the socket/http work so the module stays
 -- host-testable (deps are injectable in authorize/auth_poll).
 local json = require("json")
+local nonce = require("nonce")
+local privatefs = require("privatefs")
 local sha256 = require("sha256")
 local b64 = require("b64")
 
@@ -73,9 +75,11 @@ function cloudsettings.pkce_challenge(verifier)
   return base64url(sha256.digest(verifier))
 end
 
--- build_auth_url(provider, redirect_uri, state, challenge) -> string.
-function cloudsettings.build_auth_url(provider, redirect_uri, state, challenge)
-  local p = PROVIDERS[provider]
+-- build_auth_url(provider, redirect_uri, state, challenge, cfg) -> string.
+-- `cfg` may carry <provider>_client_id / _client_secret to use this install's own
+-- OAuth client instead of the shared public one (see provider_credentials).
+function cloudsettings.build_auth_url(provider, redirect_uri, state, challenge, cfg)
+  local p = cloudsettings.provider_credentials(provider, cfg)
   if not p then return nil end
   local parts = {
     "client_id=" .. urlencode(p.client_id),
@@ -91,9 +95,9 @@ function cloudsettings.build_auth_url(provider, redirect_uri, state, challenge)
   return p.auth_url .. "?" .. table.concat(parts, "&")
 end
 
--- token_request_body(provider, code, redirect_uri, verifier) -> form body.
-function cloudsettings.token_request_body(provider, code, redirect_uri, verifier)
-  local p = PROVIDERS[provider]
+-- token_request_body(provider, code, redirect_uri, verifier, cfg) -> form body.
+function cloudsettings.token_request_body(provider, code, redirect_uri, verifier, cfg)
+  local p = cloudsettings.provider_credentials(provider, cfg)
   if not p then return nil end
   local parts = {
     "code=" .. urlencode(code),
@@ -174,17 +178,67 @@ local function set_config_key(path, key, value)
   return write_config(path, cfg)
 end
 
--- Resolve the token file for a provider: config.token_path override (absolute
--- or relative to the config dir), else tokens_<provider>.json beside config.
-local function token_path_for(config_path, provider, cfg)
+-- Resolve the token file for a provider: a config.token_path override relative to
+-- the config dir, else tokens_<provider>.json beside config.
+--
+-- The override used to accept an ABSOLUTE path, so whoever could write
+-- config.json chose where a long-lived refresh token was stored. It is now
+-- confined to the config directory: absolute paths, traversal and control
+-- characters all fall back to the default name.
+function cloudsettings.token_path_for(config_path, provider, cfg)
   cfg = cfg or {}
   local dir = dirname(config_path)
   local tp = cfg.token_path
-  if type(tp) == "string" and tp ~= "" then
-    if tp:sub(1, 1) == "/" then return tp end
-    return dir .. "/" .. tp
+  if type(tp) == "string" and tp ~= "" and tp:sub(1, 1) ~= "/"
+      and not tp:find("[%z\n\r]") then
+    local contained = true
+    for seg in tp:gmatch("[^/]+") do
+      if seg == ".." then contained = false; break end
+    end
+    if contained then return dir .. "/" .. tp end
   end
   return dir .. "/tokens_" .. provider .. ".json"
+end
+-- Local alias for the call sites below (kept for readability).
+local token_path_for = cloudsettings.token_path_for
+
+-- write_token_file(path, payload) -> boolean
+-- Creates the token file with mode 0600 from the start. It used to be written
+-- with io.open("wb") — 0666 minus the umask, so typically 0644 — and narrowed
+-- afterwards by shelling out to chmod, leaving the refresh token readable by
+-- every other local user in between. Written to a fresh private temp name and
+-- renamed over the destination, so a symlink at the destination is never
+-- followed and a re-authentication never leaves a half-written token behind.
+function cloudsettings.write_token_file(path, payload)
+  if type(path) ~= "string" or path == "" then return false end
+  local body = json.encode(payload or {})
+  local temp = path .. "." .. (nonce.hex(8) or tostring(os.time())) .. ".tmp"
+  if not privatefs.write_private(temp, body) then return false end
+  local ok_rename = os.rename(temp, path)
+  if not ok_rename then
+    os.remove(temp)
+    return false
+  end
+  return true
+end
+
+-- provider_credentials(provider, cfg) -> a copy of the provider table with the
+-- client credentials overridden from config when the install supplies its own.
+--
+-- The shipped ids are the public rclone/clasp ones, shared with every other tool
+-- that copied them: an installed desktop app's "secret" is public by definition,
+-- but sharing them means sharing their rate limits and their revocation risk.
+function cloudsettings.provider_credentials(provider, cfg)
+  local base = PROVIDERS[provider]
+  if not base then return nil end
+  cfg = cfg or {}
+  local out = {}
+  for k, v in pairs(base) do out[k] = v end
+  local id = cfg[tostring(provider) .. "_client_id"]
+  local secret = cfg[tostring(provider) .. "_client_secret"]
+  if type(id) == "string" and id ~= "" then out.client_id = id end
+  if type(secret) == "string" and secret ~= "" then out.client_secret = secret end
+  return out
 end
 
 local function has_refresh_token(token_file)
@@ -332,7 +386,8 @@ function cloudsettings.authorize(config_path, provider, deps)
   local verifier = d.gen_random(64)
   local challenge = cloudsettings.pkce_challenge(verifier)
   local redirect_uri = "http://localhost:" .. tostring(port) .. p.redirect_path
-  local auth_url = cloudsettings.build_auth_url(provider, redirect_uri, state, challenge)
+  local auth_url = cloudsettings.build_auth_url(provider, redirect_uri, state,
+    challenge, cloudsettings.read_config(config_path))
 
   pending = {
     listener = srv, provider = provider, state = state, verifier = verifier,
@@ -394,8 +449,11 @@ function cloudsettings.auth_poll(deps)
 
   local provider = pending.provider
   local config_path = pending.config_path
-  local body = cloudsettings.token_request_body(provider, code, pending.redirect_uri, pending.verifier)
-  local resp, herr = d.http.post(PROVIDERS[provider].token_url, body, {
+  local cfg = cloudsettings.read_config(config_path)
+  local body = cloudsettings.token_request_body(provider, code,
+    pending.redirect_uri, pending.verifier, cfg)
+  local resp, herr = d.http.post(
+    cloudsettings.provider_credentials(provider, cfg).token_url, body, {
     headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
     timeout = 30,
   })
@@ -410,15 +468,13 @@ function cloudsettings.auth_poll(deps)
 
   local expires_in = tonumber(tok.expires_in) or 3600
   local token_file = token_path_for(config_path, provider, cloudsettings.read_config(config_path))
-  local tf, tferr = io.open(token_file, "wb")
-  if not tf then return finish({ status = "error", error = "cannot write token: " .. tostring(tferr) }) end
-  tf:write(json.encode({
-    access_token = tok.access_token or "",
-    refresh_token = tok.refresh_token,
-    expires_at = d.now() + expires_in,
-  }))
-  tf:close()
-  os.execute("chmod 600 '" .. token_file:gsub("'", "'\\''") .. "' 2>/dev/null")
+  if not cloudsettings.write_token_file(token_file, {
+        access_token = tok.access_token or "",
+        refresh_token = tok.refresh_token,
+        expires_at = d.now() + expires_in,
+      }) then
+    return finish({ status = "error", error = "cannot write token" })
+  end
 
   set_config_key(config_path, "provider", provider)
   return finish({ status = "done", authenticated = true })
@@ -489,34 +545,46 @@ local function load_account_names()
   return cloudsettings.parse_loginusers(t or "")
 end
 
+-- lfs only. The shell fallback that used to sit here quoted the path correctly,
+-- but a shell-out that can never be reached (lfs is linked into the binary) is
+-- still one more place a future path has to stay quoted in.
 local function list_dir(dir)
   local names = {}
+  if type(dir) ~= "string" or dir == "" then return names end
   local ok_lfs, lfs = pcall(require, "lfs")
-  if ok_lfs then
-    pcall(function() for e in lfs.dir(dir) do names[#names + 1] = e end end)
-  else
-    local p = io.popen("ls -1 '" .. dir:gsub("'", "'\\''") .. "' 2>/dev/null")
-    if p then for line in p:lines() do names[#names + 1] = line end; p:close() end
-  end
+  if not ok_lfs then return names end
+  pcall(function()
+    for e in lfs.dir(dir) do
+      if e ~= "." and e ~= ".." then names[#names + 1] = e end
+    end
+  end)
   return names
 end
 
 -- Count save files + total bytes under an app dir, excluding CloudRedirect's
--- metadata files. Uses find -printf so a single spawn walks the whole tree.
+-- metadata files. Walks the tree with lfs rather than spawning `find`: the path
+-- comes from the hook's storage root, and quoting it correctly forever is a
+-- weaker guarantee than not involving a shell.
 local function scan_app_dir(dir)
   local files, size = 0, 0
-  local cmd = "find '" .. dir:gsub("'", "'\\''") ..
-    "' -type f -printf '%s\\t%P\\n' 2>/dev/null"
-  local p = io.popen(cmd, "r")
-  if not p then return 0, 0 end
-  for line in p:lines() do
-    local sz, path = line:match("^(%d+)\t(.*)$")
-    if sz and not is_storage_metadata(path) then
-      files = files + 1
-      size = size + (tonumber(sz) or 0)
+  local ok_lfs, lfs = pcall(require, "lfs")
+  if not ok_lfs then return 0, 0 end
+  local function walk(current, relative)
+    for _, entry in ipairs(list_dir(current)) do
+      local full = current .. "/" .. entry
+      local rel = (relative == "") and entry or (relative .. "/" .. entry)
+      local mode = lfs.attributes(full, "mode")
+      if mode == "directory" then
+        walk(full, rel)
+      elseif mode == "file" then
+        if not is_storage_metadata(rel) then
+          files = files + 1
+          size = size + (lfs.attributes(full, "size") or 0)
+        end
+      end
     end
   end
-  p:close()
+  walk(dir, "")
   return files, size
 end
 

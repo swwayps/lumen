@@ -31,6 +31,8 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include <curl/curl.h>
+
+#include "cainfo.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -234,6 +236,15 @@ static const char *transfer_init(lua_State *L, int table_index,
 
     SETOPT(CURLOPT_URL, t->url);
     SETOPT(CURLOPT_NOSIGNAL, 1L);
+    /* The static libcurl has no --with-ca-bundle, so its compiled-in path is the
+     * build container's. Point it at whichever trust store this distro actually
+     * ships; when nothing is found, leave libcurl's own default in place. */
+    {
+        const char *ca_file = lumen_ca_file();
+        const char *ca_dir = lumen_ca_dir();
+        if (ca_file) SETOPT(CURLOPT_CAINFO, ca_file);
+        if (ca_dir) SETOPT(CURLOPT_CAPATH, ca_dir);
+    }
     SETOPT(CURLOPT_FOLLOWLOCATION, follow_redirects ? 1L : 0L);
     SETOPT(CURLOPT_MAXREDIRS, MAX_REDIRECTS);
     /* Always pinned, never left at libcurl's "every protocol it was built with".

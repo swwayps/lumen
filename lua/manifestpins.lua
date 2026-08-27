@@ -1405,17 +1405,21 @@ local function unmark_import(path, appid)
   if not os.rename(tmp, path) then os.remove(tmp) end
 end
 
--- list_dir(dir) -> array of entry names (lfs when present, else a shell ls).
+-- list_dir(dir) -> array of entry names. lfs only: the shell fallback that used
+-- to sit here ran io.popen("ls -1 '" .. dir .. "'") with the path single-quoted
+-- but NOT escaped, so a directory name containing a single quote broke out of the
+-- quoting. lfs is always linked into the Lumen binary, so the fallback only ever
+-- existed for host tooling — and an unreachable shell-out is still a shell-out.
 local function list_dir(dir)
   local names = {}
-  if not dir then return names end
+  if type(dir) ~= "string" or dir == "" then return names end
   local ok_lfs, lfs = pcall(require, "lfs")
-  if ok_lfs then
-    pcall(function() for e in lfs.dir(dir) do names[#names + 1] = e end end)
-  else
-    local p = io.popen("ls -1 '" .. dir .. "' 2>/dev/null")
-    if p then for line in p:lines() do names[#names + 1] = line end; p:close() end
-  end
+  if not ok_lfs then return names end
+  pcall(function()
+    for e in lfs.dir(dir) do
+      if e ~= "." and e ~= ".." then names[#names + 1] = e end
+    end
+  end)
   return names
 end
 
@@ -1537,7 +1541,18 @@ end
 -- LuaTools <appid>.lua (the depot keys SLSsteam needs) into config/stplug-in.
 local function write_lua_file(stplug_dir, appid, text)
   if not stplug_dir then return false, "no stplug-in dir" end
-  os.execute("mkdir -p '" .. stplug_dir .. "' 2>/dev/null")
+  -- lfs instead of `mkdir -p '<dir>'`: the single quotes were not escaped, so a
+  -- directory name containing one broke out of them.
+  do
+    local ok_lfs, lfs = pcall(require, "lfs")
+    if ok_lfs then
+      local accum = (stplug_dir:sub(1, 1) == "/") and "" or "."
+      for seg in stplug_dir:gmatch("[^/]+") do
+        accum = accum .. "/" .. seg
+        if lfs.attributes(accum, "mode") == nil then lfs.mkdir(accum) end
+      end
+    end
+  end
   local path = stplug_dir .. "/" .. tostring(appid) .. ".lua"
   local tmp = string.format("%s.tmp.lumen.%d.%d", path, os.time(), math.random(100000, 999999))
   local w, werr = io.open(tmp, "wb")
@@ -1624,20 +1639,12 @@ function mp.build_games(ctx)
 
   -- enumerate <appid>.lua in stplug-in
   local lua_files = {}
-  local ok_lfs, lfs = pcall(require, "lfs")
   if ctx.stplug_dir then
-    if ok_lfs then
-      -- lfs.dir THROWS if the directory doesn't exist yet (a fresh install with
-      -- no games added has no config/stplug-in). Guard it so build_games returns
-      -- an empty list and the tab shows its normal empty state, instead of the
-      -- error bubbling up as "Failed to load game versions".
-      pcall(function()
-        for entry in lfs.dir(ctx.stplug_dir) do lua_files[#lua_files + 1] = entry end
-      end)
-    else
-      local p = io.popen("ls -1 '" .. ctx.stplug_dir .. "' 2>/dev/null")
-      if p then for line in p:lines() do lua_files[#lua_files + 1] = line end; p:close() end
-    end
+    -- list_dir swallows the error lfs.dir throws for a missing directory (a fresh
+    -- install with no games added has no config/stplug-in), so build_games
+    -- returns an empty list and the tab shows its normal empty state instead of
+    -- surfacing "Failed to load game versions".
+    lua_files = list_dir(ctx.stplug_dir)
   end
 
   local games = {}
@@ -1791,17 +1798,8 @@ function mp.clear_manifests(ctx)
   -- installed or pinned. Shared runtime depots are protected for the same
   -- reason: their fixed IDs are reused across unrelated apps.
   local referenced = referenced_depots(ctx.stplug_dir, nil)
-  local names = {}
-  local ok_lfs, lfs = pcall(require, "lfs")
-  if ok_lfs then
-    -- Guard: manifests_dir may not exist yet on a fresh install.
-    pcall(function()
-      for entry in lfs.dir(ctx.manifests_dir) do names[#names + 1] = entry end
-    end)
-  else
-    local p = io.popen("ls -1 '" .. ctx.manifests_dir .. "' 2>/dev/null")
-    if p then for line in p:lines() do names[#names + 1] = line end; p:close() end
-  end
+  -- list_dir tolerates a manifests_dir that does not exist yet on a fresh install.
+  local names = list_dir(ctx.manifests_dir)
 
   local removed, freed = 0, 0
   for _, name in ipairs(names) do
