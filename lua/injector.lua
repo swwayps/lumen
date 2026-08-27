@@ -226,7 +226,12 @@ end
 -- List ALL current CEF targets (decoded /json), or nil + reason.
 local function list_all_targets()
   local body = http_get("/json")
-  if not body then return nil, "no /json (CEF port " .. cef_port() .. " closed?)" end
+  -- Report the peer verdict, not "closed": a refusal (the listener is not Steam)
+  -- and an absent listener are different problems and used to look identical.
+  if not body then
+    local _, reason = peerauth.verify_cached(g_peer_cache, cef_port())
+    return nil, "no /json on CEF port " .. cef_port() .. " (" .. tostring(reason) .. ")"
+  end
   local ok, targets = pcall(json.decode, body)
   if not ok or type(targets) ~= "table" then return nil, "bad /json" end
   return targets
@@ -612,8 +617,18 @@ function Conn:connect()
   local port = verified_cef_port()
   if not port then return false end
   local c = socket.tcp(); c:settimeout(5)
-  if not c:connect(CEF_HOST, port) then return false end
-  if not ws_handshake(c, path, port) then c:close(); return false end
+  if not c:connect(CEF_HOST, port) then
+    -- The peer we vouched for is gone (or was never reachable). Drop the cached
+    -- verdict so the next attempt re-checks who owns the port instead of riding
+    -- the remaining TTL.
+    peerauth.invalidate(g_peer_cache)
+    return false
+  end
+  if not ws_handshake(c, path, port) then
+    peerauth.invalidate(g_peer_cache)
+    c:close()
+    return false
+  end
   c:settimeout(0)
   self.sock = c
   self.session = cdp.new_session()
@@ -650,6 +665,11 @@ end
 function Conn:inject()
   local c, s, a = self.sock, self.session, self.assets
   if not a then return end
+  -- Publish the connection token FIRST and unconditionally. Scripts that talk to
+  -- the binding directly (the SharedJSContext guards) have no polyfill closure to
+  -- read it from, and without it every call they make is dropped.
+  send_cmd(c, s, "Runtime.evaluate",
+    { expression = polyfill.token_js(self.token), returnByValue = true })
   if a.polyfill then
     -- Built here, not in boot: it embeds THIS connection's binding token.
     send_cmd(c, s, "Runtime.evaluate",
@@ -1185,7 +1205,9 @@ function State:is_app_busy(appid)
     .. "(a.gameID!=null?a.gameID:a.appid);var text=String(raw==null?'':raw);"
     .. "if(text===want)return true;try{return String(BigInt(text)&0xffffffn)===want;}"
     .. "catch(_){return false;}});}catch(_){return false;}})()"
-  return cdpreq.evaluate(cef_port(), shared, expr, 0.75) == true
+  local port = verified_cef_port()
+  if not port then return false end
+  return cdpreq.evaluate(port, shared, expr, 0.75) == true
 end
 
 -- Keep the SharedJS RunGame guard synchronized with only the AppIDs whose
@@ -1341,7 +1363,8 @@ end
 -- Open the Ryuu login in Steam's own browser window. Returns true, or false plus
 -- a machine-readable reason the panel turns into copy.
 function State:_open_internal_oauth(url, label)
-  local port = cef_port()
+  local port = verified_cef_port()
+  if not port then return false, "no_shell" end
   local targets = list_all_targets()
   local supported, reason = ryuulogin.supported(targets,
     injector.targets_have_gamepad_ui(targets))
@@ -1399,14 +1422,17 @@ end
 function State:ryuu_login_session()
   local shared = self:_shared_ws()
   if not shared then return nil end
-  local result = cdpreq.request(cef_port(), shared, "Network.getCookies",
+  local port = verified_cef_port()
+  if not port then return nil end
+  local result = cdpreq.request(port, shared, "Network.getCookies",
     { urls = { ryuulogin.ORIGIN .. "/" } })
   return ryuulogin.pick_session(result)
 end
 
 -- Close the sign-in window (and the Discord step, if it is still open).
 function State:ryuu_login_close()
-  local port = cef_port()
+  local port = verified_cef_port()
+  if not port then return 0 end
   local closed = 0
   for _, target in ipairs(ryuulogin.login_windows(list_all_targets())) do
     if cdpreq.request(port, target.webSocketDebuggerUrl, "Page.close", {}) then
@@ -1423,7 +1449,8 @@ function State:lua_tools_login_open(url)
 end
 
 function State:lua_tools_login_close()
-  local port = cef_port()
+  local port = verified_cef_port()
+  if not port then return 0 end
   local closed = 0
   for _, target in ipairs(luatoolslogin.login_windows(list_all_targets())) do
     if cdpreq.request(port, target.webSocketDebuggerUrl, "Page.close", {}) then
@@ -1440,7 +1467,8 @@ end
 function State:clear_discord_session()
   local shared = self:_shared_ws()
   if not shared then return 0, 0 end
-  local port = cef_port()
+  local port = verified_cef_port()
+  if not port then return 0, 0 end
   local origins = luatoolslogin.discord_storage_origins()
   local urls = {}
   for _, origin in ipairs(origins) do urls[#urls + 1] = origin .. "/" end

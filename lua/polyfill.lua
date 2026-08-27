@@ -22,6 +22,26 @@ polyfill.BINDING = "__lumenSend"
 -- The payload field carrying the per-connection token.
 polyfill.TOKEN_FIELD = "k"
 
+-- The global the token is published on, for injected scripts that call the
+-- binding directly instead of going through callServerMethod.
+polyfill.TOKEN_GLOBAL = "__lumenKey"
+
+-- token_js(token) -> JS that publishes the connection's token.
+--
+-- Evaluated on EVERY connection, including channels that ship no polyfill. The
+-- SharedJSContext control channel is one of those: its guard scripts
+-- (auto-fix-launch-guard.js, install-readiness-guard.js) call window.__lumenSend
+-- directly because they never needed the promise machinery, and without the token
+-- every one of their calls would now be dropped — silently breaking the install
+-- readiness notice and the auto-fix launch deferral.
+--
+-- Publishing it as a global is no weaker than keeping it in the polyfill's
+-- closure: any script in the same world can already call the closure.
+function polyfill.token_js(token)
+  return "window." .. polyfill.TOKEN_GLOBAL .. "=" ..
+    json.encode(tostring(token or "")) .. ";"
+end
+
 -- build(token) -> JS source string. `token` is the per-connection value the
 -- injector expects back on every call; it is emitted as a JS string literal.
 function polyfill.build(token)

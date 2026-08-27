@@ -85,4 +85,68 @@ do
     "token with extra suffix rejected")
 end
 
+-- ── the token reaches channels that ship no polyfill ────────────────────────
+-- The SharedJSContext control channel is declared with `polyfill = nil` because
+-- its scripts never needed callServerMethod: they call window.__lumenSend
+-- directly. When the token gate was added they had no closure to read it from, so
+-- every __lumenInstallBlocked / __lumenAutoFixLaunch* call was dropped and the
+-- install-readiness notice silently stopped appearing. The token is therefore
+-- published as a global on every connection, polyfill or not.
+do
+  local js = polyfill.token_js("cafebabe")
+  has(js, "window.__lumenKey", "token is published on a global")
+  has(js, "cafebabe", "the token value is present")
+  ok(js:sub(-1) == ";", "the statement is terminated: " .. js)
+end
+
+do
+  -- Emitted as a JS string literal, like the polyfill's own copy.
+  local weird = polyfill.token_js('a";alert(1);//')
+  ok(weird:find('window.__lumenKey="a\\";alert(1);', 1, true) ~= nil,
+    "a hostile token stays inside its literal: " .. weird)
+  local stripped = weird:gsub("\\.", "")
+  ok(not stripped:find('";alert', 1, true), "no literal break-out")
+end
+
+do
+  -- A payload built the way the guards build it must be accepted.
+  local req = polyfill.parse_request(
+    '{"id":"install-readiness-guard-1","fn":"__lumenInstallBlocked",'
+    .. '"args":{"appid":238320},"k":"cafebabe"}', "cafebabe")
+  ok(req ~= nil, "a guard-shaped payload carrying the global token is accepted")
+  ok(req and req.fn == "__lumenInstallBlocked", "the relay name survives")
+end
+
+do
+  -- And the same payload without the token is still refused, so the fix did not
+  -- turn the gate off.
+  ok(polyfill.parse_request(
+    '{"id":"x","fn":"__lumenInstallBlocked","args":{"appid":1}}', "cafebabe")
+    == nil, "the gate still refuses an untokened guard payload")
+end
+
+-- The guard scripts must actually send it.
+do
+  for _, path in ipairs({ "lua/auto-fix-launch-guard.js",
+                          "lua/install-readiness-guard.js" }) do
+    local f = assert(io.open(path, "r"))
+    local src = f:read("*a")
+    f:close()
+    ok(src:find("k: window.__lumenKey", 1, true) ~= nil,
+      "direct binding caller repeats the token: " .. path)
+  end
+end
+
+-- And the injector must publish it before anything else, unconditionally.
+do
+  local f = assert(io.open("lua/injector.lua", "r"))
+  local src = f:read("*a")
+  f:close()
+  local token_pos = src:find("polyfill.token_js(self.token)", 1, true)
+  local polyfill_pos = src:find("polyfill.build(self.token)", 1, true)
+  ok(token_pos ~= nil, "the injector publishes the token")
+  ok(token_pos and polyfill_pos and token_pos < polyfill_pos,
+    "the token is published before the polyfill")
+end
+
 print("test_polyfill: ALL PASS")

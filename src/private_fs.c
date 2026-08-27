@@ -87,8 +87,17 @@ static int fs_mkdir(lua_State *L) {
     const char *path = luaL_checkstring(L, 1);
     lua_Integer mode = luaL_optinteger(L, 2, 0700);
     if (mkdir(path, (mode_t)mode) != 0) return push_errno(L, "mkdir");
-    /* Same reason as above: mkdir intersects the requested mode with the umask. */
-    if (chmod(path, (mode_t)mode) != 0) return push_errno(L, "chmod");
+    /* Same reason as above: mkdir intersects the requested mode with the umask.
+     * If the narrowing fails, REMOVE the directory instead of leaving one behind
+     * that is_private_dir will refuse forever — that would permanently disable
+     * every private write (Update All, the auto-fix) with no recovery short of
+     * manual cleanup. */
+    if (chmod(path, (mode_t)mode) != 0) {
+        int saved = errno;
+        rmdir(path);
+        errno = saved;
+        return push_errno(L, "chmod");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

@@ -20,14 +20,55 @@ local peerauth = {}
 -- TCP state 0x0A == TCP_LISTEN.
 local LISTEN = "0A"
 
+-- Loopback, as /proc/net/tcp and /proc/net/tcp6 spell it. The injector only ever
+-- connects to 127.0.0.1, so a listener bound elsewhere is not the socket we are
+-- about to talk to and must not vouch for it.
+local LOOPBACK_V4 = "0100007F"
+local LOOPBACK_V6 = "00000000000000000000000000000001"
+local LOOPBACK_V6_MAPPED = "0000000000000000FFFF00000100007F"
+
 -- Executables allowed to own the CEF endpoint. Compared as an exact basename:
 -- "steamwebhelper-evil" and "mysteam" must not pass.
 local STEAM_EXE = { steam = true, steamwebhelper = true }
+
+-- Path fragments that place an executable inside a Steam client installation.
+-- A basename check alone proves very little — any process can name its binary
+-- "steam" — so the resolved /proc/<pid>/exe must ALSO sit somewhere a Steam
+-- client actually lives.
+--
+-- Be clear about the limit: a process running as the same user can defeat any
+-- /proc-based identity test, and it could just as easily write into the Steam
+-- tree or preload the real client. This check is not a boundary against that.
+-- What it does buy is refusing an owner we cannot resolve at all (another user's
+-- process, whose /proc/<pid>/fd we cannot read) and refusing the trivial
+-- "/tmp/steam" squatter.
+local STEAM_TREE = {
+  "/.steam/", "/.local/share/Steam/", "/ubuntu12_32/", "/ubuntu12_64/",
+  "/linux32/", "/linux64/", "/steamapps/",
+}
+
+-- How long a positive verdict stays good. Discovery probes several times a
+-- second, so a short window still collapses a burst into one /proc scan, while a
+-- port that changes hands (a webhelper restart releases it) is re-checked.
+peerauth.CACHE_TTL = 2
 
 -- listener_inodes(text, port) -> array of socket inodes listening on `port`.
 -- `text` is the contents of /proc/net/tcp or /proc/net/tcp6. Columns are
 -- sl, local_address, rem_address, st, tx:rx, tr:when, retrnsmt, uid, timeout,
 -- inode — the inode is the tenth whitespace-separated field.
+-- A listener only counts when it is bound to loopback (or to the wildcard
+-- address, which includes loopback). Anything else is a different socket from the
+-- one the injector connects to on 127.0.0.1.
+local function local_address_is_loopback(address)
+  if type(address) ~= "string" then return false end
+  local hex = address:upper()
+  if hex == LOOPBACK_V4 or hex == LOOPBACK_V6 or hex == LOOPBACK_V6_MAPPED then
+    return true
+  end
+  -- Wildcard: all-zero of either width.
+  return hex:match("^0+$") ~= nil
+end
+
 function peerauth.listener_inodes(text, port)
   local out = {}
   if type(text) ~= "string" or type(port) ~= "number" then return out end
@@ -37,8 +78,10 @@ function peerauth.listener_inodes(text, port)
     local f = {}
     for tok in line:gmatch("%S+") do f[#f + 1] = tok end
     if #f >= 10 then
-      local local_port = f[2] and f[2]:match(":(%x+)$")
-      if local_port and local_port:upper() == want and f[4]:upper() == LISTEN then
+      local local_address, local_port = nil, nil
+      if f[2] then local_address, local_port = f[2]:match("^(%x+):(%x+)$") end
+      if local_port and local_port:upper() == want and f[4]:upper() == LISTEN
+          and local_address_is_loopback(local_address) then
         local inode = tonumber(f[10])
         if inode then out[#out + 1] = math.floor(inode) end
       end
@@ -54,7 +97,13 @@ function peerauth.is_steam_exe(target)
   if type(target) ~= "string" or target == "" then return false end
   if target:find(" (deleted)", 1, true) then return false end
   local base = target:match("([^/]+)$")
-  return base ~= nil and STEAM_EXE[base] == true
+  if base == nil or STEAM_EXE[base] ~= true then return false end
+  -- The name is necessary but not sufficient: require the binary to live inside
+  -- a Steam installation, so "/tmp/steam" does not qualify.
+  for _, fragment in ipairs(STEAM_TREE) do
+    if target:find(fragment, 1, true) then return true end
+  end
+  return false
 end
 
 -- ── default /proc readers (all injectable) ──────────────────────────────────
@@ -164,19 +213,36 @@ end
 -- negative one is not: "nothing listening yet" and "not Steam yet" both change
 -- as the client comes up, and caching them would deadlock the boot path.
 function peerauth.new_cache()
-  return { port = nil, trusted = false }
+  return { port = nil, trusted = false, at = nil }
 end
 
-function peerauth.verify_cached(cache, port, deps)
-  if type(cache) == "table" and cache.trusted and cache.port == port then
+-- verify_cached(cache, port, deps, now) -> trusted, reason
+-- A positive verdict is cached for CACHE_TTL seconds. It EXPIRES because the port
+-- can change hands: a webhelper restart releases it, and whatever binds it next
+-- must be checked again rather than inheriting the previous verdict.
+function peerauth.verify_cached(cache, port, deps, now)
+  now = tonumber(now) or os.time()
+  if type(cache) == "table" and cache.trusted and cache.port == port
+      and type(cache.at) == "number" and (now - cache.at) < peerauth.CACHE_TTL then
     return true, "steam (cached)"
   end
   local trusted, reason = peerauth.verify(port, deps)
   if type(cache) == "table" then
     cache.port = port
     cache.trusted = trusted == true
+    cache.at = trusted and now or nil
   end
   return trusted, reason
+end
+
+-- invalidate(cache) — drop any cached verdict. The injector calls this when a
+-- connection to the port fails or closes, so a peer that goes away is re-checked
+-- before the next attach instead of riding the remaining TTL.
+function peerauth.invalidate(cache)
+  if type(cache) ~= "table" then return end
+  cache.port = nil
+  cache.trusted = false
+  cache.at = nil
 end
 
 return peerauth

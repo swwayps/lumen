@@ -17,14 +17,14 @@ end
 
 local TCP = [[
   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
-   0: 3600007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   974        0 15473 1 0000000000000000 100 0 0 10 5
+   0: 0100007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   974        0 15473 1 0000000000000000 100 0 0 10 5
    1: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 987654 1 0000000000000000 100 0 0 10 0
    2: 0100007F:1F91 0100007F:C001 01 00000000:00000000 00:00000000 00000000  1000        0 111111 1 0000000000000000 100 0 0 10 0
 ]]
 
 local TCP6 = [[
   sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
-   0: 00000000000000000000000000000000:1F92 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 222222 1 0000000000000000 100 0 0 10 5
+   0: 00000000000000000000000000000001:1F92 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 222222 1 0000000000000000 100 0 0 10 5
 ]]
 
 -- ── /proc/net/tcp parsing ───────────────────────────────────────────────────
@@ -44,6 +44,14 @@ end
 -- Ports are matched exactly, never by hex prefix.
 do
   ok(#peerauth.listener_inodes(TCP, 53) == 1, "port 53 (0x0035) found")
+  -- A listener on a different loopback address (127.0.0.54) is a different
+  -- socket from the 127.0.0.1 one the injector connects to.
+  local OTHER_LOOPBACK = [[
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 3600007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777777 1 0000000000000000 100 0 0 10 0
+]]
+  ok(#peerauth.listener_inodes(OTHER_LOOPBACK, 8080) == 0,
+    "a listener on another loopback address is not counted")
   ok(#peerauth.listener_inodes(TCP, 8082) == 0, "unlisted port yields nothing")
   ok(#peerauth.listener_inodes(TCP, 0) == 0, "port 0 yields nothing")
 end
@@ -67,11 +75,18 @@ do
     "steamwebhelper accepted")
   ok(peerauth.is_steam_exe("/home/u/.steam/steam/ubuntu12_32/steam"),
     "steam accepted")
+  ok(peerauth.is_steam_exe("/home/u/.local/share/Steam/ubuntu12_32/steam"),
+    "the data-dir installation is accepted")
   ok(not peerauth.is_steam_exe("/tmp/evil"), "unrelated binary refused")
   ok(not peerauth.is_steam_exe("/tmp/steamwebhelper-evil"),
     "lookalike suffix refused")
   ok(not peerauth.is_steam_exe("/tmp/mysteam"), "lookalike prefix refused")
   ok(not peerauth.is_steam_exe("/tmp/steam.sh"), "launcher script refused")
+  -- The right NAME in the wrong place is the trivial squatter: any process can
+  -- call its binary "steam", so the path has to place it in a Steam install.
+  ok(not peerauth.is_steam_exe("/tmp/steam"), "correct name outside a Steam tree refused")
+  ok(not peerauth.is_steam_exe("/home/u/evil/steamwebhelper"),
+    "correct name in an unrelated directory refused")
   ok(not peerauth.is_steam_exe(nil), "nil refused")
   ok(not peerauth.is_steam_exe(""), "empty refused")
   -- A deleted binary is reported by the kernel with a " (deleted)" suffix; that
@@ -151,11 +166,11 @@ do
   local scans = 0
   local d = deps({ read_tcp = function() scans = scans + 1; return TCP end })
   local cache = peerauth.new_cache()
-  ok(peerauth.verify_cached(cache, 8080, d) == true, "first check trusts")
-  ok(peerauth.verify_cached(cache, 8080, d) == true, "second check trusts")
+  ok(peerauth.verify_cached(cache, 8080, d, 1000) == true, "first check trusts")
+  ok(peerauth.verify_cached(cache, 8080, d, 1000) == true, "second check trusts")
   ok(scans == 1, "second check served from cache (scans=" .. scans .. ")")
   -- A different port is a different peer and must be re-verified.
-  peerauth.verify_cached(cache, 9999, d)
+  peerauth.verify_cached(cache, 9999, d, 1000)
   ok(scans == 2, "new port re-scanned")
 end
 
@@ -174,3 +189,81 @@ do
 end
 
 print("test_peerauth: ALL PASS (" .. checks .. " checks)")
+
+-- ── the positive verdict expires ────────────────────────────────────────────
+-- A port changes hands: steamwebhelper restarting releases it, and the injector
+-- has explicit reconnect handling for exactly that. Caching a positive verdict
+-- for the process lifetime would hand the port's next owner the previous owner's
+-- trust.
+do
+  local scans = 0
+  local d = deps({ read_tcp = function() scans = scans + 1; return TCP end })
+  local cache = peerauth.new_cache()
+  ok(peerauth.verify_cached(cache, 8080, d, 1000) == true, "trusted at t=1000")
+  ok(scans == 1, "one scan so far")
+  ok(peerauth.verify_cached(cache, 8080, d, 1000 + peerauth.CACHE_TTL - 0.5) == true,
+    "still cached inside the window")
+  ok(scans == 1, "no rescan inside the window (scans=" .. scans .. ")")
+  ok(peerauth.verify_cached(cache, 8080, d, 1000 + peerauth.CACHE_TTL) == true,
+    "re-verified after the window")
+  ok(scans == 2, "rescanned once the window passed (scans=" .. scans .. ")")
+end
+
+do
+  -- Once expired, a port whose owner is no longer Steam is refused rather than
+  -- riding the old verdict.
+  local hostile = false
+  local d = deps({
+    exe_target = function()
+      if hostile then return "/tmp/steam" end
+      return "/home/u/.steam/steam/ubuntu12_64/steamwebhelper"
+    end,
+  })
+  local cache = peerauth.new_cache()
+  ok(peerauth.verify_cached(cache, 8080, d, 2000) == true, "trusted while Steam owns it")
+  hostile = true
+  ok(peerauth.verify_cached(cache, 8080, d, 2000) == true,
+    "still trusted inside the cache window")
+  ok(peerauth.verify_cached(cache, 8080, d, 2000 + peerauth.CACHE_TTL) == false,
+    "refused after the window once the owner changed")
+end
+
+do
+  -- invalidate() drops the verdict immediately, for use when a connection to the
+  -- port fails.
+  local d = deps()
+  local cache = peerauth.new_cache()
+  ok(peerauth.verify_cached(cache, 8080, d, 3000) == true, "trusted")
+  peerauth.invalidate(cache)
+  ok(cache.trusted == false and cache.port == nil, "invalidate clears the entry")
+end
+
+-- ── the listener must be on loopback ────────────────────────────────────────
+-- The injector always connects to 127.0.0.1. A Steam-owned listener on some other
+-- local address must not vouch for whoever holds the loopback address.
+do
+  local FOREIGN = [[
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100A8C0:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 987654 1 0000000000000000 100 0 0 10 0
+]]
+  ok(#peerauth.listener_inodes(FOREIGN, 8080) == 0,
+    "a listener on a non-loopback address is not counted")
+
+  local WILDCARD = [[
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 555555 1 0000000000000000 100 0 0 10 0
+]]
+  local wild = peerauth.listener_inodes(WILDCARD, 8080)
+  ok(#wild == 1 and wild[1] == 555555,
+    "a wildcard listener is counted (it includes loopback)")
+
+  local MAPPED = [[
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0000000000000000FFFF00000100007F:1F90 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 666666 1 0000000000000000 100 0 0 10 5
+]]
+  local mapped = peerauth.listener_inodes(MAPPED, 8080)
+  ok(#mapped == 1 and mapped[1] == 666666,
+    "an IPv4-mapped loopback listener is counted")
+end
+
+print("test_peerauth: hardening PASS")

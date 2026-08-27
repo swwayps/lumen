@@ -181,6 +181,29 @@ local function get_access_token(http, provider, refresh_token)
   return at
 end
 
+-- Fetch a content endpoint that answers with a redirect to a PRE-AUTHENTICATED
+-- URL (Graph's ":/content", Drive's "alt=media" for some files).
+--
+-- The transport refuses to follow a redirect on a request carrying a credential
+-- header, because libcurl re-sends those headers to the redirect target and does
+-- not strip them on a same-host scheme downgrade. That is the right default and
+-- it is exactly wrong for this shape of endpoint, so follow it here by hand: the
+-- second request goes to the redirect target WITHOUT the Authorization header,
+-- which is what these targets expect anyway.
+local function authed_content_get(http, token, url)
+  local r = http.get(url, {
+    headers = { ["Authorization"] = "Bearer " .. token },
+    timeout = 30,
+  })
+  if not r then return nil end
+  local status = tonumber(r.status) or 0
+  if status < 300 or status >= 400 then return r end
+  local target = r.redirect_url
+  if type(target) ~= "string" or target == "" then return r end
+  -- No credential header, so the transport is free to follow any further hops.
+  return http.get(target, { timeout = 30 })
+end
+
 local function gdrive_get(http, token, url)
   return http.get(url, { headers = { ["Authorization"] = "Bearer " .. token }, timeout = 30 })
 end
@@ -268,7 +291,7 @@ local function gdrive_read_stats(http, token, folder_id)
     local id = metadata[name]
     if id then
       local url = "https://www.googleapis.com/drive/v3/files/" .. urlencode(id) .. "?alt=media"
-      local r = gdrive_get(http, token, url)
+      local r = authed_content_get(http, token, url)
       if r and r.status == 200 then
         local stats = parse_metadata_stats(name, r.body)
         if stats then return stats end
@@ -300,7 +323,7 @@ local function onedrive_read_stats(http, token, account_id, appid)
 
   for _, name in ipairs(METADATA_PRIORITY) do
     if metadata[name] then
-      local r = onedrive_get(http, token, base .. "/" .. name .. ":/content")
+      local r = authed_content_get(http, token, base .. "/" .. name .. ":/content")
       if r and r.status == 200 then
         local stats = parse_metadata_stats(name, r.body)
         if stats then return stats end

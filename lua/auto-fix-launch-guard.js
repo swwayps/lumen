@@ -21,6 +21,9 @@
         id: "auto-fix-guard-" + (++noticeSequence),
         fn: fn,
         args: { appid: Number(appid) },
+        // The injector drops any binding call that does not repeat the
+        // connection token it published on window.__lumenKey.
+        k: window.__lumenKey,
       }));
     } catch (_) {}
   }

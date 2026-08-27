@@ -41,10 +41,15 @@ function privatefs.mkdir_private(path)
     if reason ~= "missing" then return false end
     return privfs.mkdir(path, tonumber("700", 8)) == true
   end
-  -- Fallback for a host Lua without the C module (tests, tooling).
-  local mode = lfs.attributes(path, "mode")
+  -- Fallback for a host Lua without the C module (tests, tooling). Loud, because
+  -- a shipped binary always has the module and silently degrading every private
+  -- write to a check-then-open would be worth knowing about.
+  io.stderr:write("[lumen] WARN: lumen_privfs unavailable; private writes are degraded\n")
+  -- symlinkattributes, so this matches the contract above: lfs.attributes follows
+  -- links and would accept a symlink pointing at a private directory.
+  local mode = lfs.symlinkattributes(path, "mode")
   if mode == "directory" then
-    return lfs.attributes(path, "permissions") == "rwx------"
+    return lfs.symlinkattributes(path, "permissions") == "rwx------"
   end
   if mode ~= nil then return false end
   if not lfs.mkdir(path) then return false end
@@ -65,6 +70,7 @@ function privatefs.write_private(path, data, mode)
   -- Fallback: refuse if anything is already there, then narrow the mode. This
   -- is weaker than O_EXCL (it is a check followed by an open) and exists only so
   -- host-side tooling works; the shipped binary always has the C module.
+  io.stderr:write("[lumen] WARN: lumen_privfs unavailable; private writes are degraded\n")
   if lfs.symlinkattributes(path, "mode") ~= nil then return false end
   local f = io.open(path, "wb")
   if not f then return false end

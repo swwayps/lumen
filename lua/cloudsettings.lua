@@ -569,22 +569,28 @@ local function scan_app_dir(dir)
   local files, size = 0, 0
   local ok_lfs, lfs = pcall(require, "lfs")
   if not ok_lfs then return 0, 0 end
-  local function walk(current, relative)
+  -- symlinkattributes, not attributes: `find` without -L did not follow links,
+  -- and following them here would let a symlink pointing at an ancestor recurse
+  -- until Lua overflows its stack, turning a stats read into an RPC error. The
+  -- depth cap is a second belt for a deep tree.
+  local MAX_DEPTH = 32
+  local function walk(current, relative, depth)
+    if depth > MAX_DEPTH then return end
     for _, entry in ipairs(list_dir(current)) do
       local full = current .. "/" .. entry
       local rel = (relative == "") and entry or (relative .. "/" .. entry)
-      local mode = lfs.attributes(full, "mode")
+      local mode = lfs.symlinkattributes(full, "mode")
       if mode == "directory" then
-        walk(full, rel)
+        walk(full, rel, depth + 1)
       elseif mode == "file" then
         if not is_storage_metadata(rel) then
           files = files + 1
-          size = size + (lfs.attributes(full, "size") or 0)
+          size = size + (lfs.symlinkattributes(full, "size") or 0)
         end
       end
     end
   end
-  walk(dir, "")
+  walk(dir, "", 0)
   return files, size
 end
 

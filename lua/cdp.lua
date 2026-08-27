@@ -86,9 +86,13 @@ end
 -- (SharedJSContext) gets the lumen-menu bundle — never the reverse.
 --
 -- `remote` marks a channel whose documents are fetched from the network rather
--- than served by the client itself. The injector uses it to hand those contexts
--- a reduced RPC registry: script running in a Valve web page is not the same
--- trust level as script the client itself shipped.
+-- than served by the client itself. It is carried through for the caller's
+-- benefit and is NOT yet consumed: store and community pages still receive the
+-- full backend registry. Splitting the registry per channel is an outstanding
+-- item from the 2026-08 audit (H1 recommendation 4) — it needs the LuaTools
+-- frontend and the Lumen settings menu to stop sharing one binding, because the
+-- menu is deliberately injected into the web view so its overlay can render above
+-- it. Do not read this flag as evidence that the split exists.
 function cdp.route_targets(targets, channels)
   local out = {}
   if type(targets) ~= "table" or type(channels) ~= "table" then return out end

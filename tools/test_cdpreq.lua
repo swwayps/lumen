@@ -115,5 +115,43 @@ cdpreq.request = orig_request
 value, err = cdpreq.evaluate(1, "not-a-ws-url", "1+1", 1)
 ok(value == nil and err == "bad websocket url", "evaluate: malformed target refused")
 
-io.write((fails == 0 and "all ok" or (fails .. " FAILED")) .. " (" .. checks .. " checks)\n")
-os.exit(fails == 0 and 0 or 1)
+
+
+-- ── the handshake is verified, not just "did it say 101" ────────────────────
+-- This is the client that reads session cookies (Network.getCookies for the
+-- Ryuu, lua.tools and Discord origins), so it is the one that most needs to know
+-- it is talking to the real endpoint. It used to send a constant
+-- Sec-WebSocket-Key and accept any response containing the substring "101",
+-- which a canned reply satisfies without ever having seen our key.
+do
+  local port = start_server("bad-accept")
+  if port then
+    local result, err = cdpreq.request(port,
+      "ws://127.0.0.1:" .. port .. "/devtools/page/TEST", "Runtime.evaluate", {})
+    ok(result == nil, "a wrong Sec-WebSocket-Accept is refused")
+    ok(tostring(err):find("handshake", 1, true) ~= nil,
+      "the refusal names the handshake: " .. tostring(err))
+  else
+    ok(false, "fake endpoint did not start for bad-accept")
+  end
+end
+
+do
+  -- The module must not carry the constant key or the substring test any more.
+  local f = assert(io.open("lua/cdpreq.lua", "r"))
+  local src = f:read("*a")
+  f:close()
+  ok(src:find("dGhlIHNhbXBsZSBub25jZQ==", 1, true) == nil,
+    "no constant Sec-WebSocket-Key")
+  ok(src:find('resp:find("101"', 1, true) == nil, "no substring 101 acceptance")
+  ok(src:find("wsframe.handshake_ok", 1, true) ~= nil,
+    "the response is validated against the key we sent")
+  ok(src:find("wsframe.new_key", 1, true) ~= nil, "a fresh key per connection")
+end
+
+if fails == 0 then
+  io.write("all ok (" .. checks .. " checks)\n")
+else
+  io.write(fails .. " FAILED (" .. checks .. " checks)\n")
+  os.exit(1)
+end

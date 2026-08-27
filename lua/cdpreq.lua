@@ -25,25 +25,37 @@ function cdpreq.ws_path(ws_url)
   return (tostring(ws_url or ""):match("^ws://[^/]+(/.*)$"))
 end
 
+-- Same handshake discipline as the injector: a random key per connection and a
+-- real Sec-WebSocket-Accept check. A constant key with a substring test for "101"
+-- accepts a peer that never proved it speaks WebSocket, and accepts a reply
+-- recorded from somebody else's handshake — which matters more here than on the
+-- injector's socket, because this is the client that reads session cookies.
 local function handshake(c, path, port)
+  local key = wsframe.new_key()
   c:send("GET " .. path .. " HTTP/1.1\r\n"
     .. "Host: " .. HOST .. ":" .. tostring(port) .. "\r\n"
     .. "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-    .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+    .. "Sec-WebSocket-Key: " .. key .. "\r\n"
     .. "Sec-WebSocket-Version: 13\r\n\r\n")
   local resp = ""
   while not resp:find("\r\n\r\n", 1, true) do
     local chunk = c:receive(1)
     if not chunk then return false end
     resp = resp .. chunk
+    if #resp > 8192 then return false end
   end
-  return resp:find("101", 1, true) ~= nil
+  return wsframe.handshake_ok(resp, key)
 end
 
 -- request(port, ws_url, method, params, timeout) -> result table | nil, err
+--
+-- `port` must already have been through peerauth: this module is reached from the
+-- injector's State, which resolves it with verified_cef_port(). It does not
+-- re-verify, so do NOT call it with a port from cefport.resolve() directly.
 function cdpreq.request(port, ws_url, method, params, timeout)
   local path = cdpreq.ws_path(ws_url)
   if not path then return nil, "bad websocket url" end
+  if type(port) ~= "number" then return nil, "unverified port" end
   timeout = timeout or DEFAULT_TIMEOUT
 
   local c = socket.tcp()

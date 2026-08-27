@@ -13,6 +13,7 @@ modes
   no-upgrade         refuse the websocket upgrade
   silent             upgrade, then never answer
 """
+import base64, hashlib
 import json
 import os
 import socket
@@ -83,8 +84,21 @@ if mode == "no-upgrade":
     conn.close()
     raise SystemExit(0)
 
-conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
-             b"Connection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n")
+# The client now validates Sec-WebSocket-Accept against the key it sent (a
+# constant key and a substring test for "101" accepted a peer that had never seen
+# our key at all), so compute the real RFC 6455 digest here.
+_key = ""
+for _line in request.decode("latin-1").split("\r\n"):
+    if _line.lower().startswith("sec-websocket-key:"):
+        _key = _line.split(":", 1)[1].strip()
+_accept = base64.b64encode(
+    hashlib.sha1((_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+).decode()
+if mode == "bad-accept":
+    _accept = "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+conn.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+              "Connection: Upgrade\r\nSec-WebSocket-Accept: " + _accept
+              + "\r\n\r\n").encode("latin-1"))
 
 command = read_client_frame(conn)
 cid = command.get("id")
