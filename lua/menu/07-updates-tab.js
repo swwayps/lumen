@@ -558,6 +558,7 @@
   }
 
   function enrichImportApps(session, apps, status) {
+    apps = (apps || []).filter(function (app) { return app.needsEnrichment !== false; });
     if (window.__lumenNoPlugin || !apps.length) return Promise.resolve([]);
     var warnings = [];
     return apps.reduce(function (chain, app) {
@@ -586,6 +587,27 @@
       .replace("{appid}", appid);
   }
 
+  var IMPORT_IDENTITY_CONCURRENCY = 6;
+  function mapWithConcurrency(items, limit, worker, progress) {
+    items = Array.isArray(items) ? items : [];
+    if (!items.length) return Promise.resolve();
+    var cursor = 0, done = 0, workers = [];
+    var run = function () {
+      var index = cursor++;
+      if (index >= items.length) return Promise.resolve();
+      return Promise.resolve().then(function () {
+        return worker(items[index], index);
+      }).then(function () {
+        done += 1;
+        if (progress) progress(done, items.length);
+        return run();
+      });
+    };
+    var count = Math.min(Math.max(1, Number(limit) || 1), items.length);
+    for (var i = 0; i < count; i += 1) workers.push(run());
+    return Promise.all(workers).then(function () {});
+  }
+
   // Global Steam product metadata is the identity authority for imported apps. Do not infer a
   // missing type from the Lua shape: a DLC can otherwise be published as a
   // base game, and a self-referential fullgame field is not a usable relation.
@@ -612,13 +634,14 @@
       .replace("{fullgame}", fullgame);
   }
 
-  function validateImportedIdentities(prepared) {
+  function validateImportedIdentities(prepared, progress) {
     prepared = prepared || {};
     var errors = Array.isArray(prepared.importErrors) ? prepared.importErrors.slice() : [];
     var seen = {};
     errors.forEach(function (message) { seen[message] = true; });
     var apps = Array.isArray(prepared.apps) ? prepared.apps : [];
-    return Promise.all(apps.map(function (app) {
+    if (progress && apps.length) progress(0, apps.length);
+    return mapWithConcurrency(apps, IMPORT_IDENTITY_CONCURRENCY, function (app) {
       return fetchAppDetails(app.appid).then(function (details) {
         var identityError = validateImportedIdentityDetails(app.appid, details);
         if (!identityError || seen[identityError]) return;
@@ -629,7 +652,7 @@
         var unavailable = importedIdentityMetadataError(app.appid);
         if (!seen[unavailable]) { seen[unavailable] = true; errors.push(unavailable); }
       });
-    })).then(function () {
+    }, progress).then(function () {
       prepared.importErrors = errors;
       return prepared;
     });
@@ -746,6 +769,8 @@
     var GU = guStrings();
     files = Array.prototype.slice.call(files || []);
     if (!files.length) return;
+    var previousError = body && body.querySelector(".lumen-import-error");
+    if (previousError) previousError.remove();
     var prog = showProgress(GU.importFiles);
     prog.update(GU.importPreparing);
     var session;
@@ -772,15 +797,29 @@
           .then(parseRpc).then(function (finalPrep) { return { prepared: finalPrep, warnings: warnings }; });
       });
     }).then(function (result) {
-      return validateImportedIdentities(result.prepared).then(function (prepared) {
+      return validateImportedIdentities(result.prepared, function (done, total) {
+        prog.update(GU.importIdentityProgress.replace("{done}", done).replace("{total}", total));
+      }).then(function (prepared) {
         prog.close();
         renderImportSummary(body, session, prepared, result.warnings);
       });
     }).catch(function (e) {
       prog.close();
       if (session) call("CancelGameImport", { json: JSON.stringify({ session: session }) }).catch(function () {});
-      alert(GU.importFail + ((e && e.message) || e));
+      showImportError(body, (e && e.message) || e);
     });
+  }
+
+  function showImportError(body, message) {
+    if (!body) return;
+    var error = body.querySelector(".lumen-import-error");
+    if (!error) {
+      error = document.createElement("div");
+      error.className = "lumen-err lumen-import-error";
+      error.setAttribute("role", "alert");
+      body.insertBefore(error, body.firstChild);
+    }
+    error.textContent = guStrings().importFail + String(message || "");
   }
 
   function gameUpdateActions(body) {

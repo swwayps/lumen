@@ -383,24 +383,49 @@ function mp.validate_import_pins(parsed, available_manifests)
   return #errors == 0, errors
 end
 
--- Validate depot ownership across one import batch and already-installed Lua
--- registrations. Shared runtime depots are intentionally exempt because Steam
--- reuses those fixed ids across unrelated apps.
+-- A depot id is global. Two apps may legitimately reference the same depot
+-- (publisher launchers and runtimes do this frequently), but their declarations
+-- must describe compatible content. Matching keys are authoritative; matching
+-- manifest ids are a safe fallback for keyless archived imports.
+local function compatible_depot_claims(left, right)
+  left, right = type(left) == "table" and left or {}, type(right) == "table" and right or {}
+  local left_key = valid_depot_key(left.key) and left.key:lower() or nil
+  local right_key = valid_depot_key(right.key) and right.key:lower() or nil
+  if left_key and right_key then return left_key == right_key end
+  local left_gid, right_gid = decimal_id(left.manifestid), decimal_id(right.manifestid)
+  return left_gid ~= nil and right_gid ~= nil and left_gid == right_gid
+end
+
+-- Validate compatible depot claims across one import batch and already-stored
+-- Lua registrations. The legacy numeric existing-owner shape remains accepted
+-- for callers/tests, while the importer supplies full claim records.
 function mp.validate_import_ownership(apps, existing)
   local owners = {}
-  for depot, appid in pairs(existing or {}) do
-    owners[depot] = appid
+  local function register(depot, appid, info)
+    local bucket = owners[depot] or {}
+    for _, previous in ipairs(bucket) do
+      if previous.appid ~= appid and not compatible_depot_claims(previous.info, info) then
+        return false, string.format("depot %d is declared by apps %d and %d",
+          depot, previous.appid, appid)
+      end
+    end
+    bucket[#bucket + 1] = { appid = appid, info = info or {} }
+    owners[depot] = bucket
+    return true
+  end
+  for depot, value in pairs(existing or {}) do
+    local records = type(value) == "table" and value[1] and value or { value }
+    for _, record in ipairs(records) do
+      local appid = type(record) == "table" and record.appid or record
+      local info = type(record) == "table" and record.info or {}
+      local ok, claim_err = register(depot, appid, info)
+      if not ok then return false, claim_err end
+    end
   end
   for _, app in ipairs(apps or {}) do
-    for depot in pairs(app.parsed and app.parsed.depots or app.depots or {}) do
-      if not mp.is_shared_depot(depot) then
-        local previous = owners[depot]
-        if previous and previous ~= app.appid then
-          return false, string.format("depot %d is declared by apps %d and %d",
-            depot, previous, app.appid)
-        end
-        owners[depot] = app.appid
-      end
+    for depot, info in pairs(app.parsed and app.parsed.depots or app.depots or {}) do
+      local ok, claim_err = register(depot, app.appid, info)
+      if not ok then return false, claim_err end
     end
   end
   return true, owners
@@ -655,19 +680,8 @@ function mp.inspect_import_entries(entries)
       out.warnings[#out.warnings + 1] = "Ignored " .. name
     end
   end
-  local owners = {}
-  for _, item in ipairs(out.luas) do
-    for depot in pairs(item.parsed.depots or {}) do
-      if not mp.is_shared_depot(depot) then
-        local owner = owners[depot]
-        if owner and owner ~= item.appid then
-          return nil, string.format("depot %d is declared by apps %d and %d",
-            depot, owner, item.appid)
-        end
-        owners[depot] = item.appid
-      end
-    end
-  end
+  local ownership_ok, ownership_err = mp.validate_import_ownership(out.luas)
+  if not ownership_ok then return nil, ownership_err end
   return out
 end
 
@@ -1841,11 +1855,12 @@ end
 -- upload in a private session, inspects every Lua/manifest/ZIP before writing
 -- live state, then stages all destination files and rolls back on publication
 -- failure. ZIP entries are streamed with `unzip -p`; paths are never extracted.
-local IMPORT_MAX_FILES = 128
+local IMPORT_MAX_FILES = 4096
 local IMPORT_MAX_FILE = 256 * 1024 * 1024
 local IMPORT_MAX_TOTAL = 512 * 1024 * 1024
 local IMPORT_MAX_CHUNK = 256 * 1024
-local IMPORT_MAX_ENTRIES = 512
+local IMPORT_MAX_ARCHIVE_ENTRIES = 8192
+local IMPORT_MAX_ENTRIES = 4096
 
 local function mkdir_p(path)
   if not path or path == "" then return false end
@@ -2014,7 +2029,7 @@ local function collect_import_entries(ctx, session, state)
       local names, listed_count, too_many = {}, 0, false
       for name in list:lines() do
         listed_count = listed_count + 1
-        if listed_count <= IMPORT_MAX_ENTRIES then names[#names + 1] = name
+        if listed_count <= IMPORT_MAX_ARCHIVE_ENTRIES then names[#names + 1] = name
         else too_many = true end
       end
       local listed_ok = list:close()
@@ -2065,11 +2080,11 @@ local function available_import_manifests(ctx, inspected)
   return available
 end
 
-local function existing_import_depot_owners(ctx)
-  local owners = {}
-  if not ctx.stplug_dir then return owners end
+local function existing_import_depot_claims(ctx)
+  local claims = {}
+  if not ctx.stplug_dir then return claims end
   local ok_lfs, lfs = pcall(require, "lfs")
-  if not ok_lfs then return owners end
+  if not ok_lfs then return claims end
   pcall(function()
     for name in lfs.dir(ctx.stplug_dir) do
       local appid = name:match("^(%d+)%.lua$")
@@ -2077,14 +2092,15 @@ local function existing_import_depot_owners(ctx)
         local source = read_file(ctx.stplug_dir .. "/" .. name)
         local parsed = source and mp.resolve_lua_identity(source, { filename = name })
         if parsed then
-          for depot in pairs(parsed.depots or {}) do
-            if not owners[depot] then owners[depot] = parsed.base end
+          for depot, info in pairs(parsed.depots or {}) do
+            claims[depot] = claims[depot] or {}
+            claims[depot][#claims[depot] + 1] = { appid = parsed.base, info = info }
           end
         end
       end
     end
   end)
-  return owners
+  return claims
 end
 
 local function build_import_plan(ctx, session, state)
@@ -2129,7 +2145,7 @@ local function build_import_plan(ctx, session, state)
     }
   end
   local ownership_ok, ownership_err = mp.validate_import_ownership(
-    apps, existing_import_depot_owners(ctx))
+    apps, existing_import_depot_claims(ctx))
   if not ownership_ok then return nil, ownership_err end
   table.sort(apps, function(a, b) return a.appid < b.appid end)
   table.sort(inspected.manifests, function(a, b)
@@ -2279,10 +2295,15 @@ function mp.prepare_game_import_rpc(ctx, json_str)
   if not sw then return err(se) end
   local apps, manifests = {}, {}
   for _, app in ipairs(plan.apps) do
-    local parsed, keys = app.parsed or mp.resolve_lua_identity(app.text, { appid = app.appid }), 0
-    for _, info in pairs(parsed.depots) do if info.key then keys = keys + 1 end end
+    local parsed = app.parsed or mp.resolve_lua_identity(app.text, { appid = app.appid })
+    local depots, keys = 0, 0
+    for _, info in pairs(parsed.depots) do
+      depots = depots + 1
+      if valid_depot_key(info.key) then keys = keys + 1 end
+    end
     apps[#apps + 1] = {
       appid = app.appid, pins = app.pins, keys = keys, installed = app.installed,
+      needsEnrichment = depots == 0 or keys < depots,
       identitySource = app.identity_source, identityConfidence = app.identity_confidence,
       identity = { appid = app.appid, source = app.identity_source,
         confidence = app.identity_confidence },

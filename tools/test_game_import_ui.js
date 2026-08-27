@@ -34,21 +34,38 @@ ok(/identityMetadataUnavailable\s*:\s*["'][^"']+["']/.test(i18n)
 ok(/commit\.disabled\s*=\s*true[\s\S]*importErrors/.test(ui)
   && /identity_dlc/.test(ui),
   "a confirmed DLC identity issue blocks import commit instead of silently rewriting it");
-ok(/function validateImportedIdentities\(prepared\)[\s\S]*validateImportedIdentityDetails\(app\.appid, details\)/.test(ui)
+ok(/function validateImportedIdentities\(prepared, progress\)[\s\S]*validateImportedIdentityDetails\(app\.appid, details\)/.test(ui)
   && /function validateImportedIdentityDetails\(appid, details\)[\s\S]*metadataAvailable !== true[\s\S]*importedIdentityMetadataError/.test(ui)
   && /identity_metadata_unavailable/.test(ui),
   "batch imports fail closed when Steam identity metadata is unavailable");
 ok(/function validateImportedIdentityDetails\(appid, details\)[\s\S]*details\.type[\s\S]*\.trim\(\)[\s\S]*toLowerCase\(\)/.test(ui)
   && /function validateImportedIdentityDetails\(appid, details\)[\s\S]*type\s*!==\s*["']dlc["'][\s\S]*fullgameAppid/.test(ui),
   "identity validation requires a type and validates DLC full-game metadata");
-ok(/validateImportedIdentities\(prepared\)[\s\S]*validateImportedIdentityDetails\(app\.appid, details\)/.test(ui)
+ok(/validateImportedIdentities\(prepared, progress\)[\s\S]*validateImportedIdentityDetails\(app\.appid, details\)/.test(ui)
   && /function renderGameCreatorEditor[\s\S]*validateImportedIdentityDetails\(source\.appid, details\)/.test(ui),
   "batch and creator share the same identity metadata validator");
 ok(/function renderGameCreatorEditor[\s\S]*validateImportedIdentityDetails\(source\.appid, details\)/.test(ui)
   && /identity_dlc_metadata/.test(ui),
   "creator fails closed on unknown metadata and invalid DLC relations");
-ok(/validateImportedIdentities\(result\.prepared\)[\s\S]*renderImportSummary/.test(ui),
+ok(/validateImportedIdentities\(result\.prepared[\s\S]*renderImportSummary/.test(ui),
   "identity validation runs before the import review can commit");
+const importStart = ui.indexOf("function importSelectedFiles");
+const importEnd = ui.indexOf("function gameUpdateActions", importStart);
+const importFlow = ui.slice(importStart, importEnd);
+ok(/IMPORT_IDENTITY_CONCURRENCY\s*=\s*[2-9]/.test(ui)
+  && /mapWithConcurrency\(apps,\s*IMPORT_IDENTITY_CONCURRENCY/.test(ui)
+  && !/Promise\.all\(apps\.map/.test(ui),
+  "bulk identity metadata uses bounded concurrency instead of one request per app at once");
+ok(/importIdentityProgress\s*:\s*"Validating Steam details \{done\}\/\{total\}/.test(i18n)
+  && /importIdentityProgress\s*:\s*"Validando detalhes da Steam \{done\}\/\{total\}/.test(i18n)
+  && /validateImportedIdentities\(result\.prepared,\s*function/.test(importFlow)
+  && /if \(progress && apps\.length\) progress\(0, apps\.length\)/.test(ui),
+  "bulk identity validation reports localized count progress");
+ok(/function enrichImportApps[\s\S]*filter\(function \(app\)[\s\S]*app\.needsEnrichment\s*!==\s*false/.test(ui)
+  && !/filter\(function \(app\)[\s\S]{0,100}app\.keys/.test(ui),
+  "only backend-confirmed complete Lua files skip remote source enrichment");
+ok(importFlow.includes("showImportError") && !/alert\s*\(/.test(importFlow),
+  "Import Games failures stay inside the Lumen panel instead of opening a Store alert");
 ok(ui.includes("renderGameCreator") && ui.includes("buildDraftLuaRequest"),
   "Add game opens a dedicated creator view");
 ok(/add\.className\s*=\s*["']lumen-mbtn primary["']/.test(ui),

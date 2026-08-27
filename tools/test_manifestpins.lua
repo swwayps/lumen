@@ -235,6 +235,21 @@ do
     { name = "100.lua", data = 'addappid(100)\naddappid(228989,1,"' .. key .. '")\n' },
     { name = "200.lua", data = 'addappid(200)\naddappid(228989,1,"' .. key .. '")\n' },
   })
+  check(shared ~= nil, "ownership: known Steam runtime depot can be shared")
+  local conflicting_shared = mp.inspect_import_entries({
+    { name = "100.lua", data = 'addappid(100)\naddappid(228989,1,"' .. key .. '")\n' },
+    { name = "200.lua", data = 'addappid(200)\naddappid(228989,1,"'
+      .. string.rep("e", 64) .. '")\n' },
+  })
+  check(conflicting_shared == nil,
+    "ownership: even known shared depots reject incompatible keys")
+
+  local compatible = mp.inspect_import_entries({
+    { name = "212630.lua", data = 'addappid(212630)\naddappid(1716751,1,"' .. key .. '")\n' },
+    { name = "233270.lua", data = 'addappid(233270)\naddappid(1716751,1,"' .. key .. '")\n' },
+  })
+  check(compatible ~= nil,
+    "ownership: matching depot claims can be shared without a hardcoded id")
   local orphan = mp.parse_lua('addappid(800)\nsetManifestid(801,"9001")\n')
   local orphan_ok, orphan_errors = mp.validate_import_pins(orphan, {})
   check(orphan_ok == false and #orphan_errors > 0,
@@ -1372,10 +1387,47 @@ do
   local zp = json.decode(mp.prepare_game_import_rpc(ctx, json.encode({ session = zb.session })))
   check(zp.success and #zp.apps == 1 and #zp.manifests == 1,
     "zip: nested Lua and manifest are safely discovered")
+  check(zp.apps[1].needsEnrichment == false,
+    "zip: a Lua whose depot claims all have keys is already complete")
   local zc = json.decode(mp.commit_game_import_rpc(ctx, json.encode({ session = zb.session })))
   check(zc.success and read(ctx.stplug_dir .. "/800.lua") ~= nil
     and read(ctx.manifests_dir .. "/801_8001.manifest") == zman_data,
     "zip: inspected package commits")
+
+  -- A library-sized package must be governed by byte and archive-safety
+  -- limits, not the old 512-entry ceiling. Repeated compatible depot claims
+  -- are common for publisher runtimes such as Ubisoft Connect.
+  local bulk_src = root .. "/bulk-src"; mkdir(bulk_src)
+  local bulk_key = string.rep("d", 64)
+  for index = 1, 1000 do
+    local appid = 900000 + index
+    local file = assert(io.open(bulk_src .. "/" .. appid .. ".lua", "wb"))
+    file:write("addappid(" .. appid .. ")\naddappid(1716751,1,\""
+      .. bulk_key .. "\")\n")
+    file:close()
+  end
+  assert(os.execute("cd '" .. bulk_src .. "' && zip -q '" .. root
+    .. "/bulk.zip' ./*.lua") == true)
+  local bulk_data = assert(read(root .. "/bulk.zip"))
+  local bb = json.decode(mp.begin_game_import_rpc(ctx, json.encode({ files = {
+    { name = "bulk.zip", size = #bulk_data },
+  } })))
+  check(bb.success, "bulk zip: private session accepts one archive")
+  local offset, chunk = 1, 0
+  while offset <= #bulk_data do
+    local last = math.min(offset + 192 * 1024 - 1, #bulk_data)
+    local upload = json.decode(mp.upload_game_import_chunk_rpc(ctx, json.encode({
+      session = bb.session, file = 1, chunk = chunk,
+      data = b64.encode(bulk_data:sub(offset, last)), final = last == #bulk_data,
+    })))
+    check(upload.success, "bulk zip: ordered archive chunk accepted")
+    offset, chunk = last + 1, chunk + 1
+  end
+  local bp = json.decode(mp.prepare_game_import_rpc(ctx, json.encode({ session = bb.session })))
+  check(bp.success and #bp.apps == 1000,
+    "bulk zip: 1000 compatible Lua files are inspected as one batch")
+  check(bp.success and bp.apps[1].needsEnrichment == false,
+    "bulk zip: complete Lua files need no remote source enrichment")
 
   os.execute("rm -rf '" .. root .. "'")
 end
