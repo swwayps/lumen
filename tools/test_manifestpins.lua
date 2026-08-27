@@ -1049,6 +1049,35 @@ do
   check(mp.app_at_pinned_gids(ctx, 3764200) == true,
     "recommended: automatic fix may run only on the exact pinned build")
 
+  -- A shared redistributable depot (VC++ redist and friends) is recorded by
+  -- Steam under SharedDepots, never under InstalledDepots. An official manifest
+  -- still pins it, so requiring it inside InstalledDepots left the queued fix
+  -- waiting forever on a fully installed game.
+  local shared_cfg = assert(io.open(cfg, "rb"))
+  local shared_body = shared_cfg:read("*a"); shared_cfg:close()
+  shared_body = shared_body:gsub('(  3764200:\n    locked: true\n    depots:\n)',
+    '%1      228989: "3514306556860204959"\n', 1)
+  local shared_write = assert(io.open(cfg, "wb"))
+  shared_write:write(shared_body); shared_write:close()
+  local shared_pins = mp.parse_pins(shared_body)
+  eq(shared_pins[3764200] and shared_pins[3764200].depots[228989],
+    "3514306556860204959", "shared: redist depot is pinned by the official Lua")
+  local shared_acf = assert(io.open(root .. "/steamapps/appmanifest_3764200.acf", "wb"))
+  shared_acf:write('"AppState"\n{\n"InstalledDepots"\n{\n"3764201"\n{\n'
+    .. '"manifest" "9166256367562763038"\n}\n}\n"SharedDepots"\n{\n'
+    .. '"228989" "228980"\n}\n}\n'); shared_acf:close()
+  check(mp.app_at_pinned_gids(ctx, 3764200) == true,
+    "shared: a pinned redist depot listed under SharedDepots cannot block the fix")
+
+  -- Degenerate case: pins that carry no game depot at all say nothing about the
+  -- installed build, so they must not be read as a satisfied build lock.
+  local only_shared = shared_body:gsub(
+    '      3764201: "9166256367562763038"\n', '', 1)
+  local only_shared_write = assert(io.open(cfg, "wb"))
+  only_shared_write:write(only_shared); only_shared_write:close()
+  check(mp.app_at_pinned_gids(ctx, 3764200) == false,
+    "shared: redist-only pins are not treated as a verified build")
+
   os.execute("rm -rf '" .. root .. "'")
 end
 
