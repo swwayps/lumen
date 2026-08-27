@@ -34,11 +34,24 @@ assert(server:bind("127.0.0.1", 0))
 assert(server:listen(1))
 server:settimeout(0)
 local host, port = server:getsockname()
+-- The transport layer requires https by default now, so a plaintext loopback
+-- fixture has to say so. Prove the default first: without allow_http this same
+-- request must not even leave the process.
+do
+  local refused, refuse_err = core.perform({
+    url = "http://" .. host .. ":" .. tostring(port) .. "/",
+    method = "GET",
+    timeout = 1,
+  })
+  ok(refused == nil and type(refuse_err) == "string",
+    "plaintext http is refused without an explicit opt-in")
+end
 local local_request = assert(core.start({
   url = "http://" .. host .. ":" .. tostring(port) .. "/",
   method = "GET",
   timeout = 3,
   follow_redirects = false,
+  allow_http = true,
   max_bytes = 1024,
 }))
 local client, replied, local_done, local_response, local_err

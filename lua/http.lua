@@ -30,7 +30,14 @@ local function request_options(url, options, method, body)
     headers = normalize_headers(options.headers),
     timeout = options.timeout or 30,
     follow_redirects = options.follow_redirects,
+    -- Transport policy lives in the C binding: https is the default there, so
+    -- these two are the explicit opt-outs a caller can ask for. They must be
+    -- forwarded or the binding would see nil and silently apply the default,
+    -- which is what a plaintext-only source needs to be able to override.
     https_only = options.https_only,
+    allow_http = options.allow_http,
+    follow_redirects_with_credentials =
+      options.follow_redirects_with_credentials,
     max_bytes = options.max_bytes,
   }
 end

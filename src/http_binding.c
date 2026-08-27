@@ -8,7 +8,22 @@
  *
  * Request options:
  *   url=, method=, body=, headers={..}, timeout=,
- *   follow_redirects=, https_only=, max_bytes=
+ *   follow_redirects=, https_only=, allow_http=, max_bytes=,
+ *   follow_redirects_with_credentials=
+ *
+ * Transport policy (all enforced here, not left to each caller):
+ *   * https only by DEFAULT. `allow_http = true` opts a single request out; an
+ *     explicit `https_only = true` always wins. Previously plaintext was the
+ *     default and only the callers that remembered to pass https_only got TLS.
+ *   * redirects are bounded (libcurl's own default is 30) and restricted to the
+ *     schemes the request itself allows, so an https request cannot be walked
+ *     down to http by a 302.
+ *   * a request carrying a credential header does not follow redirects at all.
+ *     libcurl re-sends CURLOPT_HTTPHEADER entries to every redirect target; it
+ *     strips a custom Authorization header when the HOST changes
+ *     (CVE-2018-1000007) but not other credential headers, and not on a
+ *     same-host scheme downgrade. Callers that genuinely need to follow a
+ *     redirect while authenticated must ask for it explicitly.
  *
  * Response:
  *   { status=, body=, content_type=, redirect_url=, effective_url= }
@@ -21,6 +36,39 @@
 #include <string.h>
 
 #define ASYNC_META "lumen_http.async_request"
+
+/* Enough for a CDN chain; far below libcurl's default of 30. */
+#define MAX_REDIRECTS 5L
+
+/* Does this "Name: value" header line carry a credential?
+ * Matched on the name only, case-insensitively: an exact name from the list
+ * below, or a name containing "auth", "token", "secret" or "cookie". Erring
+ * towards "yes" only costs an explicit opt-in at the call site. */
+static int header_is_credential(const char *line) {
+    static const char *const exact[] = {
+        "api-key", "apikey", "x-api-key", "x-auth-token", "x-access-token",
+        "x-session-id", "x-csrf-token", NULL
+    };
+    static const char *const substr[] = { "auth", "token", "secret", "cookie",
+                                          "password", "bearer", NULL };
+    char name[128];
+    size_t n = 0;
+    if (!line) return 0;
+    while (line[n] && line[n] != ':' && n + 1 < sizeof(name)) {
+        char c = line[n];
+        name[n] = (char)((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+        n++;
+    }
+    name[n] = '\0';
+    while (n > 0 && (name[n - 1] == ' ' || name[n - 1] == '\t')) name[--n] = '\0';
+    for (int i = 0; exact[i]; i++) {
+        if (strcmp(name, exact[i]) == 0) return 1;
+    }
+    for (int i = 0; substr[i]; i++) {
+        if (strstr(name, substr[i])) return 1;
+    }
+    return 0;
+}
 
 struct membuf {
     char *data;
@@ -136,31 +184,44 @@ static const char *transfer_init(lua_State *L, int table_index,
     lua_getfield(L, table_index, "follow_redirects");
     int follow_redirects = lua_isnil(L, -1) ? 1 : lua_toboolean(L, -1);
     lua_pop(L, 1);
+    /* https is the default; allow_http opts out, an explicit https_only wins. */
     lua_getfield(L, table_index, "https_only");
-    int https_only = lua_toboolean(L, -1);
+    int https_only_explicit = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, table_index, "allow_http");
+    int allow_http = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    int https_only = https_only_explicit || !allow_http;
+    lua_getfield(L, table_index, "follow_redirects_with_credentials");
+    int redirect_with_credentials = lua_toboolean(L, -1);
     lua_pop(L, 1);
     lua_getfield(L, table_index, "max_bytes");
     lua_Integer requested_max = lua_isnumber(L, -1) ? lua_tointeger(L, -1) : 0;
     lua_pop(L, 1);
     t->body.max = requested_max > 0 ? (size_t)requested_max : SIZE_MAX;
 
+    int has_credential_header = 0;
     lua_getfield(L, table_index, "headers");
     if (lua_istable(L, -1)) {
         lua_pushnil(L);
         while (lua_next(L, -2) != 0) {
             if (lua_isstring(L, -1)) {
-                struct curl_slist *next =
-                    curl_slist_append(t->headers, lua_tostring(L, -1));
+                const char *line = lua_tostring(L, -1);
+                struct curl_slist *next = curl_slist_append(t->headers, line);
                 if (!next) {
                     lua_pop(L, 2);
                     return "out of memory";
                 }
                 t->headers = next;
+                if (header_is_credential(line)) has_credential_header = 1;
             }
             lua_pop(L, 1);
         }
     }
     lua_pop(L, 1);
+    if (has_credential_header && !redirect_with_credentials) {
+        follow_redirects = 0;
+    }
 
     t->easy = curl_easy_init();
     if (!t->easy) return "curl_easy_init failed";
@@ -174,9 +235,17 @@ static const char *transfer_init(lua_State *L, int table_index,
     SETOPT(CURLOPT_URL, t->url);
     SETOPT(CURLOPT_NOSIGNAL, 1L);
     SETOPT(CURLOPT_FOLLOWLOCATION, follow_redirects ? 1L : 0L);
+    SETOPT(CURLOPT_MAXREDIRS, MAX_REDIRECTS);
+    /* Always pinned, never left at libcurl's "every protocol it was built with".
+     * REDIR_PROTOCOLS matches the request's own policy, so an https request
+     * cannot be redirected onto http (where its headers would go in cleartext),
+     * while an explicitly plaintext request can still follow its http hops. */
     if (https_only) {
         SETOPT(CURLOPT_PROTOCOLS_STR, "https");
         SETOPT(CURLOPT_REDIR_PROTOCOLS_STR, "https");
+    } else {
+        SETOPT(CURLOPT_PROTOCOLS_STR, "http,https");
+        SETOPT(CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     }
     SETOPT(CURLOPT_TIMEOUT, timeout);
     SETOPT(CURLOPT_WRITEFUNCTION, write_cb);
