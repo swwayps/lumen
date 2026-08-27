@@ -99,4 +99,25 @@ check("G8 any uninstall invalidates every deferred launch before Steam handles i
     && steamUrls.length === 1
     && steamUrls[0] === "steam://uninstall/3357650");
 
+// A job that cannot finish must not hold a saved Play until the blind 120s
+// timeout: the user sees a 0% bar with no explanation. Cancelling immediately
+// and reporting it lets the UI surface the failure while Play stays usable.
+context.window.__lumenUpdateAutoFixGuard({
+  "990080": { phase: "applying", blocking: true },
+});
+context.SteamClient.Apps.RunGame("990080", "held-by-failure", -1, 11);
+const beforeFailure = calls.length;
+const noticesBeforeFailure = notices.length;
+context.window.__lumenUpdateAutoFixGuard({
+  "990080": { phase: "failed", cancel: true, errorCode: "unavailable" },
+});
+check("G9 a failed job releases the saved launch instead of waiting for the timeout",
+  calls.length === beforeFailure
+    && notices.length > noticesBeforeFailure
+    && notices[notices.length - 1].fn === "__lumenAutoFixLaunchFailed"
+    && notices[notices.length - 1].args.appid === 990080);
+context.window.__lumenReleaseAutoFixLaunch("990080");
+check("G10 the cancelled attempt cannot be resumed later",
+  calls.length === beforeFailure);
+
 process.exitCode = failures ? 1 : 0;

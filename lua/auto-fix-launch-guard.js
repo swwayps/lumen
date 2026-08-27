@@ -92,7 +92,12 @@
       : Object.create(null);
     Array.from(deferred.keys()).forEach(function (appid) {
       const state = blocking[appid];
-      if (state && state.cancel === true) cancel(appid);
+      if (state && state.cancel === true) {
+        // Work that cannot finish must not keep a saved Play until the blind
+        // timeout, which shows a 0% bar and explains nothing. Drop the attempt
+        // now and report it so the UI can surface the actual failure.
+        if (cancel(appid)) notify("__lumenAutoFixLaunchFailed", appid);
+      }
       else if (!isBlocking(state)) release(appid);
     });
   };

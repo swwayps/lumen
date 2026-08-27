@@ -288,6 +288,36 @@ async function main() {
   check("U9d a cancelled launch never offers to skip files already being written",
     !action("launch-without-fix") && action("wait"));
 
+  // A failed job is reported, not hidden. The modal used to close itself when a
+  // job left the live list, which is how a stalled fix ended up as a 0% bar with
+  // no explanation and no way forward.
+  const hasFailedNotice = typeof context.window.__lumenShowAutoFixFailed === "function";
+  check("U9e the sidecar can surface a failed automatic fix", hasFailedNotice);
+  if (hasFailedNotice) {
+    context.window.__lumenUpdateAutoFixUI({ jobs: {
+      "990080": {
+        appid: 990080,
+        gameName: "Resident Evil Requiem",
+        phase: "failed",
+        stage: "failed",
+        progress: 0,
+        canSkip: true,
+        error: "This recommendation is no longer available.",
+        errorCode: "unavailable",
+      },
+    } });
+    context.window.__lumenShowAutoFixFailed(990080);
+    const failedModal = document.getElementById("lumen-auto-fix-overlay");
+    check("U9f a failed fix explains itself instead of showing a bare 0% bar",
+      failedModal
+        && failedModal.textContent.includes("no longer available")
+        && !failedModal.textContent.includes("0%"));
+    check("U9g a failed fix keeps a way out of the dialog",
+      action("launch-without-fix") && action("wait"));
+    check("U9h a live failure does not close the dialog behind the user",
+      document.getElementById("lumen-auto-fix-overlay") !== null);
+  }
+
   context.window.__lumenUpdateAutoFixUI({ jobs: {} });
   const releasedArrow = dispatchKey("ArrowRight");
   check("U10 closing the auto-fix modal releases global navigation",

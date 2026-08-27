@@ -35,6 +35,9 @@
       skipFailed: "The automatic fix could not be skipped safely.",
       timeoutTitle: "Launch cancelled",
       timeoutBody: "The fix is taking longer than expected, so this launch attempt was cancelled.",
+      failed: "The recommended fix could not be applied",
+      failedTitle: "Fix failed",
+      failedBody: "The game was not opened automatically. You can open it without the fix or try again later.",
     };
   }
 
@@ -51,6 +54,9 @@
     if (stage === "extracting") return S.extracting;
     if (stage === "applying") return S.applyingFiles;
     if (stage === "finalizing") return S.finalizing;
+    if (stage === "failed") {
+      return (job && typeof job.error === "string" && job.error) || S.failed;
+    }
     return S.preparing;
   }
 
@@ -287,9 +293,14 @@
     var progress = autoFixProgress(job.progress);
     _autoFixModal.game.textContent = String(job.gameName || ("App " + job.appid));
     _autoFixModal.stage.textContent = autoFixStage(job, S);
-    _autoFixModal.percent.textContent = progress + "%";
-    _autoFixModal.fill.style.width = progress + "%";
-    _autoFixModal.track.setAttribute("aria-valuenow", String(progress));
+    // A failed job has no meaningful progress. Showing 0% next to an empty bar
+    // is what made a dead job look like a frozen download, so the bar is hidden
+    // and the reason carries the message instead.
+    var failed = job.phase === "failed";
+    _autoFixModal.percent.textContent = failed ? "" : progress + "%";
+    _autoFixModal.track.style.display = failed ? "none" : "";
+    _autoFixModal.fill.style.width = failed ? "0%" : progress + "%";
+    _autoFixModal.track.setAttribute("aria-valuenow", String(failed ? 0 : progress));
     if (!_autoFixModal.timedOut) {
       _autoFixModal.note.textContent = _autoFixModal.launchPending ? S.launchQueued : S.body;
     }
@@ -380,6 +391,23 @@
     renderAutoFixActions(_autoFixJobs[String(appid)] || null);
   }
 
+  // The guard dropped a saved launch because the queued work failed. Reuse the
+  // cancelled-launch presentation: the job's own reason is already rendered by
+  // updateAutoFixModal, and the skip stays available because the job reports
+  // canSkip for a terminal failure.
+  function showAutoFixFailed(appid) {
+    showAutoFixModal(appid, false);
+    if (!_autoFixModal) return;
+    var S = autoFixCopy();
+    _autoFixModal.timedOut = true;
+    var eyebrow = _autoFixModal.overlay.children[0].children[0];
+    if (eyebrow) eyebrow.textContent = S.failedTitle;
+    _autoFixModal.note.textContent = S.failedBody;
+    var job = _autoFixJobs[String(appid)] || null;
+    if (job) updateAutoFixModal(job);
+    renderAutoFixActions(job);
+  }
+
   function handleMoonButtonClick(event) {
     if (event) {
       if (typeof event.preventDefault === "function") event.preventDefault();
@@ -405,3 +433,4 @@
   };
   window.__lumenShowAutoFixModal = showAutoFixModal;
   window.__lumenShowAutoFixTimeout = showAutoFixTimeout;
+  window.__lumenShowAutoFixFailed = showAutoFixFailed;

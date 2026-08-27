@@ -651,6 +651,12 @@ function Conn:_on_binding(payload_str)
       self.manager:broadcast_auto_fix_timeout(appid)
     end
     result = '{"ok":true}'
+  elseif req.fn == "__lumenAutoFixLaunchFailed" then
+    local appid = tonumber((req.args or {}).appid)
+    if appid and self.manager then
+      self.manager:broadcast_auto_fix_failed(appid)
+    end
+    result = '{"ok":true}'
   elseif req.fn == "__lumenReleaseAutoFixLaunch" then
     local appid = tonumber((req.args or {}).appid)
     result = (appid and self.manager
@@ -1431,6 +1437,13 @@ function State:broadcast_auto_fix_timeout(appid)
     .. tostring(id) .. ")")
 end
 
+-- The guard dropped a saved launch because its queued work failed. Report it
+-- where the timeout notice already appears, so the reason replaces a 0% bar.
+function State:broadcast_auto_fix_failed(appid)
+  local id = math.floor(tonumber(appid) or 0)
+  self:_fire_on_top("window.__lumenShowAutoFixFailed&&window.__lumenShowAutoFixFailed("
+    .. tostring(id) .. ")")
+end
 
 function State:broadcast_install_readiness_blocked(appid)
   local id = math.floor(tonumber(appid) or 0)
