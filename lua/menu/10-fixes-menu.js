@@ -132,58 +132,11 @@
     return added[appid] === true;
   }
 
-  // downloader.sh tags HTTP 401/403 with errorCode "authentication" and the
-  // plugin backend clears the stored credential, so a rejected/expired Ryuu
-  // session offers a fresh sign-in instead of a corrupt-archive dead end.
+  // downloader.sh tags HTTP 401/403 with errorCode "authentication", so a source
+  // refusing the download says so instead of reading as a corrupt archive. No
+  // shipped source asks for a credential, so this only reports the refusal.
   function fixesAuthExpired(state) {
     return !!(state && state.errorCode === "authentication");
-  }
-
-  // Game Mode / Big Picture cannot host the sign-in window (verified on a live
-  // gamescope session), and pasting a 300-character cookie with a gamepad is not
-  // a real option. The credential is shared between modes, so the view becomes a
-  // short notice pointing at Desktop Mode: no form, no polling.
-  function fixesGameModeNotice(S) {
-    S = S || {};
-    return {
-      title: S.authGameModeTitle,
-      copy: S.authGameModeBody,
-      buttons: [S.authGotIt],
-      offersPaste: false,
-      polls: false,
-    };
-  }
-
-  // One poll tick of the in-client sign-in view. The backend already treats the
-  // anonymous pre-sign-in cookie as "waiting" (ryuulogin.poll_state), so this
-  // only adds the deadline — and a verified session still wins on the last tick.
-  function fixesAuthViewState(poll, elapsedMs, limitMs) {
-    var state = (poll && poll.ok) ? poll.state : null;
-    if (state === "configured") return "configured";
-    if (state === "error") return "error";
-    if (elapsedMs >= limitMs) return "timeout";
-    return "waiting";
-  }
-
-  function fixesCrackCardState(crackFix, installed, isNative, S) {
-    crackFix = crackFix || {};
-    S = S || {};
-    var available = !!installed && crackFix.status === 200;
-    var needsAuth = available && crackFix.requiresAuth && !crackFix.authConfigured;
-    var nativeBlocked = available && !!isNative;
-    var preparationBlocked = available && crackFix.requiresPreparation === true;
-    var off = !available || nativeBlocked || preparationBlocked;
-    return {
-      available: available,
-      needsAuth: needsAuth,
-      off: off,
-      iconKey: "wrench",
-      desc: nativeBlocked ? S.nativeWarnShort : (preparationBlocked ? S.preparationRequired
-        : (needsAuth ? S.ryuuAuthRequired : S.crackDesc)),
-      badge: off ? S.unavailable : (needsAuth ? S.authRequiredBadge : null),
-      badgeIcon: (!off && needsAuth) ? "key" : null,
-      warn: nativeBlocked,
-    };
   }
 
   function fixesGroupCategories(entries) {
@@ -265,10 +218,7 @@
     window.__lumenFixesPickGear = fixesPickGear;
     window.__lumenFixesResolveName = fixesResolveName;
     window.__lumenFixesAppAllowed = fixesAppAllowed;
-    window.__lumenFixesCrackCardState = fixesCrackCardState;
     window.__lumenFixesAuthExpired = fixesAuthExpired;
-    window.__lumenFixesAuthViewState = fixesAuthViewState;
-    window.__lumenFixesGameModeNotice = fixesGameModeNotice;
     window.__lumenFixesGroupCategories = fixesGroupCategories;
     window.__lumenFixesDefaultCategory = fixesDefaultCategory;
     window.__lumenFixesNewestRelease = fixesNewestRelease;
@@ -310,7 +260,7 @@
       "color:#cdd3da;text-shadow:0 1px 4px rgba(0,0,0,.8);}",
       ".lumen-fx-x{cursor:pointer;color:#fff;font-size:16px;line-height:1;opacity:.8;",
       "text-shadow:0 1px 4px rgba(0,0,0,.8);transition:.12s;}",
-      ".lumen-fx-x:hover{opacity:1;}",
+      ".lumen-fx-x:hover,.lumen-fx-x.active-focus{opacity:1;}",
       ".lumen-fx-gname{position:absolute;left:16px;right:16px;bottom:12px;z-index:2;font-size:23px;",
       "font-weight:800;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.85);white-space:nowrap;",
       "overflow:hidden;text-overflow:ellipsis;}",
@@ -338,15 +288,20 @@
       ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .ic{width:17px;height:17px}",
       ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .tl{font-size:12.5px}",
       ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .ds{font-size:10.5px;line-height:1.28;}",
-      ".lumen-fx-tile:hover{background:rgba(255,255,255,.07);border-color:#1a9fff;}",
-      ".lumen-fx-tile:hover .ic{color:#fff;}",
-      ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-mono{opacity:0;}",
-      ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-brand{opacity:1;}",
-      ".lumen-fx-tile.danger:hover{border-color:#ec5c5c;}",
-      ".lumen-fx-tile.danger:hover .ic{color:#ec5c5c;}",
+      // Gamepad focus mirrors hover exactly: the pointer and the D-pad should
+      // describe the same state, including the danger tile's red icon and the
+      // featured tile's logo cross-fade.
+      ".lumen-fx-tile:hover,.lumen-fx-tile.active-focus{background:rgba(255,255,255,.07);border-color:#1a9fff;}",
+      ".lumen-fx-tile:hover .ic,.lumen-fx-tile.active-focus .ic{color:#fff;}",
+      ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-mono,",
+      ".lumen-fx-tile.featured:not(.off).active-focus .lumen-lt-logo-mono{opacity:0;}",
+      ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-brand,",
+      ".lumen-fx-tile.featured:not(.off).active-focus .lumen-lt-logo-brand{opacity:1;}",
+      ".lumen-fx-tile.danger:hover,.lumen-fx-tile.danger.active-focus{border-color:#ec5c5c;}",
+      ".lumen-fx-tile.danger:hover .ic,.lumen-fx-tile.danger.active-focus .ic{color:#ec5c5c;}",
       ".lumen-fx-tile.off{opacity:.42;cursor:default;}",
-      ".lumen-fx-tile.off:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08);}",
-      ".lumen-fx-tile.off:hover .ic{color:#9aa3ab;}",
+      ".lumen-fx-tile.off:hover,.lumen-fx-tile.off.active-focus{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08);}",
+      ".lumen-fx-tile.off:hover .ic,.lumen-fx-tile.off.active-focus .ic{color:#9aa3ab;}",
       // "needs auth" is carried by the badge alone: the tile keeps its own icon
       // and the normal blue hover, so nothing about it looks broken or disabled.
       ".lumen-fx-tile.auth .lumen-fx-badge{color:#f3ca62;background:rgba(224,179,65,.13);}",
@@ -361,12 +316,14 @@
       ".lumen-fx-category-badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #46515e;",
       "border-radius:999px;background:#2b3038;color:#cdd3da;padding:5px 10px;font:700 10px 'Motiva Sans',Arial;",
       "letter-spacing:.35px;text-transform:uppercase;cursor:default;}",
-      "button.lumen-fx-category-badge{cursor:pointer;}button.lumen-fx-category-badge:hover{border-color:#1a9fff;color:#fff;}",
+      "button.lumen-fx-category-badge{cursor:pointer;}",
+      "button.lumen-fx-category-badge:hover,button.lumen-fx-category-badge.active-focus{border-color:#1a9fff;color:#fff;}",
       ".lumen-fx-category-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:8;min-width:150px;padding:5px;",
       "border:1px solid #46515e;border-radius:5px;background:#20242b;box-shadow:0 10px 24px rgba(0,0,0,.42);}",
       ".lumen-fx-category-menu button{display:block;width:100%;border:0;border-radius:3px;background:transparent;",
       "color:#b8bcbf;padding:7px 9px;text-align:left;font:600 11px 'Motiva Sans',Arial;cursor:pointer;}",
-      ".lumen-fx-category-menu button:hover,.lumen-fx-category-menu button.active{background:#303844;color:#fff;}",
+      ".lumen-fx-category-menu button:hover,.lumen-fx-category-menu button.active,",
+      ".lumen-fx-category-menu button.active-focus{background:#303844;color:#fff;}",
       ".lumen-fx-tile.featured>.lumen-fx-badge{top:auto;right:14px;bottom:13px;}",
       "@media(max-width:620px){.lumen-fx-grid{grid-template-columns:minmax(0,1.6fr) minmax(130px,1fr)}.lumen-fx-tile.featured .ds{max-width:100%;}}",
       ".lumen-fx-note{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:12px;",
@@ -386,28 +343,12 @@
       "border-top:1px solid rgba(255,255,255,.06);}",
       ".lumen-fx-btn{cursor:pointer;font:600 13px 'Motiva Sans',Arial;color:#fff;background:#1a9fff;",
       "border:1px solid #1a9fff;border-radius:3px;padding:8px 18px;text-decoration:none;transition:.12s;}",
-      ".lumen-fx-btn:hover{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-fx-btn:hover,.lumen-fx-btn.active-focus{background:#3cb0ff;border-color:#3cb0ff;}",
       ".lumen-fx-btn.secondary{background:transparent;border-color:#3d4450;color:#b8bcbf;}",
-      ".lumen-fx-btn.secondary:hover{background:rgba(255,255,255,.06);border-color:#4a5663;color:#dcdedf;}",
+      ".lumen-fx-btn.secondary:hover,.lumen-fx-btn.secondary.active-focus{background:rgba(255,255,255,.06);border-color:#4a5663;color:#dcdedf;}",
       ".lumen-fx-lo{display:flex;gap:8px;margin-top:8px;}",
       ".lumen-fx-lo input{flex:1;min-width:0;background:#1a1d23;color:#dcdedf;font:12px monospace;",
       "border:1px solid #3d4450;border-radius:3px;padding:8px 10px;}",
-      // guided Ryuu authentication prompt
-      ".lumen-ryuu-modal{width:470px;box-sizing:border-box;}",
-      ".lumen-ryuu-title{display:flex;align-items:center;gap:10px;color:#fff;font-size:17px;font-weight:700;margin-bottom:10px;}",
-      ".lumen-ryuu-title .key{width:18px;height:18px;color:#e0b341;}",
-      ".lumen-ryuu-copy{color:#b8bcbf;font-size:13px;line-height:1.5;margin-bottom:14px;}",
-      ".lumen-ryuu-label{display:block;color:#dcdedf;font-size:12px;font-weight:700;margin-bottom:6px;}",
-      ".lumen-ryuu-input{width:100%;box-sizing:border-box;background:#1a1d23;color:#dcdedf;",
-      "border:1px solid #3d4450;border-radius:4px;padding:10px 11px;font:13px monospace;}",
-      ".lumen-ryuu-input:focus{outline:none;border-color:#1a9fff;box-shadow:0 0 0 1px #1a9fff;}",
-      ".lumen-ryuu-help{display:inline-block;margin-top:9px;color:#66c0f4;font-size:12px;cursor:pointer;",
-      "background:none;border:0;padding:0;text-decoration:underline;font-family:inherit;}",
-      ".lumen-ryuu-safe{margin:12px 0;color:#8f98a0;font-size:11.5px;line-height:1.45;}",
-      ".lumen-ryuu-error{display:none;margin:10px 0;color:#ec8b8b;font-size:12px;line-height:1.4;}",
-      ".lumen-ryuu-steps{margin:4px 0 16px;padding-left:20px;color:#b8bcbf;font-size:13px;line-height:1.55;}",
-      ".lumen-ryuu-steps li{margin:0 0 7px;}",
-      ".lumen-ryuu-site{color:#66c0f4;text-decoration:underline;cursor:pointer;background:none;border:0;padding:0;font:inherit;}",
       ".lumen-mbtn:disabled{opacity:.5;cursor:wait;}",
       // in-panel sign-in view: the Fixes Menu body turns into this, so the user
       // never leaves the panel they started from.
@@ -517,6 +458,32 @@
     return b;
   }
 
+  // Gamepad UI: join Steam's own navigation tree so the D-pad reaches the entry
+  // from the Play row. No-op in Desktop Mode (no native focus controller).
+  var _fxBtnFocus = null;
+  function attachFixesButtonFocus(btn) {
+    if (_fxBtnFocus) { try { _fxBtnFocus(); } catch (e) {} _fxBtnFocus = null; }
+    btn.classList.add("Focusable");
+    try { _fxBtnFocus = registerNativeInlineFocus(btn); } catch (e) { _fxBtnFocus = null; }
+  }
+
+  // The gap Steam leaves between two neighbouring icon buttons inside the
+  // cluster, so our entry can reuse the same rhythm. Returns null when the
+  // cluster has fewer than two visible icons to measure.
+  function measureNativeIconGap(cluster) {
+    if (!cluster || typeof cluster.querySelectorAll !== "function") return null;
+    var icons = Array.prototype.slice.call(
+      cluster.querySelectorAll('[role="button"]'))
+      .map(function (el) { return el.getBoundingClientRect(); })
+      .filter(function (r) { return r.width > 0 && r.height > 0; })
+      .sort(function (a, b) { return a.left - b.left; });
+    for (var i = 1; i < icons.length; i++) {
+      var gap = icons[i].left - icons[i - 1].right;
+      if (gap > 0 && gap < 40) return gap;
+    }
+    return null;
+  }
+
   // Insert the entry immediately LEFT of the gear. The gear/info/favorite icons
   // live in a FIXED-WIDTH, nowrap flex row (sized to exactly fit the three
   // icons) inside a wider action bar. Inserting our entry INTO that row makes
@@ -539,6 +506,73 @@
     var clusterWrap = iconRow && iconRow.parentElement; // wrapper pinned to the bar's right
     var bar = clusterWrap && clusterWrap.parentElement; // the wide action bar row
     var btn = makeFixesButton();
+    // The desktop shell and Gamepad UI nest the gear at DIFFERENT depths, so a
+    // fixed "two levels up" lands in the wrong place in one of them (in Gamepad
+    // UI it put the entry above the Play button). Resolve the action row by
+    // LAYOUT instead: walk up from the gear and keep the outermost ancestor that
+    // is still a horizontal flex row on the gear's own line. Its child that
+    // holds the gear is the icon cluster, and the entry goes just before it —
+    // left of the gear in both shells.
+    var gearRect = gear.getBoundingClientRect();
+    var row = null;
+    var rowChild = null;
+    var node = gear;
+    for (var up = 0; up < 6 && node.parentElement; up++) {
+      var parent = node.parentElement;
+      var pr = parent.getBoundingClientRect();
+      if (pr.height <= 0) break;
+      var sameLine = Math.abs(pr.top - gearRect.top) < 40
+        && Math.abs((pr.top + pr.height) - (gearRect.top + gearRect.height)) < 40;
+      // Once an ancestor is taller than the gear's line we have left the action
+      // row; anything above that would stack the entry instead of placing it
+      // beside the icons.
+      if (!sameLine) break;
+      // Plain wrappers on the same line are skipped, not accepted: inserting a
+      // sibling into a block wrapper is exactly what pushed the entry above the
+      // Play button in Gamepad UI. Only a horizontal flex row can host it.
+      var ps = window.getComputedStyle(parent);
+      if ((ps.display === "flex" || ps.display === "inline-flex")
+          && ps.flexDirection === "row") {
+        row = parent;
+        rowChild = node;
+      }
+      node = parent;
+    }
+    if (row && rowChild && rowChild.parentElement === row
+        && rowChild !== gearWrap) {
+      btn.style.alignSelf = "center";
+      row.insertBefore(btn, rowChild);
+      try {
+        // Match the entry->cluster gap to the native gap BETWEEN the icon
+        // buttons, so the three controls share one rhythm. The row already
+        // applies its own `gap`, and the cluster may carry a margin of its own,
+        // so target the measured distance instead of adding to it: the needed
+        // margin is the native icon gap minus whatever the row's gap supplies.
+        var iconGap = measureNativeIconGap(rowChild);
+        if (iconGap !== null) {
+          var rowGap = parseFloat(window.getComputedStyle(row).columnGap);
+          if (!isFinite(rowGap)) rowGap = 0;
+          _fxCluster = rowChild;
+          _fxClusterOrigMl = rowChild.style.marginLeft;
+          // Measure the resulting gap and correct it, rather than deriving it
+          // from the box model: the cluster carries its own left inset and the
+          // row applies its gap, so the visible distance is the only reliable
+          // input. The correction can be negative when the row's gap alone is
+          // already wider than one icon step.
+          rowChild.style.marginLeft = "0px";
+          var actual = rowChild.getBoundingClientRect().left
+            - btn.getBoundingClientRect().right;
+          var firstIcon = rowChild.querySelector('[role="button"]');
+          if (firstIcon) {
+            actual = firstIcon.getBoundingClientRect().left
+              - btn.getBoundingClientRect().right;
+          }
+          rowChild.style.marginLeft = Math.round(iconGap - actual) + "px";
+        }
+      } catch (e) {}
+      attachFixesButtonFocus(btn);
+      return true;
+    }
     if (bar && clusterWrap && bar.contains(clusterWrap)) {
       btn.style.alignSelf = "center";
       bar.insertBefore(btn, clusterWrap);
@@ -556,16 +590,19 @@
           }
         }
       } catch (e) {}
+      attachFixesButtonFocus(btn);
       return true;
     }
     // Fallback: original in-row placement left of the gear (may shrink icons).
     if (!gearWrap || !gearWrap.parentElement) return false;
     gearWrap.parentElement.insertBefore(btn, gearWrap);
+    attachFixesButtonFocus(btn);
     return true;
   }
 
   // Remove the entry and restore the icon cluster's original left margin.
   function removeFixesButton() {
+    if (_fxBtnFocus) { try { _fxBtnFocus(); } catch (e) {} _fxBtnFocus = null; }
     var b = document.getElementById(FX_BTN_ID); if (b) b.remove();
     var s = document.getElementById(FX_SPACER_ID); if (s) s.remove();
     if (_fxCluster) {
@@ -626,6 +663,81 @@
     if (typeof setTimeout === "function") setTimeout(fxTick, 120);
   }
 
+  // ── alert / confirm ──────────────────────────────────────────────────────────
+  // Both reuse the Lumen modal styles (03-styles) and register with Steam's
+  // gamepad navigation, so the confirmation is reachable with the D-pad in
+  // Gamepad UI instead of being a dead end.
+  function fxModalShell(titleText, message) {
+    injectStyles();
+    var back = document.createElement("div");
+    back.className = "lumen-modal-back";
+    var m = document.createElement("div");
+    m.className = "lumen-modal";
+    var title = document.createElement("div");
+    title.className = "mt";
+    title.textContent = titleText;
+    var body = document.createElement("div");
+    body.className = "mb";
+    body.textContent = message;
+    var row = document.createElement("div");
+    row.className = "mrow";
+    m.appendChild(title); m.appendChild(body); m.appendChild(row);
+    back.appendChild(m);
+    return { back: back, row: row };
+  }
+
+  function fxModalButton(row, label, primary, onClick) {
+    var b = document.createElement("div");
+    b.className = "lumen-mbtn" + (primary ? " primary" : "");
+    b.setAttribute("role", "button");
+    b.textContent = label;
+    b.addEventListener("click", onClick);
+    row.appendChild(b);
+    return b;
+  }
+
+  function fxAlert(msg) {
+    var shell = fxModalShell(fxStrings().title, msg);
+    var trap = null;
+    var close = function () {
+      if (trap) { try { trap(); } catch (e) {} trap = null; }
+      if (shell.back.parentNode) shell.back.remove();
+    };
+    fxModalButton(shell.row, "OK", true, close);
+    shell.back.addEventListener("click", function (e) {
+      if (e.target === shell.back) close();
+    });
+    (document.body || document.documentElement).appendChild(shell.back);
+    trap = trapModalFocus(shell.back, close, {
+      selector: LUMEN_OVERLAY_ACTION_SELECTOR,
+    });
+  }
+
+  function fxConfirm(msg, onYes) {
+    var S = fxStrings();
+    var shell = fxModalShell(S.unfixLabel, msg);
+    var trap = null;
+    var close = function () {
+      if (trap) { try { trap(); } catch (e) {} trap = null; }
+      if (shell.back.parentNode) shell.back.remove();
+    };
+    fxModalButton(shell.row, S.cancel, false, close);
+    fxModalButton(shell.row, S.unfixLabel, true, function () {
+      close();
+      onYes();
+    });
+    shell.back.addEventListener("click", function (e) {
+      if (e.target === shell.back) close();
+    });
+    (document.body || document.documentElement).appendChild(shell.back);
+    // Default the selection to Cancel: the destructive action should never be
+    // one accidental A press away.
+    trap = trapModalFocus(shell.back, close, {
+      selector: LUMEN_OVERLAY_ACTION_SELECTOR,
+      preferFirst: true,
+    });
+  }
+
   // ── window + flows ───────────────────────────────────────────────────────────
 
   function fxParse(res) {
@@ -633,212 +745,13 @@
     catch (e) { return null; }
   }
   var _fxEsc = null;
+  var _fxFocusTrap = null;
   function fxClose() {
+    if (_fxFocusTrap) { _fxFocusTrap(); _fxFocusTrap = null; }
     var o = document.getElementById(FX_OVERLAY_ID);
     if (o) o.remove();
     if (_fxEsc) { document.removeEventListener("keydown", _fxEsc, true); _fxEsc = null; }
   }
-
-  // Alert/confirm reuse the Lumen modal styles (03-styles).
-  function fxAlert(msg) {
-    injectStyles();
-    var back = document.createElement("div");
-    back.className = "lumen-modal-back";
-    var m = document.createElement("div");
-    m.className = "lumen-modal";
-    m.innerHTML = '<div class="mt">' + fxStrings().title + '</div><div class="mb"></div>' +
-      '<div class="mrow"><div class="lumen-mbtn primary" data-ok>OK</div></div>';
-    m.querySelector(".mb").textContent = msg;
-    back.appendChild(m);
-    back.addEventListener("click", function (e) { if (e.target === back) back.remove(); });
-    m.querySelector("[data-ok]").addEventListener("click", function () { back.remove(); });
-    (document.body || document.documentElement).appendChild(back);
-  }
-  function fxConfirm(msg, onYes) {
-    injectStyles();
-    var S = fxStrings();
-    var back = document.createElement("div");
-    back.className = "lumen-modal-back";
-    var m = document.createElement("div");
-    m.className = "lumen-modal";
-    m.innerHTML = '<div class="mt">' + S.unfixLabel + '</div><div class="mb"></div>' +
-      '<div class="mrow"><div class="lumen-mbtn" data-no></div>' +
-      '<div class="lumen-mbtn primary" data-yes></div></div>';
-    m.querySelector(".mb").textContent = msg;
-    m.querySelector("[data-no]").textContent = S.cancel;
-    m.querySelector("[data-yes]").textContent = S.unfixLabel;
-    back.appendChild(m);
-    m.querySelector("[data-no]").addEventListener("click", function () { back.remove(); });
-    m.querySelector("[data-yes]").addEventListener("click", function () { back.remove(); onYes(); });
-    (document.body || document.documentElement).appendChild(back);
-  }
-
-  function fxOpenExternal(url) {
-    call("__lumenOpenExternalUrl", { url: url }).then(function (res) {
-      var p = fxParse(res);
-      if (!(p && p.ok)) {
-        try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {}
-      }
-    }).catch(function () {
-      try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {}
-    });
-  }
-
-  function showRyuuAuthHelp() {
-    var S = fxStrings();
-    injectFixesStyles();
-    var back = document.createElement("div");
-    back.className = "lumen-modal-back";
-    var modal = document.createElement("div");
-    modal.className = "lumen-modal lumen-ryuu-modal";
-
-    var title = document.createElement("div");
-    title.className = "lumen-ryuu-title";
-    title.textContent = S.ryuuHelpTitle;
-    var intro = document.createElement("div");
-    intro.className = "lumen-ryuu-copy";
-    intro.textContent = S.ryuuHelpIntro;
-    var steps = document.createElement("ol");
-    steps.className = "lumen-ryuu-steps";
-
-    var step1 = document.createElement("li");
-    step1.appendChild(document.createTextNode(S.ryuuHelpStep1 + " "));
-    var site = document.createElement("button");
-    site.type = "button";
-    site.className = "lumen-ryuu-site";
-    site.textContent = "generator.ryuu.lol/fixes";
-    site.addEventListener("click", function () {
-      fxOpenExternal("https://generator.ryuu.lol/fixes");
-    });
-    step1.appendChild(site);
-    [S.ryuuHelpStep2, S.ryuuHelpStep3, S.ryuuHelpStep4, S.ryuuHelpStep5].forEach(function (copy) {
-      var li = document.createElement("li");
-      li.textContent = copy;
-      steps.appendChild(li);
-    });
-    steps.insertBefore(step1, steps.firstChild);
-
-    var warning = document.createElement("div");
-    warning.className = "lumen-ryuu-safe";
-    warning.textContent = S.ryuuHelpWarning;
-    var row = document.createElement("div");
-    row.className = "mrow";
-    var ok = document.createElement("button");
-    ok.type = "button";
-    ok.className = "lumen-mbtn primary";
-    ok.textContent = "OK";
-    var close = function () { if (back.parentNode) back.remove(); };
-    ok.addEventListener("click", close);
-    back.addEventListener("click", function (e) { if (e.target === back) close(); });
-    row.appendChild(ok);
-    modal.appendChild(title); modal.appendChild(intro); modal.appendChild(steps);
-    modal.appendChild(warning); modal.appendChild(row); back.appendChild(modal);
-    (document.body || document.documentElement).appendChild(back);
-  }
-
-  function showRyuuAuthPrompt(onSaved) {
-    var old = document.getElementById("lumen-ryuu-auth");
-    if (old) old.remove();
-    var S = fxStrings();
-    injectFixesStyles();
-    var back = document.createElement("div");
-    back.id = "lumen-ryuu-auth";
-    back.className = "lumen-modal-back";
-    var modal = document.createElement("div");
-    modal.className = "lumen-modal lumen-ryuu-modal";
-
-    var title = document.createElement("div");
-    title.className = "lumen-ryuu-title";
-    var key = document.createElement("span");
-    key.className = "key";
-    key.innerHTML = FX_ICONS.key;
-    var titleText = document.createElement("span");
-    titleText.textContent = S.ryuuPromptTitle;
-    title.appendChild(key); title.appendChild(titleText);
-    var copy = document.createElement("div");
-    copy.className = "lumen-ryuu-copy";
-    copy.textContent = S.ryuuPromptBody;
-    var label = document.createElement("label");
-    label.className = "lumen-ryuu-label";
-    label.textContent = S.ryuuCredentialLabel;
-    var input = document.createElement("input");
-    input.className = "lumen-ryuu-input";
-    input.type = "password";
-    input.autocomplete = "off";
-    input.placeholder = S.ryuuCredentialPlaceholder;
-    label.appendChild(input);
-    var help = document.createElement("button");
-    help.type = "button";
-    help.className = "lumen-ryuu-help";
-    help.textContent = S.ryuuHowTo;
-    help.addEventListener("click", showRyuuAuthHelp);
-    var safe = document.createElement("div");
-    safe.className = "lumen-ryuu-safe";
-    safe.textContent = S.ryuuCredentialSafety;
-    var error = document.createElement("div");
-    error.className = "lumen-ryuu-error";
-    error.setAttribute("aria-live", "polite");
-    var row = document.createElement("div");
-    row.className = "mrow";
-    var cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "lumen-mbtn";
-    cancel.textContent = S.cancel;
-    var save = document.createElement("button");
-    save.type = "button";
-    save.className = "lumen-mbtn primary";
-    save.textContent = S.ryuuSaveContinue;
-    var close = function () { if (back.parentNode) back.remove(); };
-    cancel.addEventListener("click", close);
-    back.addEventListener("click", function (e) { if (e.target === back) close(); });
-    var submit = function () {
-      if (save.disabled) return;
-      if (!input.value.trim()) {
-        error.textContent = S.ryuuCredentialEmpty;
-        error.style.display = "block";
-        input.focus();
-        return;
-      }
-      save.disabled = true;
-      save.textContent = S.ryuuSaving;
-      error.style.display = "none";
-      call("SaveRyuuAuthCredential", {
-        contentScriptQuery: "", credential: input.value,
-      }).then(function (res) {
-        var p = fxParse(res);
-        if (p && p.success && p.configured) {
-          input.value = "";
-          close();
-          if (typeof onSaved === "function") onSaved(p);
-          return;
-        }
-        error.textContent = (p && p.error) ? String(p.error) : S.ryuuSaveError;
-        error.style.display = "block";
-        save.disabled = false;
-        save.textContent = S.ryuuSaveContinue;
-      }).catch(function () {
-        error.textContent = S.ryuuSaveError;
-        error.style.display = "block";
-        save.disabled = false;
-        save.textContent = S.ryuuSaveContinue;
-      });
-    };
-    save.addEventListener("click", submit);
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); submit(); }
-    });
-    row.appendChild(cancel); row.appendChild(save);
-    modal.appendChild(title); modal.appendChild(copy); modal.appendChild(label);
-    modal.appendChild(help); modal.appendChild(safe); modal.appendChild(error);
-    modal.appendChild(row); back.appendChild(modal);
-    (document.body || document.documentElement).appendChild(back);
-    setTimeout(function () { try { input.focus(); } catch (e) {} }, 0);
-  }
-
-  try {
-    window.__lumenShowRyuuAuthPrompt = showRyuuAuthPrompt;
-    window.__lumenShowRyuuAuthHelp = showRyuuAuthHelp;
-  } catch (e) {}
 
   function openFixesMenu() {
     if (document.getElementById(FX_OVERLAY_ID)) return;
@@ -887,6 +800,15 @@
 
     _fxEsc = function (e) { if (e.key === "Escape") fxClose(); };
     document.addEventListener("keydown", _fxEsc, true);
+    // Gamepad UI: hand the window to Steam's focus navigation so the D-pad
+    // walks the fix tiles instead of the game page behind it. The tiles are
+    // divs with click handlers, hence the wider overlay selector. Re-registered
+    // by the MutationObserver inside the trap as the tiles finish loading.
+    if (_fxFocusTrap) { _fxFocusTrap(); _fxFocusTrap = null; }
+    _fxFocusTrap = trapModalFocus(overlay, fxClose, {
+      selector: LUMEN_OVERLAY_ACTION_SELECTOR,
+      preferFirst: true,
+    });
 
     Promise.all([
       call("LumenFixesContext", { appid: appid }).then(fxParse).catch(function () { return null; }),
@@ -943,192 +865,8 @@
     return t;
   }
 
-  // The Fixes Menu body turns into the sign-in view: same panel, same banner, so
-  // the flow never becomes "window opens -> window closes -> panel vanished".
-  // On success it goes straight on with the download the user asked for.
-  var FX_AUTH_LIMIT = 180000; // give up polling after 3 minutes
-  var FX_AUTH_TICK = 2500;
-
-  function fxRenderAuthView(win, body, appid, ctx, fixes, gameName, proceed) {
-    var S = fxStrings();
-    var polling = false;    // the poll loop is live
-    var abandoned = false;  // the user left this view; never resume behind them
-    body.innerHTML = "";
-    fxKeepBodyHeight(body, true);
-
-    var wrap = document.createElement("div");
-    wrap.className = "lumen-fx-auth";
-    var icon = document.createElement("div");
-    icon.className = "lumen-fx-auth-ic";
-    icon.innerHTML = FX_ICONS.key;
-    var title = document.createElement("div");
-    title.className = "lumen-fx-auth-ttl";
-    title.textContent = S.authViewTitle;
-    var copy = document.createElement("div");
-    copy.className = "lumen-fx-auth-copy";
-    copy.textContent = S.authViewBody;
-    var row = document.createElement("div");
-    row.className = "lumen-fx-auth-row";
-    var note = document.createElement("div");
-    note.className = "lumen-fx-auth-note";
-    note.textContent = S.authViewNote;
-    var alt = document.createElement("div");
-    alt.className = "lumen-fx-auth-alt";
-    var manual = document.createElement("button");
-    manual.type = "button";
-    manual.textContent = S.authManual;
-    manual.addEventListener("click", function () {
-      showRyuuAuthPrompt(function () { abandoned = true; polling = false; proceed(); });
-    });
-    alt.appendChild(manual);
-    wrap.appendChild(icon); wrap.appendChild(title); wrap.appendChild(copy);
-    wrap.appendChild(row); wrap.appendChild(note); wrap.appendChild(alt);
-    body.appendChild(wrap);
-
-    var back = function () {
-      abandoned = true;
-      polling = false;
-      call("__lumenRyuuLoginClose", {}).catch(function () {});
-      fxRenderMenu(win, body, appid, ctx, fixes, gameName);
-    };
-
-    var button = function (label, iconKey, ghost, onClick) {
-      var b = document.createElement("a");
-      b.href = "#";
-      b.className = "lumen-fx-auth-btn" + (ghost ? " ghost" : "");
-      if (iconKey && FX_ICONS[iconKey]) {
-        var ic = document.createElement("span");
-        ic.innerHTML = FX_ICONS[iconKey];
-        ic.style.cssText = "display:inline-flex;align-items:center;";
-        b.appendChild(ic);
-      }
-      var text = document.createElement("span");
-      text.textContent = label;
-      b.appendChild(text);
-      b.addEventListener("click", function (e) { e.preventDefault(); onClick(); });
-      return b;
-    };
-
-    var setIcon = function (variant, markup) {
-      icon.className = "lumen-fx-auth-ic" + (variant ? " " + variant : "");
-      icon.innerHTML = markup;
-    };
-
-    var render = {};
-
-    render.intro = function () {
-      setIcon("", FX_ICONS.key);
-      title.textContent = S.authViewTitle;
-      copy.textContent = S.authViewBody;
-      note.style.display = "";
-      alt.style.display = "";
-      row.innerHTML = "";
-      row.appendChild(button(S.authSignIn, "discord", false, start));
-      row.appendChild(button(S.cancel, null, true, back));
-    };
-
-    // Game Mode / Big Picture: a notice, not a form. Nothing to type, nothing to
-    // poll — just where to do it instead (see fixesGameModeNotice).
-    render.gameMode = function () {
-      var notice = fixesGameModeNotice(S);
-      setIcon("", FX_ICONS.key);
-      title.textContent = notice.title;
-      copy.textContent = notice.copy;
-      note.style.display = "none";
-      alt.style.display = "none";
-      row.innerHTML = "";
-      row.appendChild(button(notice.buttons[0], null, false, back));
-    };
-
-    render.opening = function () {
-      setIcon("busy", '<div class="lumen-fx-auth-spin"></div>');
-      title.textContent = S.authOpening;
-      copy.textContent = S.authOpeningHint;
-      note.style.display = "none";
-      alt.style.display = "none";
-      row.innerHTML = "";
-    };
-
-    render.waiting = function () {
-      setIcon("busy", '<div class="lumen-fx-auth-spin"></div>');
-      title.textContent = S.authWaiting;
-      copy.textContent = S.authWaitingHint;
-      note.style.display = "none";
-      alt.style.display = "";
-      row.innerHTML = "";
-      row.appendChild(button(S.cancel, null, true, back));
-    };
-
-    render.done = function () {
-      setIcon("done", FX_ICONS.check || FX_ICONS.key);
-      title.textContent = S.authDone;
-      copy.textContent = S.authDoneHint;
-      note.style.display = "none";
-      alt.style.display = "none";
-      row.innerHTML = "";
-    };
-
-    render.failed = function (message) {
-      setIcon("bad", FX_ICONS.key);
-      title.textContent = S.authFailed;
-      copy.textContent = message || S.authFailedHint;
-      note.style.display = "none";
-      alt.style.display = "";
-      row.innerHTML = "";
-      row.appendChild(button(S.authRetry, "discord", false, start));
-      row.appendChild(button(S.cancel, null, true, back));
-    };
-
-    var finish = function () {
-      call("__lumenRyuuLoginClose", {}).catch(function () {});
-      if (fixes.crackFix) fixes.crackFix.authConfigured = true;
-      render.done();
-      // Let the success state be readable before the download takes the panel.
-      setTimeout(function () { if (!abandoned) proceed(); }, 900);
-    };
-
-    var poll = function (startedAt) {
-      if (!polling || abandoned) return;
-      call("__lumenRyuuLoginPoll", {}).then(fxParse).catch(function () { return null; })
-        .then(function (p) {
-          if (!polling || abandoned) return;
-          var state = fixesAuthViewState(p, Date.now() - startedAt, FX_AUTH_LIMIT);
-          if (state === "configured") { polling = false; finish(); return; }
-          if (state === "error") { polling = false; render.failed(p && p.error); return; }
-          if (state === "timeout") { polling = false; render.failed(S.authTimeout); return; }
-          setTimeout(function () { poll(startedAt); }, FX_AUTH_TICK);
-        });
-    };
-
-    function start() {
-      polling = true;
-      abandoned = false;
-      render.opening();
-      call("__lumenRyuuLoginOpen", {}).then(fxParse).catch(function () { return null; })
-        .then(function (p) {
-          if (abandoned) return;
-          if (!(p && p.ok)) {
-            polling = false;
-            var reason = p && p.reason;
-            render.failed(reason === "unsupported" ? S.authUnsupported : S.authOpenFailed);
-            return;
-          }
-          render.waiting();
-          setTimeout(function () { poll(Date.now()); }, FX_AUTH_TICK);
-        });
-    }
-
-    render.intro();
-    // Ask the backend whether this shell can host the sign-in at all. Default to
-    // the guided flow while the answer is in flight; only downgrade on a clear no.
-    call("__lumenRyuuLoginAvailable", {}).then(fxParse).catch(function () { return null; })
-      .then(function (p) {
-        if (p && p.ok && p.available === false && !abandoned) render.gameMode();
-      });
-  }
-
-  // The rendered result set, so the poll loop can invalidate the stored-session
-  // flag when Ryuu rejects it (fxPoll has no access to fxRenderMenu's scope).
+  // The rendered result set, kept for handlers that run outside fxRenderMenu's
+  // scope (fxPoll among them).
   var fxLastFixes = null;
 
   // Freeze the body at the height the tile grid gave it, and release it when the
@@ -1367,9 +1105,10 @@
     win.appendChild(f);
   }
 
-  // Footer for an expired Ryuu session: Close plus a primary action that
-  // collects a fresh credential and restarts the same download.
-  function fxFooterReauth(win, onRetry) {
+  // Footer for a download the source refused: Close plus a primary action that
+  // retries it. There is nothing for the user to enter here — no shipped source
+  // asks for a credential — so the only useful move is trying again.
+  function fxFooterRetry(win, onRetry) {
     fxFooterClose(win);
     var f = win.querySelector(".lumen-fx-foot");
     if (!f) return;
@@ -1378,12 +1117,10 @@
     var a = document.createElement("a");
     a.href = "#";
     a.className = "lumen-fx-btn";
-    a.textContent = fxStrings().ryuuUpdateAuth;
+    a.textContent = fxStrings().authRetry;
     a.addEventListener("click", function (e) {
       e.preventDefault();
-      showRyuuAuthPrompt(function () {
-        if (typeof onRetry === "function") onRetry();
-      });
+      if (typeof onRetry === "function") onRetry();
     });
     f.appendChild(a);
   }
@@ -1417,11 +1154,7 @@
         fxPoll(appid, url, fixType, ctx, win,
           receiptKind === FX_FALLBACK_RECEIPT_KIND ? FX_FALLBACK_RECEIPT_KIND : null);
       } else if (fixesAuthExpired(p)) {
-        // The tile believed a credential existed but the backend found none
-        // (removed elsewhere, or cleared after a rejected session).
-        showRyuuAuthPrompt(function () {
-          fxApply(appid, url, fixType, ctx, win);
-        });
+        fxAlert((p && p.error) ? String(p.error) : S.authViewTitle);
       } else {
         fxAlert((p && p.error) ? String(p.error) : S.applyErr);
       }
@@ -1508,13 +1241,10 @@
           });
         } else if (st.status === "failed") {
           if (fixesAuthExpired(st)) {
-            // The backend cleared the stored session, so the tile must show
-            // "needs auth" again when the user goes back to the grid.
-            if (fxLastFixes && fxLastFixes.crackFix) {
-              fxLastFixes.crackFix.authConfigured = false;
-            }
-            if (msg) msg.textContent = S.ryuuAuthExpired;
-            fxFooterReauth(win, function () {
+            // The source refused the download. Report what it said and offer the
+            // retry; nothing here is the user's to re-enter.
+            if (msg) msg.textContent = st.error || S.authViewTitle;
+            fxFooterRetry(win, function () {
               fxApply(appid, url, fixType, ctx, win);
             });
             return;

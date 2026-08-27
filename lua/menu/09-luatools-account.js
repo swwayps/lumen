@@ -23,6 +23,7 @@
     return pt ? {
       fixesTab: "Fixes", accountTitle: "Conta lua.tools", signIn: "Entrar no lua.tools",
       unlock: "Desbloqueie fixes, Luie e outros recursos úteis.", connected: "Conectado",
+      checking: "Verificando sua conta\u2026",
       accountIntro: "Escolha como conectar sua conta. As duas opções criam a mesma sessão segura do lua.tools.",
       discordTitle: "Continuar com Discord", discordBody: "Abra a autorização oficial dentro do navegador do Steam.",
       discordButton: "Entrar com Discord", codeTitle: "Usar código do Discord",
@@ -45,6 +46,7 @@
     } : {
       fixesTab: "Fixes", accountTitle: "lua.tools account", signIn: "Sign in to lua.tools",
       unlock: "Unlock fixes, Luie, and other quality-of-life features.", connected: "Connected",
+      checking: "Checking your account\u2026",
       accountIntro: "Choose how to connect your account. Both options create the same secure lua.tools session.",
       discordTitle: "Continue with Discord", discordBody: "Open the official authorization inside Steam's browser.",
       discordButton: "Sign in with Discord", codeTitle: "Use a Discord code",

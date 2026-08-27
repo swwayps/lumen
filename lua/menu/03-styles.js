@@ -9,6 +9,48 @@
     var s = document.createElement("style");
     s.id = STYLE_ID;
     s.textContent = [
+      // Gamepad focus ring. Steam's own focus ring is drawn by its React
+      // components, so anything Lumen injects has to paint its own — otherwise
+      // the D-pad moves an invisible selection. Applies to every Lumen surface
+      // (menubar entry, settings window, Fixes Menu, guard modals) via the
+      // .active-focus class the gamepad navigation sets.
+      // Gamepad UI runs at a device scale factor, and a 2px outline on a small
+      // control rounds down to a hairline. Keep the ring readable everywhere.
+      ".active-focus{outline:3px solid #66c0f4 !important;outline-offset:2px !important;",
+      "border-radius:4px;box-shadow:0 0 0 4px rgba(102,192,244,.20) !important;",
+      "position:relative;z-index:2;}",
+      // Gamepad focus should read exactly like a pointer hover, so the styles
+      // below are written once for both. `.active-focus` is what the gamepad
+      // navigation sets; keeping the pairs here avoids duplicating every rule.
+      ".lumen-tab.active-focus{background:rgba(255,255,255,.04);}",
+      ".lumen-account-entry.active-focus{background:rgba(255,255,255,.04);}",
+      ".lumen-account-back.active-focus{color:#fff;background:rgba(255,255,255,.07);}",
+      ".lumen-account-button.active-focus{background:#3b4350;color:#fff;}",
+      ".lumen-account-button.primary.active-focus{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-account-button.discord.active-focus{background:#6b76f5;border-color:#6b76f5;}",
+      ".lumen-account-logout.active-focus{border-color:#a2464b;background:rgba(236,92,92,.1);color:#f0908f;}",
+      ".lumen-auto-fix-action.active-focus{background:#3b4350;color:#fff;}",
+      ".lumen-auto-fix-action.primary.active-focus{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-install-readiness-action.active-focus{background:#3b4350;color:#fff;}",
+      ".lumen-install-readiness-action.primary.active-focus{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-ctop .x.active-focus,.lumen-ctop .reset.active-focus{color:#fff;background:rgba(255,255,255,.08);}",
+      ".lumen-info.active-focus{color:#fff;border-color:#8f98a0;}",
+      ".lumen-row select.active-focus,.lumen-row input.active-focus{border-color:#4a5663;}",
+      ".lumen-fixes-tag.active-focus{border-color:#657181;color:#fff;}",
+      ".lumen-fixes-game.active-focus{border-color:#1a9fff;background:#262b33;}",
+      ".lumen-game-head.active-focus{background:rgba(255,255,255,.03);}",
+      ".lumen-ver.active-focus{background:rgba(255,255,255,.05);}",
+      ".lumen-ver.active-focus .lumen-del{opacity:1;}",
+      ".lumen-ver.disabled.active-focus{background:none;}",
+      ".lumen-del.active-focus,.lumen-icon-btn.active-focus{color:#ec5c5c;background:rgba(236,92,92,.12);}",
+      ".lumen-back.active-focus{color:#fff;}",
+      ".lumen-adv.active-focus,.lumen-more.active-focus,.lumen-about-credit a.active-focus{text-decoration:underline;}",
+      ".lumen-builder-add.active-focus,.lumen-import.active-focus{color:#8fd0ff;}",
+      ".lumen-builder-result.active-focus{background:#303844;}",
+      ".lumen-secret-toggle.active-focus{color:#fff;background:#292f38;}",
+      ".lumen-channel-option.active-focus{color:var(--lumen-theme-text,#dcdedf);}",
+      ".lumen-about-btn.active-focus,.lumen-cloud-btn.active-focus{background:#3cb0ff;border-color:#3cb0ff;}",
+      ".lumen-cloud-btn.secondary.active-focus{background:rgba(255,255,255,.08);color:#fff;}",
       "#" + BTN_ID + "{display:inline-flex;align-items:center;justify-content:flex-start;gap:0;",
       "cursor:pointer;font-size:13px;line-height:1;height:22px;padding:0;margin:0 2px;overflow:hidden;",
       "opacity:.8;-webkit-app-region:no-drag;user-select:none;border-radius:999px;white-space:nowrap;}",
@@ -93,13 +135,20 @@
       ".lumen-account-avatar{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;",
       "box-sizing:border-box;flex:0 0 32px;border:1px solid rgba(255,255,255,.13);border-radius:50%;",
       "background:rgba(255,255,255,.05);color:#a6afb9;overflow:hidden;}",
-      ".lumen-account-entry.connected .lumen-account-avatar{border-color:rgba(102,192,244,.42);",
-      "background:rgba(26,159,255,.16);color:#66c0f4;}",
+      // A rim, not a ring: at full accent this read as a bright blue circle
+      // drawn around the avatar rather than as part of it.
+      ".lumen-account-entry.connected .lumen-account-avatar{border-color:rgba(102,192,244,.24);",
+      "background:rgba(26,159,255,.1);color:#66c0f4;}",
       ".lumen-account-avatar svg{width:17px;height:17px}.lumen-account-avatar img{width:100%;height:100%;object-fit:cover;}",
       ".lumen-account-entry>span:last-child{display:flex;min-width:0;flex-direction:column;gap:3px;}",
       ".lumen-account-entry strong{color:#f1f3f5;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
       ".lumen-account-entry small{color:#9aa3ad;font-size:10.5px;line-height:1.3;display:-webkit-box;",
       "-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}",
+      // While the auth status is still being fetched the row says so, with the
+      // shared spinner in place of the avatar, instead of guessing "signed out".
+      ".lumen-account-entry.checking strong{color:#c5cad0;}",
+      ".lumen-account-entry.checking .lumen-account-avatar{border-style:dashed;}",
+      ".lumen-account-entry .lumen-spin{width:13px;height:13px;}",
       // Connected reads as status, not as body copy — same dot + green as the
       // account panel's own "Connected" line in the content area.
       ".lumen-account-entry.connected small{display:flex;align-items:center;gap:6px;",
@@ -147,10 +196,7 @@
       "background:#1a1d23;color:#dcdedf;border:1px solid #3d4450;border-radius:3px;",
       "padding:6px 8px;min-width:130px;font-size:13px;font-family:inherit;}",
       ".lumen-row select:hover,.lumen-row input:hover{border-color:#4a5663;}",
-      ".lumen-key-ctrl{gap:8px;}",
-      ".lumen-key-ctrl .lumen-cloud-btn{padding:6px 12px;}",
-      ".lumen-auth-state{margin-top:5px;color:#8f98a0;font-size:11.5px;font-weight:600;}",
-      ".lumen-auth-state.configured{color:#79c754;}",
+
       ".lumen-sw{position:relative;display:inline-block;width:38px;height:20px;flex:0 0 auto;}",
       ".lumen-sw input{opacity:0;width:0;height:0;position:absolute;}",
       ".lumen-sw .sl{position:absolute;inset:0;background:#3d4450;border-radius:20px;transition:.15s;cursor:pointer;}",

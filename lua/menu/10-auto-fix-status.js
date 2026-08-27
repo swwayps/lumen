@@ -5,7 +5,7 @@
   var _autoFixJobs = {};
   var _autoFixPillJob = null;
   var _autoFixModal = null;
-  var _autoFixEsc = null;
+  var _autoFixFocusTrap = null;
   var _moonPillMessage = null;
   var _moonPillMessageTimer = null;
   var _moonPillCopyTimer = null;
@@ -35,6 +35,9 @@
       skipFailed: "The automatic fix could not be skipped safely.",
       timeoutTitle: "Launch cancelled",
       timeoutBody: "The fix is taking longer than expected, so this launch attempt was cancelled.",
+      failed: "The recommended fix could not be applied",
+      failedTitle: "Fix failed",
+      failedBody: "The game was not opened automatically. You can open it without the fix or try again later.",
     };
   }
 
@@ -51,6 +54,9 @@
     if (stage === "extracting") return S.extracting;
     if (stage === "applying") return S.applyingFiles;
     if (stage === "finalizing") return S.finalizing;
+    if (stage === "failed") {
+      return (job && typeof job.error === "string" && job.error) || S.failed;
+    }
     return S.preparing;
   }
 
@@ -184,6 +190,15 @@
     button.appendChild(copy);
     button.setAttribute("role", "button");
     button.setAttribute("tabindex", "0");
+    // A pointer click must not leave focus behind. Chromium does not paint the
+    // ring for the click itself, but it re-evaluates :focus-visible on the still
+    // focused element when a key event follows — so closing the window with
+    // Escape lit an accent ring around the (round) button, out of nowhere.
+    // Preventing the mousedown default keeps focus off it while leaving Tab
+    // focus and the Enter/Space handler below untouched.
+    button.addEventListener("mousedown", function (event) {
+      if (typeof event.preventDefault === "function") event.preventDefault();
+    });
     button.addEventListener("keydown", function (event) {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
@@ -194,13 +209,16 @@
   }
 
   function closeAutoFixModal() {
+    if (_autoFixFocusTrap) {
+      _autoFixFocusTrap();
+      _autoFixFocusTrap = null;
+    }
     var overlay = document.getElementById(AUTO_FIX_OVERLAY_ID);
     if (overlay) overlay.remove();
-    if (_autoFixEsc) {
-      document.removeEventListener("keydown", _autoFixEsc, true);
-      _autoFixEsc = null;
-    }
     _autoFixModal = null;
+    try {
+      if (window.GamepadNav) window.GamepadNav.setBackHandler(null);
+    } catch (_) {}
   }
 
   function makeAutoFixAction(label, action, primary, handler) {
@@ -231,6 +249,12 @@
         call("__lumenCancelAutoFixLaunch", { appid: appid })
           .catch(function () {}).then(closeAutoFixModal);
       }));
+    }
+    // The skip is offered whenever the queued work has not started writing game
+    // files: while a launch is pending, and also after the guard cancelled one.
+    // A cancelled launch used to leave Close as the only action, which is a dead
+    // end when the job cannot finish on its own.
+    if (pending || _autoFixModal.timedOut === true) {
       if (job && job.canSkip === true) {
         actions.appendChild(makeAutoFixAction(S.launchWithoutFix,
           "launch-without-fix", false, function () {
@@ -269,14 +293,18 @@
     var progress = autoFixProgress(job.progress);
     _autoFixModal.game.textContent = String(job.gameName || ("App " + job.appid));
     _autoFixModal.stage.textContent = autoFixStage(job, S);
-    _autoFixModal.percent.textContent = progress + "%";
-    _autoFixModal.fill.style.width = progress + "%";
-    _autoFixModal.track.setAttribute("aria-valuenow", String(progress));
+    // A failed job has no meaningful progress. Showing 0% next to an empty bar
+    // is what made a dead job look like a frozen download, so the bar is hidden
+    // and the reason carries the message instead.
+    var failed = job.phase === "failed";
+    _autoFixModal.percent.textContent = failed ? "" : progress + "%";
+    _autoFixModal.track.style.display = failed ? "none" : "";
+    _autoFixModal.fill.style.width = failed ? "0%" : progress + "%";
+    _autoFixModal.track.setAttribute("aria-valuenow", String(failed ? 0 : progress));
     if (!_autoFixModal.timedOut) {
       _autoFixModal.note.textContent = _autoFixModal.launchPending ? S.launchQueued : S.body;
     }
-    if (!_autoFixModal.timedOut
-        && _autoFixModal.canSkip !== (job.canSkip === true)) {
+    if (_autoFixModal.canSkip !== (job.canSkip === true)) {
       _autoFixModal.canSkip = job.canSkip === true;
       renderAutoFixActions(job);
     }
@@ -345,15 +373,11 @@
     overlay.addEventListener("click", function (event) {
       if (event.target === overlay) closeAutoFixModal();
     });
-    _autoFixEsc = function (event) {
-      if (event.key === "Escape") { event.preventDefault(); closeAutoFixModal(); }
-    };
-    document.addEventListener("keydown", _autoFixEsc, true);
+    _autoFixFocusTrap = trapModalFocus(
+      overlay, closeAutoFixModal, "wait");
     if (window.GamepadNav) {
       try { window.GamepadNav.setBackHandler(closeAutoFixModal); } catch (_) {}
     }
-    var primary = actions.children[actions.children.length - 1];
-    if (primary) setTimeout(function () { try { primary.focus(); } catch (_) {} }, 0);
   }
 
   function showAutoFixTimeout(appid) {
@@ -364,9 +388,24 @@
     var eyebrow = _autoFixModal.overlay.children[0].children[0];
     if (eyebrow) eyebrow.textContent = S.timeoutTitle;
     _autoFixModal.note.textContent = S.timeoutBody;
-    _autoFixModal.actions.textContent = "";
-    _autoFixModal.actions.appendChild(makeAutoFixAction(
-      S.close, "wait", true, closeAutoFixModal));
+    renderAutoFixActions(_autoFixJobs[String(appid)] || null);
+  }
+
+  // The guard dropped a saved launch because the queued work failed. Reuse the
+  // cancelled-launch presentation: the job's own reason is already rendered by
+  // updateAutoFixModal, and the skip stays available because the job reports
+  // canSkip for a terminal failure.
+  function showAutoFixFailed(appid) {
+    showAutoFixModal(appid, false);
+    if (!_autoFixModal) return;
+    var S = autoFixCopy();
+    _autoFixModal.timedOut = true;
+    var eyebrow = _autoFixModal.overlay.children[0].children[0];
+    if (eyebrow) eyebrow.textContent = S.failedTitle;
+    _autoFixModal.note.textContent = S.failedBody;
+    var job = _autoFixJobs[String(appid)] || null;
+    if (job) updateAutoFixModal(job);
+    renderAutoFixActions(job);
   }
 
   function handleMoonButtonClick(event) {
@@ -394,3 +433,4 @@
   };
   window.__lumenShowAutoFixModal = showAutoFixModal;
   window.__lumenShowAutoFixTimeout = showAutoFixTimeout;
+  window.__lumenShowAutoFixFailed = showAutoFixFailed;

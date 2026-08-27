@@ -37,7 +37,13 @@ class El {
       fn({ target: this, preventDefault() {}, stopPropagation() {} });
     }
   }
-  focus() { this.focused = true; }
+  focus() { this.focused = true; document.activeElement = this; }
+  contains(target) { return walk(this).includes(target); }
+  querySelectorAll(selector) {
+    if (selector !== "button.focusable:not([disabled])") return [];
+    return walk(this).filter((el) => el.tagName === "BUTTON"
+      && el.className.split(/\s+/).includes("focusable") && !el.disabled);
+  }
   set textContent(value) { this._text = String(value == null ? "" : value); this.children = []; }
   get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
 }
@@ -49,14 +55,28 @@ function walk(root) {
 }
 
 const body = new El("body");
+const documentListeners = {};
 const document = {
   body,
   documentElement: body,
+  activeElement: body,
   createElement(tag) { return new El(tag); },
   getElementById(id) { return walk(body).find((el) => el.id === id) || null; },
-  addEventListener() {},
-  removeEventListener() {},
+  addEventListener(type, fn) { (documentListeners[type] ||= []).push(fn); },
+  removeEventListener(type, fn) {
+    documentListeners[type] = (documentListeners[type] || []).filter((item) => item !== fn);
+  },
 };
+function dispatchKey(key) {
+  const event = {
+    key, defaultPrevented: false, propagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.propagationStopped = true; },
+    stopImmediatePropagation() { this.propagationStopped = true; },
+  };
+  for (const fn of [...(documentListeners.keydown || [])]) fn(event);
+  return event;
+}
 const calls = [];
 let scans = 0;
 const strings = {
@@ -79,6 +99,9 @@ const context = {
   Promise,
   console,
 };
+vm.runInNewContext(fs.readFileSync("lua/menu/04-overlay-helpers.js", "utf8"), context, {
+  filename: "lua/menu/04-overlay-helpers.js",
+});
 vm.runInNewContext(fs.readFileSync(path, "utf8"), context, { filename: path });
 
 let failures = 0;
@@ -94,10 +117,17 @@ check("U1 a blocked install opens a Lumen dialog before the Steam wizard",
 check("U2 the dialog explicitly warns about Steam's No Internet Connection error",
   overlay.textContent.includes("No Internet Connection")
     && overlay.textContent.includes("manifests"));
+context.window.GamepadNav = undefined;
+const behind = new El("button");
+behind.focus();
+const arrow = dispatchKey("ArrowLeft");
+check("U3 keyboard-backed gamepad navigation cannot stay behind the modal",
+  arrow.defaultPrevented && overlay.contains(document.activeElement)
+    && document.activeElement.dataset.action);
 
 const installAnyway = walk(overlay).find((el) => el.dataset.action === "install-anyway");
 installAnyway.click();
-check("U3 install anyway closes the dialog and requests only that AppID",
+check("U4 install anyway closes the dialog and requests only that AppID",
   document.getElementById("lumen-install-readiness-overlay") === null
     && calls.length === 1 && calls[0].fn === "__lumenInstallAnyway"
     && calls[0].args.appid === 1671210);
@@ -106,9 +136,12 @@ context.window.__lumenShowInstallReadinessBlocked(1671210);
 overlay = document.getElementById("lumen-install-readiness-overlay");
 const close = walk(overlay).find((el) => el.dataset.action === "close");
 close.click();
-check("U4 close keeps the native install untouched",
+check("U5 close keeps the native install untouched",
   document.getElementById("lumen-install-readiness-overlay") === null
     && calls.length === 1);
+const releasedArrow = dispatchKey("ArrowLeft");
+check("U6 closing the readiness modal releases global navigation",
+  !releasedArrow.defaultPrevented);
 
 context.window.__lumenShowInstallReadinessReady(1671210);
 const toast = document.getElementById("lumen-install-readiness-toast");

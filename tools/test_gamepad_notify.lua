@@ -44,6 +44,11 @@ check("SharedJSContext alone is not a ready shell",
   not injector.targets_ui_ready({
     { title = "SharedJSContext", url = "https://steamloopback.host/routes/steamweb" },
   }))
+check("desktop and Big Picture are visible menu shells",
+  injector.is_menu_shell_title("Steam")
+    and injector.is_menu_shell_title("Steam Big Picture Mode"))
+check("SharedJSContext is not a visible menu shell",
+  not injector.is_menu_shell_title("SharedJSContext"))
 
 local valid = queue.decode_event(json.encode({
   version = 1,

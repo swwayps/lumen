@@ -3,15 +3,15 @@
 
   var INSTALL_READINESS_OVERLAY_ID = "lumen-install-readiness-overlay";
   var INSTALL_READINESS_TOAST_ID = "lumen-install-readiness-toast";
-  var _installReadinessEsc = null;
+  var _installReadinessFocusTrap = null;
 
   function closeInstallReadinessModal() {
+    if (_installReadinessFocusTrap) {
+      _installReadinessFocusTrap();
+      _installReadinessFocusTrap = null;
+    }
     var overlay = document.getElementById(INSTALL_READINESS_OVERLAY_ID);
     if (overlay) overlay.remove();
-    if (_installReadinessEsc) {
-      document.removeEventListener("keydown", _installReadinessEsc, true);
-      _installReadinessEsc = null;
-    }
     try {
       if (window.GamepadNav) window.GamepadNav.setBackHandler(null);
     } catch (_) {}
@@ -86,20 +86,14 @@
     overlay.addEventListener("click", function (event) {
       if (event.target === overlay) closeInstallReadinessModal();
     });
-    _installReadinessEsc = function (event) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      closeInstallReadinessModal();
-    };
-    document.addEventListener("keydown", _installReadinessEsc, true);
+    _installReadinessFocusTrap = trapModalFocus(
+      overlay, closeInstallReadinessModal, "close");
     try {
       if (window.GamepadNav) {
         window.GamepadNav.setBackHandler(closeInstallReadinessModal);
         window.GamepadNav.scanElements();
       }
     } catch (_) {}
-    setTimeout(function () { close.focus(); }, 0);
   }
 
   function showInstallReadinessReady() {

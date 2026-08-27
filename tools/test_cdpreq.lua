@@ -1,8 +1,8 @@
 -- Run via the built binary:
 --   LUMEN_LUA_DIR=lua ./bin/lumen --test tools/test_cdpreq.lua
 --
--- cdpreq.lua is the blocking one-shot CDP client behind the Ryuu sign-in (the
--- injector's own connections push Runtime.evaluate and never read a command
+-- cdpreq.lua is the blocking one-shot CDP client behind the in-client sign-in
+-- (the injector's own connections push Runtime.evaluate and never read a command
 -- result back). Both sides are blocking, so a same-thread fake server would
 -- deadlock: the endpoint runs as a separate process (tools/fake_cdp_server.py).
 package.path = "lua/?.lua;" .. package.path

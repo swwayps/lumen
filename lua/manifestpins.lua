@@ -2619,6 +2619,12 @@ end
 -- Automatic fixes are build-specific. A queued fix may start only after the
 -- installed appmanifest reports every exact app-scoped pin; merely having the
 -- manifest bytes locally is not enough if the user installed a fallback build.
+--
+-- Shared Steamworks redistributable depots are excluded: Steam records them
+-- under SharedDepots (they belong to app 228980), never under the game's own
+-- InstalledDepots, so requiring them here left a queued fix waiting forever on
+-- a fully installed game. They also carry no game build, so they say nothing
+-- about whether the recommended build is the one on disk.
 function mp.app_at_pinned_gids(ctx, appid)
   ctx = ctx or mp.default_ctx()
   appid = positive_id(appid)
@@ -2629,10 +2635,14 @@ function mp.app_at_pinned_gids(ctx, appid)
   if type(app_pins) ~= "table" or type(app_pins.depots) ~= "table"
       or next(app_pins.depots) == nil then return false end
   local installed = installed_gids(ctx.steam_root, appid)
+  local checked = 0
   for depot, gid in pairs(app_pins.depots) do
-    if installed[depot] ~= tostring(gid) then return false end
+    if not mp.is_shared_depot(depot) then
+      checked = checked + 1
+      if installed[depot] ~= tostring(gid) then return false end
+    end
   end
-  return true
+  return checked > 0
 end
 
 -- Atomically install an official LuaTools manifest and synchronize every

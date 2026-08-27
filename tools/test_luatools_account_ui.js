@@ -18,7 +18,7 @@ check("U2 Fixes is an always-visible plugin tab",
     && overlay.includes("window.__lumenNoPlugin"));
 check("U3 account surface is placed after a flexible sidebar spacer",
   overlay.includes('className = "lumen-side-spacer"')
-    && overlay.includes('className = "lumen-account-entry"'));
+    && overlay.includes('className = "lumen-account-entry checking"'));
 check("U4 account view has a top back control",
   overlay.includes('className = "lumen-account-back"')
     && overlay.includes("selectTab(accountPreviousTab)"));
