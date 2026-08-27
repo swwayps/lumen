@@ -54,7 +54,7 @@ end
 do
   local channels = {
     { titles = { ["SharedJSContext"] = true }, control = true },
-    { urls = { "store.steampowered.com" }, assets = { js = { "x" } } },
+    { origins = { { host = "store.steampowered.com" } }, assets = { js = { "x" } } },
   }
   local routed = cdp.route_targets(SAMPLE, channels)
   local ctrl
@@ -62,6 +62,95 @@ do
     if r.target.title == "SharedJSContext" then ctrl = r end
   end
   assert_true(ctrl ~= nil and ctrl.control == true, "control flag passed through")
+end
+
+-- ── origin matching (exact host, https only) ────────────────────────────────
+-- Channels used to be matched with a plain substring search over the target
+-- URL, so any navigable page whose URL merely CONTAINED "store.steampowered.com"
+-- (e.g. https://attacker.example/?ref=store.steampowered.com) was handed the
+-- privileged CDP binding. Matching is now host-exact and https-only.
+
+-- 6. parse_origin splits an https URL into a lowercased host and a path.
+do
+  local host, path = cdp.parse_origin("https://Store.SteamPowered.com/app/1?x=2#y")
+  assert_true(host == "store.steampowered.com", "host lowercased")
+  assert_true(path == "/app/1", "path without query/fragment")
+  local h2, p2 = cdp.parse_origin("https://steamcommunity.com")
+  assert_true(h2 == "steamcommunity.com" and p2 == "/", "empty path becomes /")
+end
+
+-- 7. parse_origin rejects non-https, userinfo and malformed input.
+do
+  assert_true(cdp.parse_origin("http://store.steampowered.com/") == nil, "rejects http")
+  assert_true(cdp.parse_origin("ws://store.steampowered.com/") == nil, "rejects ws")
+  assert_true(cdp.parse_origin("https://store.steampowered.com@evil.example/") == nil,
+    "rejects userinfo")
+  assert_true(cdp.parse_origin("data:text/html,<b>") == nil, "rejects data URL")
+  assert_true(cdp.parse_origin(nil) == nil, "rejects nil")
+end
+
+-- 8. origin_matches requires an exact host, not a substring.
+do
+  local origins = { { host = "store.steampowered.com" }, { host = "steamcommunity.com" } }
+  assert_true(cdp.origin_matches("https://store.steampowered.com/app/1", origins),
+    "exact host matches")
+  assert_true(not cdp.origin_matches("https://attacker.example/?ref=store.steampowered.com",
+    origins), "query-string lookalike rejected")
+  assert_true(not cdp.origin_matches("https://store.steampowered.com.evil.example/", origins),
+    "suffix lookalike rejected")
+  assert_true(not cdp.origin_matches("https://evilstore.steampowered.com/", origins),
+    "prefixed host rejected")
+  assert_true(not cdp.origin_matches("http://store.steampowered.com/", origins),
+    "http rejected even on the right host")
+end
+
+-- 9. origin_matches honours an optional path_prefix on segment boundaries.
+do
+  local offers = { { host = "store.steampowered.com",
+                     path_prefix = "/marketingmessages/list" } }
+  assert_true(cdp.origin_matches("https://store.steampowered.com/marketingmessages/list",
+    offers), "exact path matches")
+  assert_true(cdp.origin_matches("https://store.steampowered.com/marketingmessages/list/",
+    offers), "trailing slash matches")
+  assert_true(not cdp.origin_matches("https://store.steampowered.com/marketingmessages/listing",
+    offers), "sibling path with shared prefix rejected")
+  assert_true(not cdp.origin_matches("https://store.steampowered.com/app/1", offers),
+    "unrelated path rejected")
+end
+
+-- 10. select_targets / route_targets take origin specs, and a lookalike URL is
+--     routed to no channel at all.
+do
+  local targets = {
+    { title = "Steam Store", url = "https://store.steampowered.com/app/1",
+      webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/D" },
+    { title = "Evil", url = "https://attacker.example/?ref=store.steampowered.com",
+      webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/E" },
+  }
+  local channels = {
+    { origins = { { host = "store.steampowered.com" } }, assets = { js = { "x" } } },
+  }
+  local routed = cdp.route_targets(targets, channels)
+  assert_true(#routed == 1, "only the genuine store target routed")
+  assert_true(routed[1].target.webSocketDebuggerUrl:match("/page/D$") ~= nil,
+    "routed target is the store page")
+end
+
+-- 11. route_targets carries a channel's `remote` flag so the caller can apply a
+--     reduced registry to contexts that host remote content.
+do
+  local channels = {
+    { origins = { { host = "store.steampowered.com" } }, remote = true, assets = {} },
+    { titles = { ["SharedJSContext"] = true }, assets = {} },
+  }
+  local routed = cdp.route_targets(SAMPLE, channels)
+  local store, shell
+  for _, r in ipairs(routed) do
+    if r.target.title == "Steam Store" then store = r end
+    if r.target.title == "SharedJSContext" then shell = r end
+  end
+  assert_true(store ~= nil and store.remote == true, "remote flag set on web view")
+  assert_true(shell ~= nil and shell.remote ~= true, "shell channel is not remote")
 end
 
 print("test_cdp: ALL PASS")

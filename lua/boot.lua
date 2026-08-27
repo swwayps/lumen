@@ -73,21 +73,18 @@ local ALLOWLIST = {
   "CompleteLuaToolsFixApply",
 }
 
-local present = {}
 for _, name in ipairs(ALLOWLIST) do
   if type(_G[name]) == "function" then
-    registry[name] = _G[name]; present[name] = true
+    registry[name] = _G[name]
   else
     io.stderr:write("[lumen] WARN: allowlisted endpoint missing: " .. name .. "\n")
   end
 end
--- Safety net: expose any other PascalCase global function, logged.
-for k, v in pairs(_G) do
-  if type(v) == "function" and k:match("^%u") and not present[k] then
-    registry[k] = v
-    io.stderr:write("[lumen] note: extra endpoint exposed (not in allowlist): " .. k .. "\n")
-  end
-end
+-- The allowlist is the whole contract. There used to be a "safety net" here that
+-- additionally exposed every PascalCase global the backend happened to define,
+-- so any new helper function in main.lua silently became a callable endpoint —
+-- the opposite of an allowlist. A new endpoint must be added to ALLOWLIST above,
+-- deliberately, after deciding it is safe to expose.
 end
 
 -- Frontend assets: the millennium shim queued relative paths (e.g.
@@ -103,7 +100,10 @@ local function read_asset(rel)
   return utils.read_file(plugin_dir .. "/public/" .. base)
 end
 
--- build_assets() -> { polyfill=, css={...}, js={...} }  (binding transport; no port/token)
+-- build_assets() -> { polyfill=true, css={...}, js={...} }
+-- `polyfill = true` asks the injector to emit the callServerMethod polyfill for
+-- this channel. The injector builds it per connection because it carries that
+-- connection's random binding token, so it cannot be pre-rendered here.
 local function build_assets()
   local css, js = {}, {}
   for _, p in ipairs(millennium.queued_css()) do
@@ -112,7 +112,7 @@ local function build_assets()
   for _, p in ipairs(millennium.queued_js()) do
     local j = read_asset(p); if j then js[#js + 1] = j end
   end
-  return { polyfill = polyfill.build(), css = css, js = js }
+  return { polyfill = true, css = css, js = js }
 end
 
 -- The Lumen settings menu (the full-moon button + settings overlay) is a small,
@@ -274,7 +274,7 @@ local function build_menu_assets()
   local js = {}
   local menu_js = read_menu_js()
   if menu_js then js[#js + 1] = menu_js end
-  return { polyfill = polyfill.build(), css = {}, js = js }
+  return { polyfill = true, css = {}, js = js }
 end
 
 -- build_webview_assets() -> the store/community bundle: the LuaTools webkit
@@ -327,8 +327,12 @@ loop.run({
   registry = registry,
   on_steam_returned = refresh_parental_unlock,
   channels = {
-    { urls = { "store.steampowered.com/marketingmessages/list" }, assets = offers_assets },
-    { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = webview_assets },
+    { origins = { { host = "store.steampowered.com",
+                    path_prefix = "/marketingmessages/list" } },
+      remote = true, assets = offers_assets },
+    { origins = { { host = "store.steampowered.com" },
+                  { host = "steamcommunity.com" } },
+      remote = true, assets = webview_assets },
     { titles = { ["Steam"] = true }, assets = build_menu_assets() },
     -- Control link to the only context with SteamClient. The tiny toast bridge
     -- also renders queued service alerts inside Gamepad UI.

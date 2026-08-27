@@ -16,6 +16,17 @@
 --   * a vanilla Steam launch after an injected one falls back to 8080 instead of
 --     chasing the previous session's port forever.
 -- A contract with no owner record (an older slsteam-moon) is trusted as before.
+--
+-- IMPORTANT: the port this module returns is NOT trusted on its own. Neither the
+-- contract's owner record nor the 8080 fallback proves that the process actually
+-- listening on that port is the Steam client, and an unprivileged local process
+-- can bind a loopback port before Steam does. The injector therefore asks the
+-- kernel who owns the listening socket (lua/peerauth.lua) before it speaks CDP,
+-- for the contract port and the fallback alike. That check is what makes it safe
+-- to keep the 8080 fallback (needed for a vanilla Steam, and for the Decky
+-- Loader case) and to keep accepting ownerless contracts from older
+-- slsteam-moon builds: a squatter fails the ownership check regardless of how we
+-- arrived at the port number.
 local cefport = {}
 
 cefport.FALLBACK = 8080

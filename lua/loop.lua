@@ -15,14 +15,15 @@ local function log(msg)
   io.stderr:flush()
 end
 
--- run{ registry=, build_assets=, targets=, target_urls=, channels= }
--- If `channels` is given (each { titles=, urls=, assets= }) it is used directly;
--- otherwise the single targets/target_urls/assets form is used (back-compat).
+-- run{ registry=, build_assets=, targets=, target_origins=, channels= }
+-- If `channels` is given (each { titles=, origins=, assets= }) it is used
+-- directly; otherwise the single targets/target_origins/assets form is used
+-- (back-compat).
 function loop.run(opts)
   local inj = injector.new({
     channels = opts.channels,
     targets = opts.targets,
-    target_urls = opts.target_urls,
+    target_origins = opts.target_origins,
     assets = (not opts.channels) and opts.build_assets and opts.build_assets() or nil,
     registry = opts.registry,
   })

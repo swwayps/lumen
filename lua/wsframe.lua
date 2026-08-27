@@ -1,5 +1,9 @@
 -- Pure RFC 6455 client-side WebSocket framing. Text frames only (CDP is JSON).
 -- No IO here — encode returns a byte string, decode consumes a byte string.
+local b64 = require("b64")
+local sha1 = require("sha1")
+local nonce = require("nonce")
+
 local wsframe = {}
 
 local schar, sbyte, ssub = string.char, string.byte, string.sub
@@ -70,6 +74,44 @@ function wsframe.decode_frame(buf)
   end
   local rest = ssub(buf, offset + len + 1)
   return payload, opcode, rest, true
+end
+
+-- ── RFC 6455 opening handshake ──────────────────────────────────────────────
+-- The GUID from RFC 6455 §1.3.
+local WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+-- new_key() -> a fresh base64 Sec-WebSocket-Key (16 random bytes).
+-- Per connection: a fixed key lets a peer answer with a recorded digest it never
+-- computed, which is exactly what handshake_ok is meant to detect.
+function wsframe.new_key()
+  return b64.encode(nonce.bytes(16))
+end
+
+-- expected_accept(key) -> the Sec-WebSocket-Accept value a conforming server
+-- must return for `key`.
+function wsframe.expected_accept(key)
+  return b64.encode(sha1.raw(tostring(key or "") .. WS_GUID))
+end
+
+-- handshake_ok(response, key) -> boolean.
+-- Requires a 101 status on the response line AND a Sec-WebSocket-Accept header
+-- equal to the digest of the key we sent. `response` may be the header block
+-- alone or include the start of the body.
+function wsframe.handshake_ok(response, key)
+  if type(response) ~= "string" or type(key) ~= "string" or key == "" then
+    return false
+  end
+  local status = response:match("^HTTP/%d%.%d%s+(%d%d%d)")
+  if status ~= "101" then return false end
+  local head = response:match("^(.-\r\n\r\n)") or response
+  local want = wsframe.expected_accept(key)
+  for line in head:gmatch("[^\r\n]+") do
+    local name, value = line:match("^([%w%-]+)%s*:%s*(.-)%s*$")
+    if name and name:lower() == "sec-websocket-accept" then
+      return value == want
+    end
+  end
+  return false
 end
 
 return wsframe

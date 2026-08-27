@@ -25,13 +25,61 @@ do
   assert_true(not source:find('require("themepreload")', 1, true),
     "main branch keeps theme preload out of boot")
   local offers_pos = source:find(
-    'store.steampowered.com/marketingmessages/list', 1, true)
+    'path_prefix = "/marketingmessages/list"', 1, true)
   local store_pos = source:find(
-    '{ urls = { "store.steampowered.com", "steamcommunity.com" }', 1, true)
+    '{ host = "store.steampowered.com" },', 1, true)
   assert_true(offers_pos and store_pos and offers_pos < store_pos
       and source:find("__lumenOffersUnlock", 1, true)
       and source:find('data-featuretarget="store-menu-v7"', 1, true),
     "authenticated offers use an isolated channel before the LuaTools webview channel")
+  -- The dispatch registry must be exactly the allowlist. A "safety net" that
+  -- also exposed every PascalCase global turned each new backend helper into a
+  -- callable endpoint by accident; it must stay removed.
+  assert_true(not source:find('k:match("^%u")', 1, true),
+    "no PascalCase auto-export of backend globals")
+  assert_true(not source:find("extra endpoint exposed", 1, true),
+    "no out-of-allowlist endpoint exposure path")
+  -- Channels that host network-fetched documents are marked, so the injector can
+  -- treat them as a lower trust level than the client's own contexts.
+  assert_true(source:find("remote = true", 1, true),
+    "web-view channels are marked as remote content")
+end
+
+-- The injected polyfill is built per connection (it carries that connection's
+-- binding token), so boot must not pre-render it into the asset bundles.
+do
+  local f = assert(io.open("lua/boot.lua", "r"))
+  local source = f:read("*a")
+  f:close()
+  assert_true(not source:find("polyfill.build(", 1, true),
+    "boot does not pre-render the polyfill")
+  assert_true(source:find("polyfill = true", 1, true),
+    "boot asks the injector to emit the polyfill")
+end
+
+-- Every path that opens a socket to the CEF endpoint must go through the peer
+-- check first, and the binding dispatch must go through the token check. These
+-- are the two gates that keep a local port squatter and a foreign execution
+-- context out of the backend registry.
+do
+  local f = assert(io.open("lua/injector.lua", "r"))
+  local source = f:read("*a")
+  f:close()
+  assert_true(source:find('require("peerauth")', 1, true),
+    "injector uses the peer authenticator")
+  assert_true(source:find("verified_cef_port()", 1, true),
+    "injector resolves a verified port")
+  -- No socket connect may take a raw, unverified port.
+  assert_true(not source:find("connect(CEF_HOST, cef_port())", 1, true),
+    "no connect on an unverified port")
+  assert_true(source:find("polyfill.parse_request(payload_str, self.token)", 1, true),
+    "binding payloads are validated against the connection token")
+  assert_true(not source:find("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", 1, true),
+    "no fixed WebSocket key")
+  assert_true(source:find("wsframe.handshake_ok(resp, key)", 1, true),
+    "handshake response is verified against the key we sent")
+  assert_true(not source:find('resp:find("101", 1, true)', 1, true),
+    "no substring match for the 101 status")
 end
 
 do
@@ -58,7 +106,7 @@ local SAMPLE = {
   { title = "Friends",         url = "https://steamcommunity.com/chat",      webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/E" },
 }
 
--- select_targets(targetsList, wantedTitles, wantedUrlFragments) is the pure
+-- select_targets(targetsList, wantedTitles, wantedOrigins) is the pure
 -- matcher the injector uses to decide which CEF targets receive the assets.
 assert_true(type(cdp.select_targets) == "function",
   "cdp exposes select_targets for testing")
@@ -66,7 +114,8 @@ assert_true(type(cdp.select_targets) == "function",
 -- 1. With the production config (no title targets, URL-matched web views), the
 --    matcher must pick the store/community web views and EXCLUDE SharedJSContext.
 do
-  local picked = cdp.select_targets(SAMPLE, {}, { "store.steampowered.com", "steamcommunity.com" })
+  local picked = cdp.select_targets(SAMPLE, {},
+    { { host = "store.steampowered.com" }, { host = "steamcommunity.com" } })
   local byurl = {}
   for _, t in ipairs(picked) do byurl[t.webSocketDebuggerUrl] = true end
   assert_true(byurl["ws://localhost:8080/devtools/page/C"], "store web view selected")
@@ -82,7 +131,7 @@ do
   local list = {
     { title = "store", url = "https://store.steampowered.com/", },  -- no ws url
   }
-  local picked = cdp.select_targets(list, {}, { "store.steampowered.com" })
+  local picked = cdp.select_targets(list, {}, { { host = "store.steampowered.com" } })
   assert_true(#picked == 0, "targets without a ws url are skipped")
 end
 
@@ -102,7 +151,8 @@ do
   local LUATOOLS = { js = { "luatools" } }
   local MENU = { js = { "lumenmenu" } }
   local channels = {
-    { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = LUATOOLS },
+    { origins = { { host = "store.steampowered.com" },
+                  { host = "steamcommunity.com" } }, assets = LUATOOLS },
     { titles = { ["SharedJSContext"] = true }, assets = MENU },
   }
   local routed = cdp.route_targets(SAMPLE, channels)
@@ -140,7 +190,7 @@ end
 do
   local channels = {
     { titles = { ["SharedJSContext"] = true }, control = true },
-    { urls = { "store.steampowered.com" }, assets = { js = { "x" } } },
+    { origins = { { host = "store.steampowered.com" } }, assets = { js = { "x" } } },
   }
   local routed = cdp.route_targets(SAMPLE, channels)
   local ctrl
@@ -290,7 +340,7 @@ do
       webSocketDebuggerUrl = "ws://localhost/devtools/page/recovery" },
     { title = "Unrelated", type = "page", url = "data:text/html,other",
       webSocketDebuggerUrl = "ws://localhost/devtools/page/unrelated" },
-  }, {{ urls = { "store.steampowered.com" }, assets = recovery_assets }})
+  }, {{ origins = { { host = "store.steampowered.com" } }, assets = recovery_assets }})
   assert_true(#recovery_routes == 1
       and recovery_routes[1].recovery == true
       and recovery_routes[1].assets == recovery_assets,

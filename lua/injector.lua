@@ -15,6 +15,8 @@ local rpc = require("rpc")
 local cefport = require("cefport")
 local b64 = require("b64")
 local cdpreq = require("cdpreq")
+local nonce = require("nonce")
+local peerauth = require("peerauth")
 local ryuulogin = require("ryuulogin")
 local luatoolslogin = require("luatoolslogin")
 
@@ -134,11 +136,41 @@ local function cef_port()
   return p
 end
 
+-- The CEF endpoint is an unauthenticated loopback service, and the port is
+-- either published in a contract file or the well-known 8080. Before speaking
+-- CDP we make the kernel tell us who owns the listening socket and require it to
+-- be the Steam client: otherwise any unprivileged local process could bind the
+-- port first, serve a fake target list and a fake WebSocket, and drive the
+-- backend registry through forged Runtime.bindingCalled events.
+--
+-- A "no listener" verdict is the ordinary state while Steam boots, so it is not
+-- logged; a listener that is NOT Steam is logged once per change.
+local g_peer_cache = peerauth.new_cache()
+local g_logged_peer_reason = nil
+local function verified_cef_port()
+  local port = cef_port()
+  local trusted, reason = peerauth.verify_cached(g_peer_cache, port)
+  if trusted then
+    g_logged_peer_reason = nil
+    return port
+  end
+  if reason ~= g_logged_peer_reason then
+    g_logged_peer_reason = reason
+    if reason ~= "no listener" then
+      log("refusing to attach on port " .. tostring(port)
+        .. ": listening socket is not the Steam client (" .. tostring(reason) .. ")")
+    end
+  end
+  return nil
+end
+
 -- ── HTTP GET against the CEF endpoint (keep-alive aware) ───────────────────
 local function http_get(path)
+  local port = verified_cef_port()
+  if not port then return nil end
   local c = socket.tcp()
   c:settimeout(5)
-  if not c:connect(CEF_HOST, cef_port()) then c:close(); return nil end
+  if not c:connect(CEF_HOST, port) then c:close(); return nil end
   c:send("GET " .. path .. " HTTP/1.1\r\nHost: " .. CEF_HOST .. "\r\nAccept: */*\r\n\r\n")
   local buf, header_block, body = "", nil, nil
   while true do
@@ -166,11 +198,16 @@ end
 
 local function ws_path(url) return (url:match("^ws://[^/]+(/.*)$")) end
 
-local function ws_handshake(c, path)
+-- Open the CDP WebSocket. The key is random per connection and the response's
+-- Sec-WebSocket-Accept must be its RFC 6455 digest: the old code sent a constant
+-- key and accepted any response containing the substring "101" anywhere, so a
+-- peer could pass by replaying a canned reply it never computed.
+local function ws_handshake(c, path, port)
+  local key = wsframe.new_key()
   c:send("GET " .. path .. " HTTP/1.1\r\n" ..
-         "Host: " .. CEF_HOST .. ":" .. cef_port() .. "\r\n" ..
+         "Host: " .. CEF_HOST .. ":" .. tostring(port) .. "\r\n" ..
          "Upgrade: websocket\r\nConnection: Upgrade\r\n" ..
-         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ..
+         "Sec-WebSocket-Key: " .. key .. "\r\n" ..
          "Sec-WebSocket-Version: 13\r\n\r\n")
   local resp = ""
   c:settimeout(5)
@@ -178,8 +215,12 @@ local function ws_handshake(c, path)
     local chunk, err = c:receive(1)
     if not chunk then return false, err end
     resp = resp .. chunk
+    if #resp > 8192 then return false, "handshake response too large" end
   end
-  return resp:find("101", 1, true) ~= nil
+  if not wsframe.handshake_ok(resp, key) then
+    return false, "handshake not accepted"
+  end
+  return true
 end
 
 -- List ALL current CEF targets (decoded /json), or nil + reason.
@@ -436,6 +477,11 @@ local function conn_new(target, assets, registry, manager, recovery)
     ws_url = target.webSocketDebuggerUrl,
     assets = assets,
     registry = registry,
+    -- Per-connection binding token. The polyfill carries it; every
+    -- Runtime.bindingCalled payload must repeat it or it is dropped. A fresh
+    -- value per connection means a token learned once is useless after a
+    -- reconnect or a webhelper restart.
+    token = nonce.hex(16),
     manager = manager,      -- the State, for control relays (view hide/show)
     recovery_only = recovery == true,
     sock = nil,
@@ -563,9 +609,11 @@ end
 function Conn:connect()
   local path = ws_path(self.ws_url)
   if not path then return false end
+  local port = verified_cef_port()
+  if not port then return false end
   local c = socket.tcp(); c:settimeout(5)
-  if not c:connect(CEF_HOST, cef_port()) then return false end
-  if not ws_handshake(c, path) then c:close(); return false end
+  if not c:connect(CEF_HOST, port) then return false end
+  if not ws_handshake(c, path, port) then c:close(); return false end
   c:settimeout(0)
   self.sock = c
   self.session = cdp.new_session()
@@ -603,7 +651,9 @@ function Conn:inject()
   local c, s, a = self.sock, self.session, self.assets
   if not a then return end
   if a.polyfill then
-    send_cmd(c, s, "Runtime.evaluate", { expression = a.polyfill, returnByValue = true })
+    -- Built here, not in boot: it embeds THIS connection's binding token.
+    send_cmd(c, s, "Runtime.evaluate",
+      { expression = polyfill.build(self.token), returnByValue = true })
   end
   for i, css in ipairs(a.css or {}) do
     local id = "lumen-css-" .. i
@@ -619,9 +669,17 @@ function Conn:inject()
 end
 
 -- Handle a Runtime.bindingCalled: run the backend fn and resolve the page promise.
+-- The payload must carry this connection's binding token. Runtime.addBinding
+-- publishes window.__lumenSend to every execution context of the target,
+-- subframes included, while the polyfill (and therefore the token) is evaluated
+-- only in the page's own default context. Anything that calls the binding
+-- without the token did not come from the code we injected: drop it silently.
 function Conn:_on_binding(payload_str)
-  local ok, req = pcall(json.decode, payload_str)
-  if not ok or type(req) ~= "table" then return end
+  local req, why = polyfill.parse_request(payload_str, self.token)
+  if not req then
+    log("binding call rejected (" .. tostring(why) .. "): " .. tostring(self.title))
+    return
+  end
   local id = req.id
   local result
   -- Control commands: open/close the Lumen overlay in EVERY injected context
@@ -913,8 +971,8 @@ end
 local State = {}
 State.__index = State
 
--- new{ channels={ {titles=, urls=, assets=}, ... }, registry=, ... }
--- Back-compat: a single { targets=, target_urls=, assets= } is accepted and
+-- new{ channels={ {titles=, origins=, assets=, remote=}, ... }, registry=, ... }
+-- Back-compat: a single { targets=, target_origins=, assets= } is accepted and
 -- folded into one channel.
 function injector.new(opts)
   opts = opts or {}
@@ -926,7 +984,8 @@ function injector.new(opts)
     else
       titles["SharedJSContext"] = true
     end
-    channels = { { titles = titles, urls = opts.target_urls, assets = opts.assets } }
+    channels = { { titles = titles, origins = opts.target_origins,
+                   assets = opts.assets } }
   end
   return setmetatable({
     channels = channels,
