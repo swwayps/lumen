@@ -63,8 +63,6 @@ local ALLOWLIST = {
   "StartAddViaLuaToolsSmart","StartAddViaLuaToolsSource","StartGameDraft",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
   "DeleteManifest","ClearManifests",
-  "GetRyuuAuthStatus","SaveRyuuAuthCredential","ClearRyuuAuthCredential",
-  "AdoptRyuuSessionValue",
   "GetLuaToolsAuthStatus","LoginLuaToolsWithCode","StartLuaToolsDiscordLogin",
   "PollLuaToolsDiscordLogin","CancelLuaToolsDiscordLogin","LogoutLuaTools",
   "AdoptLuaToolsSessionValue",
@@ -268,7 +266,7 @@ local function read_menu_js()
   return prefix .. table.concat(parts, "\n")
 end
 
--- build_menu_assets() -> assets for the main window ("Steam"): polyfill +
+-- build_menu_assets() -> assets for the visible Steam shell: polyfill +
 -- lumen_menu.js (the full-moon button + settings overlay).
 local function build_menu_assets()
   local js = {}
@@ -302,8 +300,8 @@ local loop = require("loop")
 -- loop's autostart watch keep covering drift in the meantime.
 -- Injection channels:
 --   * web views (store/community)  -> luatools.js + lumen_menu.js
---   * the main client window ("Steam")  -> lumen_menu.js (carries the menubar
---     button next to Help)
+--   * the visible client shell (desktop or Gamepad UI) -> lumen_menu.js
+--     (the desktop shell carries the menubar button next to Help)
 -- The native menubar (Steam/View/Friends/Games/Help) lives in the main window
 -- target titled "Steam". luatools.js must NEVER reach the main window: it
 -- monkey-patches history.pushState, observes document.body and runs periodic
@@ -329,7 +327,8 @@ loop.run({
   channels = {
     { urls = { "store.steampowered.com/marketingmessages/list" }, assets = offers_assets },
     { urls = { "store.steampowered.com", "steamcommunity.com" }, assets = webview_assets },
-    { titles = { ["Steam"] = true }, assets = build_menu_assets() },
+    { titles = { ["Steam"] = true, ["Steam Big Picture Mode"] = true },
+      assets = build_menu_assets() },
     -- Control link to the only context with SteamClient. The tiny toast bridge
     -- also renders queued service alerts inside Gamepad UI.
     { titles = { ["SharedJSContext"] = true }, control = true,

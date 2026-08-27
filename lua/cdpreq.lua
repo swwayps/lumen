@@ -1,8 +1,9 @@
 -- cdpreq.lua — one-shot, blocking CDP request against a CEF target.
 --
 -- The injector's own connections are event-driven and fire-and-forget: they push
--- Runtime.evaluate and never read a command result back. The Ryuu sign-in needs
--- actual RESULTS (Network.getCookies, and the browser-view URL to restore), so
+-- Runtime.evaluate and never read a command result back. An in-client sign-in
+-- needs actual RESULTS (Network.getCookies, and the browser-view URL to
+-- restore), so
 -- this module opens its own short-lived websocket, sends one command, waits for
 -- the matching id and closes. CEF allows several debugger clients per target, so
 -- this coexists with the injector's live connection (verified on a live client).
@@ -94,7 +95,7 @@ end
 --
 -- user_gesture matters: CEF's popup blocker silently drops a target=_blank click
 -- that has no user gesture behind it. The anchor click still reports success, so
--- without this flag the Ryuu sign-in "works" and no window ever appears.
+-- without this flag an in-client sign-in "works" and no window ever appears.
 function cdpreq.evaluate(port, ws_url, expr, timeout, user_gesture)
   local result, err = cdpreq.request(port, ws_url, "Runtime.evaluate",
     { expression = expr, returnByValue = true, awaitPromise = true,
