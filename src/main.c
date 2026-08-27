@@ -14,6 +14,7 @@ int luaopen_socket_core(lua_State *L);
 int luaopen_cjson(lua_State *L);
 int luaopen_lfs(lua_State *L);
 int luaopen_lumen_http(lua_State *L);
+int luaopen_lumen_privfs(lua_State *L);
 
 int main(int argc, char **argv) {
     lua_State *L = luaL_newstate();
@@ -28,6 +29,8 @@ int main(int argc, char **argv) {
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "lumen_http", luaopen_lumen_http, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lumen_privfs", luaopen_lumen_privfs, 0);
     lua_pop(L, 1);
 
     /* Make the bundled lua/ directory importable. For the spike we resolve it

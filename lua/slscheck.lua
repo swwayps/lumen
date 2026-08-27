@@ -16,6 +16,7 @@
 local json = require("json")
 local proc = require("proc")
 local about = require("about")
+local privatefs = require("privatefs")
 
 local slscheck = {}
 
@@ -84,10 +85,10 @@ function slscheck.run_autofix(opts)
     f:close()
     return out:gsub("%s+", "") ~= ""
   end
-  local write_file = opts.write_file or function(p, text)
-    local f = io.open(p, "wb"); if not f then return false end
-    f:write(text); f:close(); return true
-  end
+  -- See about.update_all: this script is executed by a terminal, so it is
+  -- created privately (O_EXCL|O_NOFOLLOW, 0700) under a random name instead of a
+  -- guessable /tmp path any local process could pre-create.
+  local write_file = opts.write_file or privatefs.write_script
   local spawn = opts.spawn or function(cmd) return os.execute(cmd) end
 
   local term = about.detect_terminal(which)
@@ -99,7 +100,10 @@ function slscheck.run_autofix(opts)
     }
   end
 
-  local script = opts.tmp_path or ("/tmp/lumen-slsfix-" .. tostring(os.time()) .. ".sh")
+  local script = opts.tmp_path or privatefs.temp_script_path("lumen-slsfix")
+  if not script then
+    return { success = false, error = "Could not create a private working directory." }
+  end
   if not write_file(script, slscheck.autofix_script(slscheck.AUTOFIX_URL)) then
     return { success = false, error = "Could not write the auto-fix script." }
   end

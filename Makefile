@@ -47,7 +47,8 @@ CJSON_SRC  := vendor/lua-cjson/lua_cjson.c vendor/lua-cjson/strbuf.c \
               vendor/lua-cjson/fpconv.c
 LFS_SRC    := vendor/luafilesystem/lfs.c
 
-SRC        := src/main.c src/http_binding.c $(SOCKET_SRC) $(CJSON_SRC) $(LFS_SRC)
+SRC        := src/main.c src/http_binding.c src/private_fs.c \
+              $(SOCKET_SRC) $(CJSON_SRC) $(LFS_SRC)
 
 CFLAGS     := -O2 -DLUASOCKET_DEBUG -DNDEBUG \
               -Ivendor/luasocket -Ivendor/lua-cjson -Ivendor/luafilesystem \

@@ -35,5 +35,13 @@ if [ -d lua/menu ]; then
   cp lua/menu/*.js "$STAGE/lua/menu/"
 fi
 ( cd "$STAGE" && zip -qr "$OLDPWD/$OUT" lumen lua )
+# Publish a sha256 sidecar next to the asset. install.sh fetches
+# "<asset>.sha256" and refuses an asset that does not match it, so an archive
+# that was truncated or altered in transit is caught before it is unpacked and
+# executed. (A sidecar from the same release does not defend against a
+# compromised publishing account; detached signatures would, and need a project
+# signing key.)
+( cd dist && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256" )
 echo "wrote $OUT"
+echo "wrote $OUT.sha256"
 unzip -l "$OUT" | tail -n +2 | head

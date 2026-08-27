@@ -17,6 +17,7 @@
 -- building) take their effects (http, fs, which) as injectable args so they are
 -- host-testable without a network or a desktop (tools/test_about.lua).
 local json = require("json")
+local privatefs = require("privatefs")
 
 local about = {}
 
@@ -539,10 +540,12 @@ function about.update_all(opts)
     f:close()
     return out:gsub("%s+", "") ~= ""
   end
-  local write_file = opts.write_file or function(p, text)
-    local f = io.open(p, "wb"); if not f then return false end
-    f:write(text); f:close(); return true
-  end
+  -- The script is written into a private per-user directory with O_EXCL and
+  -- O_NOFOLLOW at mode 0700, under an unpredictable name: a terminal is about to
+  -- EXECUTE it, and the old /tmp/lumen-update-<os.time()>.sh could be
+  -- pre-created by any local process (as a symlink, redirecting the write; or as
+  -- a file it owns, letting it rewrite the contents before the terminal starts).
+  local write_file = opts.write_file or privatefs.write_script
   local spawn = opts.spawn or function(cmd) return os.execute(cmd) end
 
   local term = about.detect_terminal(which)
@@ -554,7 +557,10 @@ function about.update_all(opts)
     }
   end
 
-  local script = opts.tmp_path or ("/tmp/lumen-update-" .. tostring(os.time()) .. ".sh")
+  local script = opts.tmp_path or privatefs.temp_script_path("lumen-update")
+  if not script then
+    return { success = false, error = "Could not create a private working directory." }
+  end
   if not write_file(script, about.update_script(about.INSTALL_URL,
       opts.flags or opts.flag)) then
     return { success = false, error = "Could not write the update script." }
