@@ -85,6 +85,19 @@
     return row;
   }
 
+  function showConfigRestartPrompt(entry, S) {
+    var ks = (S.keys && S.keys[entry.key]) || {};
+    showConfirm({
+      title: ks.restartTitle || S.restartTitle || "Restart Steam?",
+      body: ks.restartBody || S.restartBody || "Restart Steam to apply this change.",
+      declineText: ks.restartLater || "Later",
+      confirmText: ks.restartNow || S.restartConfirm || "Restart Steam",
+      onConfirm: function () {
+        call("RestartSteam", {}).catch(function (e) { log("RestartSteam", e); });
+      },
+    });
+  }
+
   function renderConfig(body, config) {
     var S = I18N[pickLang()] || I18N.en;
     body.textContent = "";
@@ -102,7 +115,11 @@
           .then(function (res) {
             var ok = false;
             try { ok = JSON.parse(res).success; } catch (e) {}
-            if (!ok) log("SetSlsConfig failed for", entry.key, res);
+            if (!ok) {
+              log("SetSlsConfig failed for", entry.key, res);
+              return;
+            }
+            if (entry.restart_on_change) showConfigRestartPrompt(entry, S);
           })
           .catch(function (e) { log("SetSlsConfig error", entry.key, e); });
       });

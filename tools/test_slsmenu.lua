@@ -35,6 +35,8 @@ do
     if entry.key == "DisableParentalRestrictions" then parental = entry end
   end
   assert_true(parental ~= nil and not parental.hidden, "parental unlock is visible")
+  assert_eq(parental.restart_on_change, true,
+            "parental unlock asks for a restart after either state change")
   os.remove(p)
 end
 

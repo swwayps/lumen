@@ -31,6 +31,7 @@ slsconfig.SCHEMA = {
   { key = "DisableFamilyShareLock", type = "bool",   default = true,  level = "normal",
     label = "Disable Family Share lock" },
   { key = "DisableParentalRestrictions", type = "bool", default = false, level = "normal",
+    restart_on_change = true,
     label = "Disable parental restrictions" },
   { key = "AutoFilterList",         type = "bool",   default = true,  level = "advanced",
     label = "Auto-filter app list" },
