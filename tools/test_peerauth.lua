@@ -160,18 +160,27 @@ do
 end
 
 -- ── caching ─────────────────────────────────────────────────────────────────
--- The port is probed on every discovery tick, so the /proc scan must not run
--- every time. A successful verdict is cached per port and reused.
+-- The cheap listener table is checked on every discovery tick, while the
+-- expensive all-process fd walk is reused as long as the listening socket's
+-- inode is unchanged. A port handoff necessarily creates a new inode.
 do
-  local scans = 0
-  local d = deps({ read_tcp = function() scans = scans + 1; return TCP end })
+  local listener_reads, owner_reads = 0, 0
+  local d = deps({
+    read_tcp = function() listener_reads = listener_reads + 1; return TCP end,
+    fd_targets = function(pid)
+      owner_reads = owner_reads + 1
+      if pid == 200 then return { "/dev/null", "socket:[987654]" } end
+      return { "socket:[42]" }
+    end,
+  })
   local cache = peerauth.new_cache()
   ok(peerauth.verify_cached(cache, 8080, d, 1000) == true, "first check trusts")
   ok(peerauth.verify_cached(cache, 8080, d, 1000) == true, "second check trusts")
-  ok(scans == 1, "second check served from cache (scans=" .. scans .. ")")
+  ok(listener_reads == 2, "listener identity is checked on every call")
+  ok(owner_reads == 2, "unchanged inode skips the second fd walk")
   -- A different port is a different peer and must be re-verified.
   peerauth.verify_cached(cache, 9999, d, 1000)
-  ok(scans == 2, "new port re-scanned")
+  ok(listener_reads == 3, "new port checks its listener table")
 end
 
 -- A refusal is NOT cached as a permanent verdict: Steam may simply not have
@@ -188,44 +197,43 @@ do
   ok(scans == 2, "refusals are re-checked, not cached (scans=" .. scans .. ")")
 end
 
-print("test_peerauth: ALL PASS (" .. checks .. " checks)")
-
--- ── the positive verdict expires ────────────────────────────────────────────
--- A port changes hands: steamwebhelper restarting releases it, and the injector
--- has explicit reconnect handling for exactly that. Caching a positive verdict
--- for the process lifetime would hand the port's next owner the previous owner's
--- trust.
+-- ── the positive verdict is bound to the listener inode ─────────────────────
 do
-  local scans = 0
-  local d = deps({ read_tcp = function() scans = scans + 1; return TCP end })
+  local owner_reads = 0
+  local d = deps({
+    fd_targets = function(pid)
+      owner_reads = owner_reads + 1
+      if pid == 200 then return { "socket:[987654]" } end
+      return {}
+    end,
+  })
   local cache = peerauth.new_cache()
   ok(peerauth.verify_cached(cache, 8080, d, 1000) == true, "trusted at t=1000")
-  ok(scans == 1, "one scan so far")
-  ok(peerauth.verify_cached(cache, 8080, d, 1000 + peerauth.CACHE_TTL - 0.5) == true,
-    "still cached inside the window")
-  ok(scans == 1, "no rescan inside the window (scans=" .. scans .. ")")
-  ok(peerauth.verify_cached(cache, 8080, d, 1000 + peerauth.CACHE_TTL) == true,
-    "re-verified after the window")
-  ok(scans == 2, "rescanned once the window passed (scans=" .. scans .. ")")
+  ok(peerauth.verify_cached(cache, 8080, d, 999999) == true,
+    "same socket stays trusted without a timed fd rescan")
+  ok(owner_reads == 2, "only the first check walked both candidate processes")
 end
 
 do
-  -- Once expired, a port whose owner is no longer Steam is refused rather than
-  -- riding the old verdict.
-  local hostile = false
+  -- A handoff inside the old two-second cache window must be noticed at once.
+  local current_tcp = TCP
   local d = deps({
+    read_tcp = function() return current_tcp end,
+    fd_targets = function(pid)
+      if pid == 200 and current_tcp == TCP then return { "socket:[987654]" } end
+      if pid == 200 then return { "socket:[123456]" } end
+      return {}
+    end,
     exe_target = function()
-      if hostile then return "/tmp/steam" end
-      return "/home/u/.steam/steam/ubuntu12_64/steamwebhelper"
+      return current_tcp == TCP
+        and "/home/u/.steam/steam/ubuntu12_64/steamwebhelper" or "/tmp/steam"
     end,
   })
   local cache = peerauth.new_cache()
   ok(peerauth.verify_cached(cache, 8080, d, 2000) == true, "trusted while Steam owns it")
-  hostile = true
-  ok(peerauth.verify_cached(cache, 8080, d, 2000) == true,
-    "still trusted inside the cache window")
-  ok(peerauth.verify_cached(cache, 8080, d, 2000 + peerauth.CACHE_TTL) == false,
-    "refused after the window once the owner changed")
+  current_tcp = TCP:gsub("987654", "123456")
+  ok(peerauth.verify_cached(cache, 8080, d, 2000.1) == false,
+    "new listener inode is refused immediately when its owner is not Steam")
 end
 
 do

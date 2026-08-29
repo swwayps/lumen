@@ -47,11 +47,6 @@ local STEAM_TREE = {
   "/linux32/", "/linux64/", "/steamapps/",
 }
 
--- How long a positive verdict stays good. Discovery probes several times a
--- second, so a short window still collapses a burst into one /proc scan, while a
--- port that changes hands (a webhelper restart releases it) is re-checked.
-peerauth.CACHE_TTL = 2
-
 -- listener_inodes(text, port) -> array of socket inodes listening on `port`.
 -- `text` is the contents of /proc/net/tcp or /proc/net/tcp6. Columns are
 -- sl, local_address, rem_address, st, tx:rx, tr:when, retrnsmt, uid, timeout,
@@ -171,17 +166,15 @@ function peerauth.owner_pid(inode, deps)
   return nil
 end
 
--- verify(port, deps) -> trusted (boolean), reason (string)
--- reason is one of "steam", "no listener", "owner unknown", "not steam".
--- "no listener" is distinct from the refusals on purpose: it means "nothing is
--- there yet", which for a booting Steam is the normal state and should make the
--- caller wait rather than conclude anything.
-function peerauth.verify(port, deps)
+-- Reading /proc/net/tcp[6] is cheap compared with walking every process fd.
+-- Keep that cheap listener-identity read outside the positive cache so a port
+-- handoff is detected immediately: Linux assigns the replacement socket a new
+-- inode even when it reuses the same TCP port.
+local function listener_inodes_for(port, deps)
   local read_tcp = resolve(deps, "read_tcp",
     function() return read_all("/proc/net/tcp") end)
   local read_tcp6 = resolve(deps, "read_tcp6",
     function() return read_all("/proc/net/tcp6") end)
-  local exe_target = resolve(deps, "exe_target", default_exe_target)
 
   local inodes = {}
   for _, reader in ipairs({ read_tcp, read_tcp6 }) do
@@ -192,7 +185,19 @@ function peerauth.verify(port, deps)
       end
     end
   end
+  table.sort(inodes)
+  return inodes
+end
+
+local function inode_key(inodes)
+  local out = {}
+  for i, inode in ipairs(inodes) do out[i] = tostring(inode) end
+  return table.concat(out, ",")
+end
+
+local function verify_inodes(inodes, deps)
   if #inodes == 0 then return false, "no listener" end
+  local exe_target = resolve(deps, "exe_target", default_exe_target)
 
   local resolved_any = false
   for _, inode in ipairs(inodes) do
@@ -207,42 +212,53 @@ function peerauth.verify(port, deps)
   return false, "not steam"
 end
 
+-- verify(port, deps) -> trusted (boolean), reason (string)
+-- reason is one of "steam", "no listener", "owner unknown", "not steam".
+-- "no listener" is distinct from the refusals on purpose: it means "nothing is
+-- there yet", which for a booting Steam is the normal state and should make the
+-- caller wait rather than conclude anything.
+function peerauth.verify(port, deps)
+  return verify_inodes(listener_inodes_for(port, deps), deps)
+end
+
 -- ── per-port cache ──────────────────────────────────────────────────────────
 -- Discovery probes the endpoint several times a second; a /proc-wide fd scan on
--- every probe would be wasteful. A POSITIVE verdict is cached per port. A
--- negative one is not: "nothing listening yet" and "not Steam yet" both change
--- as the client comes up, and caching them would deadlock the boot path.
+-- every probe would be wasteful. A POSITIVE verdict is cached by both port and
+-- listener inode. The cheap socket-table lookup still happens on every probe,
+-- so a replacement listener cannot inherit the previous process verdict.
+-- Negative verdicts are not cached: "nothing listening yet" and "not Steam yet"
+-- both change as the client comes up, and caching them would deadlock boot.
 function peerauth.new_cache()
-  return { port = nil, trusted = false, at = nil }
+  return { port = nil, trusted = false, inode_key = nil }
 end
 
 -- verify_cached(cache, port, deps, now) -> trusted, reason
--- A positive verdict is cached for CACHE_TTL seconds. It EXPIRES because the port
--- can change hands: a webhelper restart releases it, and whatever binds it next
--- must be checked again rather than inheriting the previous verdict.
+-- `now` is retained for API compatibility with older callers/tests; listener
+-- identity, rather than elapsed wall time, controls cache validity.
 function peerauth.verify_cached(cache, port, deps, now)
-  now = tonumber(now) or os.time()
+  local inodes = listener_inodes_for(port, deps)
+  local key = inode_key(inodes)
   if type(cache) == "table" and cache.trusted and cache.port == port
-      and type(cache.at) == "number" and (now - cache.at) < peerauth.CACHE_TTL then
+      and key ~= "" and cache.inode_key == key then
     return true, "steam (cached)"
   end
-  local trusted, reason = peerauth.verify(port, deps)
+  local trusted, reason = verify_inodes(inodes, deps)
   if type(cache) == "table" then
     cache.port = port
     cache.trusted = trusted == true
-    cache.at = trusted and now or nil
+    cache.inode_key = trusted and key or nil
   end
   return trusted, reason
 end
 
 -- invalidate(cache) — drop any cached verdict. The injector calls this when a
--- connection to the port fails or closes, so a peer that goes away is re-checked
--- before the next attach instead of riding the remaining TTL.
+-- connection to the port fails or closes, forcing a full owner check even if the
+-- kernel has not changed the listener inode yet.
 function peerauth.invalidate(cache)
   if type(cache) ~= "table" then return end
   cache.port = nil
   cache.trusted = false
-  cache.at = nil
+  cache.inode_key = nil
 end
 
 return peerauth

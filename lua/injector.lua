@@ -170,7 +170,11 @@ local function http_get(path)
   if not port then return nil end
   local c = socket.tcp()
   c:settimeout(5)
-  if not c:connect(CEF_HOST, port) then c:close(); return nil end
+  if not c:connect(CEF_HOST, port) then
+    c:close()
+    peerauth.invalidate(g_peer_cache)
+    return nil
+  end
   c:send("GET " .. path .. " HTTP/1.1\r\nHost: " .. CEF_HOST .. "\r\nAccept: */*\r\n\r\n")
   local buf, header_block, body = "", nil, nil
   while true do

@@ -45,6 +45,17 @@ do
     "web-view channels are marked as remote content")
 end
 
+do
+  local f = assert(io.open("lua/injector.lua", "r"))
+  local source = f:read("*a")
+  f:close()
+  local connect_failure = source:match(
+    "if not c:connect%(CEF_HOST, port%) then([%s%S]-)return nil end")
+  assert_true(connect_failure
+      and connect_failure:find("peerauth.invalidate(g_peer_cache)", 1, true),
+    "a failed CEF HTTP connection invalidates the peer verdict immediately")
+end
+
 -- The injected polyfill is built per connection (it carries that connection's
 -- binding token), so boot must not pre-render it into the asset bundles.
 do

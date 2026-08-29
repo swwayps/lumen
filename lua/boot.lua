@@ -48,19 +48,23 @@ end
 local registry = {}
 if have_plugin then
 local ALLOWLIST = {
-  "AddCustomApi","ApplyGameFix","ApplySettingsChanges","CancelAddViaLuaTools",
+  "AddCustomApi","ApplyGameFix","ApplySettingsChanges","ApplySpaceFix",
+  "CancelAddViaLuaTools","CancelLuaToolsAutoFix",
   "CancelGameDraft","CommitGameDraft",
   "CancelApplyFix","CheckApisForApp","CheckForFixes","CheckForUpdatesNow",
   "DeleteLuaToolsForApp","DismissLoadedApps","FetchFreeApisNow",
   "GetAddViaLuaToolsStatus","GetAllApis","GetApiList","GetApplyFixStatus",
+  "GetFixLaunchOptions","GetHubcapStats","GetProtonDBStatus",
   "GetGameDraftStatus","EnrichGameImportFromDraft",
   "GetGameInstallPath","GetGamesDatabase","GetIconDataUrl","GetInitApisMessage",
   "GetInstalledFixes","GetInstalledLuaScripts","GetMorrenusStats",
   "GetSettingsConfig","GetThemes","GetTranslations","GetUnfixStatus",
-  "HasLuaToolsForApp","OpenExternalUrl","OpenGameFolder","ReadLoadedApps",
+  "HasLuaToolsForApp","IsCompatToolForced","Logger.log",
+  "OpenExternalUrl","OpenGameFolder","ReadLoadedApps","ResolveOnlineFix",
   "RemoveApi","RenameApi","ReorderApis","RestartSteam","ToggleApi","UnFixGame",
   "SearchSteamGames","GetSteamAppDetails","StartAddViaLuaTools",
-  "StartAddViaLuaToolsSmart","StartAddViaLuaToolsSource","StartGameDraft",
+  "StartAddViaLuaToolsFromUrl","StartAddViaLuaToolsSmart",
+  "StartAddViaLuaToolsSource","StartGameDraft",
   "GetGameUpdates","SetGamePin","SetDlcPin","ClearGamePin","ClearDlcPin",
   "DeleteManifest","ClearManifests",
   "GetLuaToolsAuthStatus","LoginLuaToolsWithCode","StartLuaToolsDiscordLogin",
@@ -71,18 +75,28 @@ local ALLOWLIST = {
   "CompleteLuaToolsFixApply",
 }
 
-for _, name in ipairs(ALLOWLIST) do
+-- New LuaTools builds publish their explicit public surface with the lifecycle
+-- table. That keeps the security property of an allowlist without duplicating
+-- the contract across two repositories (the duplication is what made valid new
+-- calls fail as "unknown method"). Keep the local list only for plugin builds
+-- from before the contract existed.
+local rpc_methods = type(lifecycle) == "table"
+  and type(lifecycle.rpc_methods) == "table"
+  and lifecycle.rpc_methods or ALLOWLIST
+
+for _, name in ipairs(rpc_methods) do
   if type(_G[name]) == "function" then
     registry[name] = _G[name]
   else
     io.stderr:write("[lumen] WARN: allowlisted endpoint missing: " .. name .. "\n")
   end
 end
--- The allowlist is the whole contract. There used to be a "safety net" here that
+-- The selected list is the whole contract. There used to be a "safety net" here that
 -- additionally exposed every PascalCase global the backend happened to define,
 -- so any new helper function in main.lua silently became a callable endpoint —
--- the opposite of an allowlist. A new endpoint must be added to ALLOWLIST above,
--- deliberately, after deciding it is safe to expose.
+-- the opposite of an allowlist. Current plugins add reviewed endpoints to their
+-- rpc_contract.lua; ALLOWLIST above is only the compatibility surface for plugin
+-- builds that predate that contract.
 end
 
 -- Frontend assets: the millennium shim queued relative paths (e.g.
