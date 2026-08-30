@@ -1325,8 +1325,8 @@
     body.appendChild(wrap);
   }
 
-  // Unfix — drop the SpaceFix mapping + clear the fix launch option, then ask
-  // Steam to verify files (restores anything a file-based fix changed).
+  // Unfix — restore only files recorded by fix applications, drop the SpaceFix
+  // mapping, and clear fix-added launch options. No full Steam validation.
   function fxUnfix(appid, ctx, win) {
     var S = fxStrings();
     var done = fxBusy(win, S.unfixDesc);
@@ -1339,7 +1339,6 @@
           return;
         }
         var after = function () {
-          call("__lumenValidateApp", { appid: Number(appid) }).catch(function () {});
           done();
           fxClose();
           fxAlert(S.unfixDone);

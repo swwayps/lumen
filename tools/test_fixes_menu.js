@@ -19,6 +19,7 @@ const PARTS = [
   "13-sls-check.js", "11-menubar.js",
 ];
 const SOURCE = PARTS.map((p) => fs.readFileSync(path.join(MENU_DIR, p), "utf8")).join("\n");
+const FIXES_SOURCE = fs.readFileSync(path.join(MENU_DIR, "10-fixes-menu.js"), "utf8");
 
 // Minimal context: the menubar bootstrap calls document.querySelectorAll once;
 // return [] so it no-ops. We only need the window-exposed pure helpers.
@@ -221,6 +222,10 @@ if (typeof appliedStates !== "function") {
 eq("fallback apply uses a locale-independent receipt kind",
   typeof fallbackReceiptKind === "function" ? fallbackReceiptKind() : null,
   "online_fix_fallback");
+
+const unfixBody = (FIXES_SOURCE.match(/function fxUnfix\([\s\S]*?\n  }/) || [""])[0];
+eq("Unfix never starts a full Steam validation",
+  unfixBody.includes("__lumenValidateApp"), false);
 
 // ── Lumen Settings authenticated Fixes catalogue ────────────────────────────
 if (typeof catalogueFilter !== "function") {
