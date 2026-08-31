@@ -284,9 +284,9 @@ function injector.targets_have_gamepad_ui(targets)
   return false
 end
 
--- The two top-level shells which can host Lumen's visible menu and guard UI.
--- Keep this title check shared by injection relays so Gamepad UI cannot receive
--- the low-level interception without its corresponding modal surface.
+-- The two top-level shells which can host Lumen's visible menu UI.
+-- Keep this title check shared by injection relays so desktop and Gamepad UI
+-- receive the same menu behavior.
 function injector.is_menu_shell_title(title)
   return title == "Steam" or title == "Steam Big Picture Mode"
 end
@@ -768,44 +768,6 @@ function Conn:_on_binding(payload_str)
   if req.fn == "__lumenOpen" or req.fn == "__lumenClose" then
     if self.manager then self.manager:broadcast_overlay(req.fn == "__lumenOpen") end
     result = '{"ok":true}'
-  elseif req.fn == "__lumenAutoFixLaunchWait" then
-    local appid = tonumber((req.args or {}).appid)
-    if appid and self.manager then
-      self.manager:broadcast_auto_fix_modal(appid, true)
-    end
-    result = '{"ok":true}'
-  elseif req.fn == "__lumenAutoFixLaunchTimeout" then
-    local appid = tonumber((req.args or {}).appid)
-    if appid and self.manager then
-      self.manager:broadcast_auto_fix_timeout(appid)
-    end
-    result = '{"ok":true}'
-  elseif req.fn == "__lumenAutoFixLaunchFailed" then
-    local appid = tonumber((req.args or {}).appid)
-    if appid and self.manager then
-      self.manager:broadcast_auto_fix_failed(appid)
-    end
-    result = '{"ok":true}'
-  elseif req.fn == "__lumenReleaseAutoFixLaunch" then
-    local appid = tonumber((req.args or {}).appid)
-    result = (appid and self.manager
-        and self.manager:release_auto_fix_launch(appid))
-      and '{"ok":true}' or '{"ok":false}'
-  elseif req.fn == "__lumenCancelAutoFixLaunch" then
-    local appid = tonumber((req.args or {}).appid)
-    result = (appid and self.manager
-        and self.manager:cancel_auto_fix_launch(appid))
-      and '{"ok":true}' or '{"ok":false}'
-  elseif req.fn == "__lumenInstallBlocked" then
-    local appid = tonumber((req.args or {}).appid)
-    if appid and self.manager then
-      self.manager:broadcast_install_readiness_blocked(appid)
-    end
-    result = '{"ok":true}'
-  elseif req.fn == "__lumenInstallAnyway" then
-    local appid = tonumber((req.args or {}).appid)
-    result = (appid and self.manager and self.manager:install_anyway(appid))
-      and '{"ok":true}' or '{"ok":false}'
   elseif req.fn == "__lumenSlsWarn" then
     -- Show the "slsteam-moon not loaded" warning in the on-top context (store
     -- web view when it's composited above the shell). Triggered from the shell
@@ -1240,32 +1202,14 @@ function State:is_app_busy(appid)
 end
 
 -- Keep the SharedJS RunGame guard synchronized with only the AppIDs whose
--- automatic work is actively blocking. SteamClient.Apps.RunGame exists in
--- SharedJSContext (not the visible shell). When an AppID stops blocking, its
--- exact deferred native call resumes once the work completes. The JS guard
--- cancels every deferred call before an uninstall and also cancels attempts
--- that reach their timeout, so a saved Play cannot cross either boundary.
+-- automatic work may need cancellation. SteamClient.Apps.RunGame exists in
+-- SharedJSContext (not the visible shell). Pre-write work never delays Play;
+-- live writes replay the exact call after rollback, with a short fail-open
+-- deadline so a broken worker cannot hold Steam's launch path.
 function State:update_auto_fix_guard(jobs)
   jobs = type(jobs) == "table" and jobs or {}
   local expr = "window.__lumenUpdateAutoFixGuard&&window.__lumenUpdateAutoFixGuard("
     .. json.encode(jobs) .. ")"
-  for _, conn in pairs(self.conns) do
-    if conn.sock and conn.title == "SharedJSContext" then
-      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
-        { expression = expr, returnByValue = true })
-      return true
-    end
-  end
-  return false
-end
-
--- Keep the synchronous SharedJS install guard supplied with a short-lived map.
--- The map is prepared off-click by the sidecar; the wrapper itself performs no
--- disk, RPC or network work. Missing/stale state therefore fails open.
-function State:update_install_readiness_guard(apps)
-  apps = type(apps) == "table" and apps or {}
-  local expr = "window.__lumenUpdateInstallReadinessGuard&&"
-    .. "window.__lumenUpdateInstallReadinessGuard(" .. json.encode(apps) .. ")"
   for _, conn in pairs(self.conns) do
     if conn.sock and conn.title == "SharedJSContext" then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",
@@ -1296,33 +1240,6 @@ function State:update_auto_fix_ui(jobs)
     end
   end
   return sent
-end
-
-local function auto_fix_guard_action(self, function_name, appid)
-  appid = tonumber(appid)
-  if not appid or appid <= 0 then return false end
-  local expr = "window." .. function_name .. "&&window." .. function_name
-    .. "(" .. tostring(math.floor(appid)) .. ")"
-  for _, conn in pairs(self.conns) do
-    if conn.sock and conn.title == "SharedJSContext" then
-      send_cmd(conn.sock, conn.session, "Runtime.evaluate",
-        { expression = expr, returnByValue = true })
-      return true
-    end
-  end
-  return false
-end
-
-function State:release_auto_fix_launch(appid)
-  return auto_fix_guard_action(self, "__lumenReleaseAutoFixLaunch", appid)
-end
-
-function State:cancel_auto_fix_launch(appid)
-  return auto_fix_guard_action(self, "__lumenCancelAutoFixLaunch", appid)
-end
-
-function State:install_anyway(appid)
-  return auto_fix_guard_action(self, "__lumenInstallAnyway", appid)
 end
 
 -- Relay a steam://validate/<appid> into SharedJSContext (the only context with
@@ -1554,40 +1471,6 @@ function State:broadcast_overlay(open)
     return
   end
   self:_fire_on_top("window.__lumenOpenOverlay&&window.__lumenOpenOverlay()")
-end
-
-function State:broadcast_auto_fix_modal(appid, launch_pending)
-  local id = math.floor(tonumber(appid) or 0)
-  self:_fire_on_top("window.__lumenShowAutoFixModal&&window.__lumenShowAutoFixModal("
-    .. tostring(id) .. "," .. (launch_pending and "true" or "false") .. ")")
-end
-
-function State:broadcast_auto_fix_timeout(appid)
-  local id = math.floor(tonumber(appid) or 0)
-  self:_fire_on_top("window.__lumenShowAutoFixTimeout&&window.__lumenShowAutoFixTimeout("
-    .. tostring(id) .. ")")
-end
-
--- The guard dropped a saved launch because its queued work failed. Report it
--- where the timeout notice already appears, so the reason replaces a 0% bar.
-function State:broadcast_auto_fix_failed(appid)
-  local id = math.floor(tonumber(appid) or 0)
-  self:_fire_on_top("window.__lumenShowAutoFixFailed&&window.__lumenShowAutoFixFailed("
-    .. tostring(id) .. ")")
-end
-
-function State:broadcast_install_readiness_blocked(appid)
-  local id = math.floor(tonumber(appid) or 0)
-  self:_fire_on_top(
-    "window.__lumenShowInstallReadinessBlocked&&"
-      .. "window.__lumenShowInstallReadinessBlocked(" .. tostring(id) .. ")")
-end
-
-function State:broadcast_install_readiness_ready(appid)
-  local id = math.floor(tonumber(appid) or 0)
-  self:_fire_on_top(
-    "window.__lumenShowInstallReadinessReady&&"
-      .. "window.__lumenShowInstallReadinessReady(" .. tostring(id) .. ")")
 end
 
 -- Show the "slsteam-moon not loaded" warning in whichever view is on top, so it

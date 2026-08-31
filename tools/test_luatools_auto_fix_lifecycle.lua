@@ -53,6 +53,8 @@ local guarded = plugintick.new({
       jobs = {
         ["3321460"] = { phase = "waiting_install" },
         ["990080"] = { phase = "failed" },
+        ["480"] = { phase = "cancelling", transaction = "txn.current" },
+        ["481"] = { phase = "failed", fixStarted = true },
       },
       uiJobs = {
         ["3321460"] = {
@@ -79,19 +81,37 @@ local guard_injector = {
 local guarded_result = guarded:run(30, guard_injector)
 check("L7 the lifecycle can reject Steam post-install activity",
   guarded_result.success == true)
-check("L8 active and failed jobs reach the guard with explicit outcomes",
+check("L8 only cancellable automatic work reaches the guard",
   guard_updates == 1 and type(guard_snapshot["3321460"]) == "table"
-    and guard_snapshot["3321460"].blocking == true
-    and type(guard_snapshot["990080"]) == "table"
-    and guard_snapshot["990080"].cancel == true)
+    and guard_snapshot["3321460"].cancelOnPlay == true
+    and guard_snapshot["3321460"].rollback ~= true
+    and guard_snapshot["480"].cancelOnPlay == true
+    and guard_snapshot["480"].rollback == true
+    and guard_snapshot["481"].cancelOnPlay == true
+    and guard_snapshot["481"].rollback == true
+    and guard_snapshot["990080"] == nil)
 check("L9 compact progress reaches the visible Lumen UI",
   ui_updates == 1 and type(ui_snapshot) == "table"
     and type(ui_snapshot["3321460"]) == "table"
     and ui_snapshot["3321460"].progress == 42
     and ui_snapshot["3321460"].gameName == "Crimson Desert")
-check("L10 active work temporarily uses the one-second progress cadence",
-  guarded:run(30.5, guard_injector) == nil
-    and guarded:run(31, guard_injector) ~= nil)
+check("L10 active work uses a short cancellation cadence without idle overhead",
+  guarded:run(30.2, guard_injector) == nil
+    and guarded:run(30.25, guard_injector) ~= nil)
+
+local failed_cleanup = plugintick.new({
+  on_tick = function()
+    return {
+      success = true,
+      jobs = { ["480"] = { phase = "failed", fixStarted = true } },
+      uiJobs = { ["480"] = { phase = "failed" } },
+    }
+  end,
+}, { interval = 5 })
+check("L11 unresolved side effects keep the bounded cancellation cadence",
+  failed_cleanup:run(40, guard_injector) ~= nil
+    and failed_cleanup:run(40.2, guard_injector) == nil
+    and failed_cleanup:run(40.25, guard_injector) ~= nil)
 
 if failures > 0 then os.exit(1) end
 print("ALL LUA.TOOLS AUTO FIX LIFECYCLE CHECKS PASSED")

@@ -29,11 +29,11 @@ polyfill.TOKEN_GLOBAL = "__lumenKey"
 -- token_js(token) -> JS that publishes the connection's token.
 --
 -- Evaluated on EVERY connection, including channels that ship no polyfill. The
--- SharedJSContext control channel is one of those: its guard scripts
--- (auto-fix-launch-guard.js, install-readiness-guard.js) call window.__lumenSend
+-- SharedJSContext control channel is one of those: its auto-fix launch guard
+-- calls window.__lumenSend
 -- directly because they never needed the promise machinery, and without the token
--- every one of their calls would now be dropped — silently breaking the install
--- readiness notice and the auto-fix launch deferral.
+-- every one of their calls would now be dropped, silently breaking automatic-fix
+-- cancellation before launch.
 --
 -- Publishing it as a global is no weaker than keeping it in the polyfill's
 -- closure: any script in the same world can already call the closure.

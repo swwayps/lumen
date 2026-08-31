@@ -25,34 +25,14 @@
         applying: "Applying fix",
         settings: "Lumen settings",
         updatesAvailable: "Updates available",
-        title: "Recommended fix",
-        body: "Lumen is applying the recommended LuaTools fix before this game opens.",
-        launchQueued: "The game will open automatically when it is safe.",
         preparing: "Preparing the recommended fix",
         needsLogin: "Waiting for lua.tools login",
         downloading: "Downloading fix files",
         extracting: "Extracting to a private staging folder",
         applyingFiles: "Applying files to the game",
         finalizing: "Finishing launch settings",
-        keepWaiting: "Keep waiting",
-        close: "Close",
-        cancelLaunch: "Cancel launch",
-        launchWithoutFix: "Open without fix",
-        skipFailed: "The automatic fix could not be skipped safely.",
-        timeoutTitle: "Launch cancelled",
-        timeoutBody: "The fix is taking longer than expected, so this launch attempt was cancelled. You can follow its progress here and click Play again when it finishes.",
+        cancelling: "Cancelling fix",
         failed: "The recommended fix could not be applied",
-        failedTitle: "Fix failed",
-        failedBody: "The game was not opened automatically. You can open it without the fix or try again later.",
-      },
-      installReadiness: {
-        eyebrow: "Installation paused",
-        title: "Manifest unavailable",
-        body: "The manifests required to start this installation are not available yet. The game will remain in your library and preparation will continue in the background.",
-        risk: "If you install anyway, Steam may show No Internet Connection due to the missing manifests.",
-        installAnyway: "Install anyway",
-        close: "Close",
-        ready: "The manifest is ready. You can install this game now.",
       },
       about: {
         tab: "About",
@@ -433,34 +413,14 @@
         applying: "Aplicando correção",
         settings: "Configurações do Lumen",
         updatesAvailable: "Atualizações disponíveis",
-        title: "Correção recomendada",
-        body: "O Lumen está aplicando a correção recomendada do LuaTools antes de abrir este jogo.",
-        launchQueued: "O jogo abrirá automaticamente quando for seguro.",
         preparing: "Preparando a correção recomendada",
         needsLogin: "Aguardando login no lua.tools",
         downloading: "Baixando arquivos da correção",
         extracting: "Extraindo para uma pasta temporária segura",
         applyingFiles: "Aplicando arquivos no jogo",
         finalizing: "Finalizando opções de inicialização",
-        keepWaiting: "Continuar aguardando",
-        close: "Fechar",
-        cancelLaunch: "Cancelar abertura",
-        launchWithoutFix: "Abrir sem correção",
-        skipFailed: "Não foi possível ignorar a correção automática com segurança.",
-        timeoutTitle: "Abertura cancelada",
-        timeoutBody: "A correção está demorando mais que o esperado, então esta tentativa de abertura foi cancelada. Você pode acompanhar o progresso aqui e clicar em Jogar novamente quando terminar.",
+        cancelling: "Cancelando correção",
         failed: "Não foi possível aplicar a correção recomendada",
-        failedTitle: "A correção falhou",
-        failedBody: "O jogo não foi aberto automaticamente. Você pode abrir sem a correção ou tentar novamente mais tarde.",
-      },
-      installReadiness: {
-        eyebrow: "Instalação pausada",
-        title: "Manifest indisponível",
-        body: "Os manifests necessários para iniciar esta instalação ainda não estão disponíveis. O jogo continuará na sua biblioteca e a preparação seguirá em segundo plano.",
-        risk: "Ao instalar mesmo assim, a Steam pode mostrar No Internet Connection devido à falta de manifests.",
-        installAnyway: "Instalar mesmo assim",
-        close: "Fechar",
-        ready: "O manifest está pronto. Este jogo já pode ser instalado.",
       },
       about: {
         tab: "Sobre",
@@ -867,11 +827,6 @@
   function autoFixStrings() {
     var L = I18N[pickLang()];
     return (L && L.autoFix) || I18N.en.autoFix;
-  }
-
-  function installReadinessStrings() {
-    var L = I18N[pickLang()];
-    return (L && L.installReadiness) || I18N.en.installReadiness;
   }
 
   // Debug aids, live-introspectable over CDP like the other window.__lumen*.

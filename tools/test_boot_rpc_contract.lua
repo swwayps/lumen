@@ -41,10 +41,6 @@ for _, name in ipairs({
   package.loaded[name] = noop_registry
 end
 package.loaded["notifyqueue"] = { drain = function() return {} end }
-package.loaded["installreadiness"] = {
-  snapshot = function() return {}, false end,
-  recovered_apps = function() return {} end,
-}
 package.loaded["plugintick"] = {
   new = function()
     return { run = function() return nil end }

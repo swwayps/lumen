@@ -5,7 +5,7 @@ function plugintick.new(lifecycle, opts)
   local instance = {
     lifecycle = lifecycle,
     interval = math.max(1, tonumber(opts.interval) or 5),
-    active_interval = math.max(1, tonumber(opts.active_interval) or 1),
+    active_interval = math.max(0.25, tonumber(opts.active_interval) or 0.25),
     next_run = 0,
   }
 
@@ -37,11 +37,19 @@ function plugintick.new(lifecycle, opts)
       local blocking = {}
       for appid, job in pairs(result.jobs) do
         local phase = type(job) == "table" and job.phase or nil
-        if phase == "waiting_install" or phase == "needs_login" or phase == "applying"
-            or phase == "finalizing" then
-          blocking[tostring(appid)] = { phase = phase, blocking = true }
-        elseif phase == "failed" then
-          blocking[tostring(appid)] = { phase = phase, cancel = true }
+        if phase == "waiting_install" or phase == "needs_login" then
+          blocking[tostring(appid)] = { phase = phase, cancelOnPlay = true }
+        elseif phase == "applying" or phase == "finalizing"
+            or phase == "cancelling" then
+          blocking[tostring(appid)] = {
+            phase = phase, cancelOnPlay = true, rollback = true,
+          }
+        elseif phase == "failed" and type(job) == "table"
+            and (job.fixStarted == true or job.transaction ~= nil
+              or job.launchOptionsApplied == true) then
+          blocking[tostring(appid)] = {
+            phase = phase, cancelOnPlay = true, rollback = true,
+          }
         end
       end
       if type(injector.update_auto_fix_guard) == "function" then
@@ -51,9 +59,12 @@ function plugintick.new(lifecycle, opts)
         pcall(injector.update_auto_fix_ui, injector,
           type(result.uiJobs) == "table" and result.uiJobs or {})
       end
-      for _, job in pairs(type(result.uiJobs) == "table" and result.uiJobs or {}) do
-        if type(job) == "table"
-            and (job.phase == "applying" or job.phase == "finalizing") then
+      for _, job in pairs(result.jobs) do
+        if type(job) == "table" and (
+            job.phase == "applying" or job.phase == "finalizing"
+            or job.phase == "cancelling"
+            or (job.phase == "failed" and (job.fixStarted == true
+              or job.transaction ~= nil or job.launchOptionsApplied == true))) then
           self.next_run = now + self.active_interval
           break
         end

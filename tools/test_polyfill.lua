@@ -89,8 +89,7 @@ end
 -- The SharedJSContext control channel is declared with `polyfill = nil` because
 -- its scripts never needed callServerMethod: they call window.__lumenSend
 -- directly. When the token gate was added they had no closure to read it from, so
--- every __lumenInstallBlocked / __lumenAutoFixLaunch* call was dropped and the
--- install-readiness notice silently stopped appearing. The token is therefore
+-- every direct auto-fix guard call was dropped. The token is therefore
 -- published as a global on every connection, polyfill or not.
 do
   local js = polyfill.token_js("cafebabe")
@@ -111,24 +110,23 @@ end
 do
   -- A payload built the way the guards build it must be accepted.
   local req = polyfill.parse_request(
-    '{"id":"install-readiness-guard-1","fn":"__lumenInstallBlocked",'
+    '{"id":"auto-fix-guard-1","fn":"CancelLuaToolsAutoFix",'
     .. '"args":{"appid":238320},"k":"cafebabe"}', "cafebabe")
   ok(req ~= nil, "a guard-shaped payload carrying the global token is accepted")
-  ok(req and req.fn == "__lumenInstallBlocked", "the relay name survives")
+  ok(req and req.fn == "CancelLuaToolsAutoFix", "the relay name survives")
 end
 
 do
   -- And the same payload without the token is still refused, so the fix did not
   -- turn the gate off.
   ok(polyfill.parse_request(
-    '{"id":"x","fn":"__lumenInstallBlocked","args":{"appid":1}}', "cafebabe")
+    '{"id":"x","fn":"CancelLuaToolsAutoFix","args":{"appid":1}}', "cafebabe")
     == nil, "the gate still refuses an untokened guard payload")
 end
 
 -- The guard scripts must actually send it.
 do
-  for _, path in ipairs({ "lua/auto-fix-launch-guard.js",
-                          "lua/install-readiness-guard.js" }) do
+  for _, path in ipairs({ "lua/auto-fix-launch-guard.js" }) do
     local f = assert(io.open(path, "r"))
     local src = f:read("*a")
     f:close()

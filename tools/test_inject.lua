@@ -453,26 +453,6 @@ do
     "page connection owns the asynchronous public document fallback")
 
   local state = injector.new({ channels = {} })
-  local readiness_expr = {}
-  state._fire_on_top = function(_, expr) readiness_expr[#readiness_expr + 1] = expr end
-  assert_true(type(state.broadcast_install_readiness_blocked) == "function"
-      and type(state.broadcast_install_readiness_ready) == "function"
-      and type(state.update_install_readiness_guard) == "function"
-      and type(state.install_anyway) == "function",
-    "install readiness exposes a narrow SharedJS/control relay interface")
-  if type(state.broadcast_install_readiness_blocked) == "function" then
-    state:broadcast_install_readiness_blocked(1671210)
-    state:broadcast_install_readiness_ready(1671210)
-  end
-  assert_true(readiness_expr[1]
-      and readiness_expr[1]:find("__lumenShowInstallReadinessBlocked", 1, true)
-      and readiness_expr[1]:find("1671210", 1, true)
-      and readiness_expr[2]
-      and readiness_expr[2]:find("__lumenShowInstallReadinessReady", 1, true),
-    "blocked and recovered install events target only the visible Steam view")
-  assert_true(source:find('req.fn == "__lumenInstallBlocked"', 1, true)
-      and source:find('req.fn == "__lumenInstallAnyway"', 1, true),
-    "SharedJS blocked notices and visible-view overrides have control handlers")
   assert_true(state:needs_fast_tick() == false,
     "injector stays on the idle cadence without pending browser requests")
   state.conns.example = { requests = { document = {} } }

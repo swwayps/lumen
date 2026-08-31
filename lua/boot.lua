@@ -239,11 +239,6 @@ local auto_fix_launch_guard_js = utils.read_file(
 if not auto_fix_launch_guard_js then
   io.stderr:write("[lumen] WARN: auto-fix launch guard not found\n")
 end
-local install_readiness_guard_js = utils.read_file(
-  lua_dir .. "/install-readiness-guard.js")
-if not install_readiness_guard_js then
-  io.stderr:write("[lumen] WARN: install readiness guard not found\n")
-end
 
 -- The Lumen settings menu used to be one ~1.2k-line lumen_menu.js. It's now
 -- split into ordered source fragments under menu/ (one concern per file) for
@@ -257,7 +252,7 @@ local MENU_PARTS = {
   "01-core.js", "02-i18n.js", "03-styles.js", "04-overlay-helpers.js",
   "05-config-tab.js", "06-updates-helpers.js", "07-updates-tab.js",
   "08-about-tab.js", "09-luatools-account.js", "09-overlay.js",
-  "10-auto-fix-status.js", "10-install-readiness.js", "10-fixes-menu.js", "12-cloud-tab.js",
+  "10-auto-fix-status.js", "10-fixes-menu.js", "12-cloud-tab.js",
   "13-sls-check.js", "11-menubar.js",
 }
 
@@ -330,11 +325,8 @@ offers_assets = {
   js = parental_unlock_enabled and { SPECIAL_OFFERS_UNLOCK_JS } or {},
 }
 local notifyqueue = require("notifyqueue")
-local installreadiness = require("installreadiness")
 local plugin_tick = require("plugintick").new(lifecycle, { interval = 5 })
 local next_notify_poll = 0
-local next_install_readiness_poll = 0
-local previous_install_blocks = {}
 loop.run({
   registry = registry,
   on_steam_returned = refresh_parental_unlock,
@@ -354,7 +346,6 @@ loop.run({
         js = {
           gamepad_toast_js,
           auto_fix_launch_guard_js,
-          install_readiness_guard_js,
         } } },
   },
   on_tick = function(inj, now)
@@ -362,26 +353,6 @@ loop.run({
     if type(plugin_result) == "table" and plugin_result.success == false then
       io.stderr:write("[lumen] plugin background tick failed: "
         .. tostring(plugin_result.error or plugin_result.errorCode or "unknown") .. "\n")
-    end
-    if now >= next_install_readiness_poll then
-      next_install_readiness_poll = now + 1
-      local blocked, valid = installreadiness.snapshot({ now = math.floor(now) })
-      if type(inj.update_install_readiness_guard) == "function" then
-        pcall(inj.update_install_readiness_guard, inj, blocked)
-      end
-      if valid then
-        for _, appid in ipairs(installreadiness.recovered_apps(
-            previous_install_blocks, blocked)) do
-          if type(inj.broadcast_install_readiness_ready) == "function" then
-            pcall(inj.broadcast_install_readiness_ready, inj, appid)
-          end
-        end
-        previous_install_blocks = blocked
-      else
-        -- An absent producer heartbeat is not proof that a manifest became
-        -- ready. Fail open silently and wait for a fresh authoritative state.
-        previous_install_blocks = {}
-      end
     end
     if now < next_notify_poll then return end
     next_notify_poll = now + 0.25
