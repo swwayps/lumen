@@ -92,6 +92,7 @@
         synthetic: game.synthetic,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
+            .then(parseRpc)
             .then(function () {
               invalidateGameUpdatesCache();
               select(latest);
@@ -114,6 +115,7 @@
           onClick: function () {
             var applyPin = function () {
               return call("SetDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot, gid: v.gid }) })
+                .then(parseRpc)
                 .then(function () { invalidateGameUpdatesCache(); select(row); });
             };
             if (isGameInstalled(game)) {
@@ -268,6 +270,7 @@
       synthetic: game.synthetic,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
+          .then(parseRpc)
           .then(function () {
             invalidateGameUpdatesCache();
             select(latest); setLocked(false);
@@ -290,6 +293,7 @@
         onClick: function () {
           var applyPin = function () {
             return call("SetGamePin", { json: JSON.stringify({ appid: game.appid, date: b.date }) })
+              .then(parseRpc)
               .then(function () { invalidateGameUpdatesCache(); select(row); setLocked(true); });
           };
           if (isGameInstalled(game)) {

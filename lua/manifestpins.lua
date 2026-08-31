@@ -248,7 +248,7 @@ local function positive_id(value)
   local text = tostring(value or "")
   if not text:match("^%d+$") then return nil end
   local n = math.tointeger(tonumber(text))
-  if not n or n <= 0 then return nil end
+  if not n or n <= 0 or n > 0xffffffff then return nil end
   return n
 end
 
@@ -716,8 +716,12 @@ function mp.parse_pins(text)
     elseif in_block then
       local app = raw:match("^  (%d+)%s*:%s*$")
       if app then
-        cur_app = math.tointeger(tonumber(app))
-        pins[cur_app] = { locked = false, depots = {} }
+        cur_app = positive_id(app)
+        if cur_app then
+          pins[cur_app] = { locked = false, depots = {} }
+        else
+          cur_app = nil
+        end
         in_depots = false
       elseif cur_app then
         local lock = raw:match("^    locked%s*:%s*(%a+)")
@@ -728,11 +732,17 @@ function mp.parse_pins(text)
         elseif in_depots then
           local depot, gid = raw:match('^      (%d+)%s*:%s*"?([%d]+)"?%s*$')
           if depot then
-            pins[cur_app].depots[math.tointeger(tonumber(depot))] = gid
+            depot, gid = positive_id(depot), decimal_id(gid)
+            if depot and gid then
+              pins[cur_app].depots[depot] = gid
+            end
           end
         end
       end
     end
+  end
+  for app, pin in pairs(pins) do
+    if not pin.depots or next(pin.depots) == nil then pins[app] = nil end
   end
   return pins
 end
@@ -746,11 +756,23 @@ end
 
 -- emit_pins(pins) -> YAML text for the ManifestPins block ("" if no apps).
 function mp.emit_pins(pins)
-  local apps = sorted_keys(pins)
+  local valid = {}
+  for raw_app, pin in pairs(pins or {}) do
+    local app = positive_id(raw_app)
+    if app and type(pin) == "table" then
+      local depots = {}
+      for raw_depot, raw_gid in pairs(pin.depots or {}) do
+        local depot, gid = positive_id(raw_depot), decimal_id(raw_gid)
+        if depot and gid then depots[depot] = gid end
+      end
+      if next(depots) then valid[app] = { locked = pin.locked == true, depots = depots } end
+    end
+  end
+  local apps = sorted_keys(valid)
   if #apps == 0 then return "" end
   local lines = { "ManifestPins:" }
   for _, app in ipairs(apps) do
-    local a = pins[app]
+    local a = valid[app]
     lines[#lines + 1] = "  " .. app .. ":"
     lines[#lines + 1] = "    locked: " .. (a.locked and "true" or "false")
     local depots = sorted_keys(a.depots or {})
@@ -1023,7 +1045,7 @@ function mp.clear_dlc_pin(pins, appid, depot)
   if not a then return end
   if a.depots then a.depots[depot] = nil end
   -- drop the app entry entirely if nothing pins it anymore
-  if not a.locked and (not a.depots or next(a.depots) == nil) then
+  if not a.depots or next(a.depots) == nil then
     pins[appid] = nil
   end
 end
@@ -2429,7 +2451,8 @@ function mp.set_game_pin_rpc(ctx, json_str)
   ctx = ctx or mp.default_ctx()
   local ok, req = pcall(json.decode, json_str)
   if not ok or type(req) ~= "table" or not req.appid then return err("bad request") end
-  local appid = as_int(req.appid)
+  local appid = positive_id(req.appid)
+  if not appid then return err("bad request") end
 
   -- assemble per-depot versions for this app
   local games = mp.build_games(ctx)
@@ -2471,11 +2494,15 @@ function mp.set_dlc_pin_rpc(ctx, json_str)
   if not ok or type(req) ~= "table" or not req.appid or not req.depot or not req.gid then
     return err("bad request")
   end
+  local appid, depot, gid = positive_id(req.appid), positive_id(req.depot), decimal_id(req.gid)
+  if not appid or not depot or not gid then
+    return err("bad request")
+  end
   local pins = mp.parse_pins(read_file(ctx.config_path) or "")
-  mp.set_dlc_pin(pins, as_int(req.appid), as_int(req.depot), tostring(req.gid))
+  mp.set_dlc_pin(pins, appid, depot, gid)
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
-  mp.invalidate_appinfo_cache(ctx, as_int(req.appid))
+  mp.invalidate_appinfo_cache(ctx, appid)
   return json.encode({ success = true })
 end
 
@@ -2483,11 +2510,13 @@ function mp.clear_game_pin_rpc(ctx, json_str)
   ctx = ctx or mp.default_ctx()
   local ok, req = pcall(json.decode, json_str)
   if not ok or type(req) ~= "table" or not req.appid then return err("bad request") end
+  local appid = positive_id(req.appid)
+  if not appid then return err("bad request") end
   local pins = mp.parse_pins(read_file(ctx.config_path) or "")
-  mp.clear_game_pin(pins, as_int(req.appid))
+  mp.clear_game_pin(pins, appid)
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
-  mp.invalidate_appinfo_cache(ctx, as_int(req.appid))
+  mp.invalidate_appinfo_cache(ctx, appid)
   return json.encode({ success = true })
 end
 
@@ -2497,11 +2526,15 @@ function mp.clear_dlc_pin_rpc(ctx, json_str)
   if not ok or type(req) ~= "table" or not req.appid or not req.depot then
     return err("bad request")
   end
+  local appid, depot = positive_id(req.appid), positive_id(req.depot)
+  if not appid or not depot then
+    return err("bad request")
+  end
   local pins = mp.parse_pins(read_file(ctx.config_path) or "")
-  mp.clear_dlc_pin(pins, as_int(req.appid), as_int(req.depot))
+  mp.clear_dlc_pin(pins, appid, depot)
   local wok, werr = write_pins(ctx.config_path, pins)
   if not wok then return err(werr) end
-  mp.invalidate_appinfo_cache(ctx, as_int(req.appid))
+  mp.invalidate_appinfo_cache(ctx, appid)
   return json.encode({ success = true })
 end
 

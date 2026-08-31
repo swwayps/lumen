@@ -154,6 +154,11 @@ do
   check(ordered, "draft: DLC appids are deduplicated and sorted")
   local bad = mp.build_draft_lua({ appid = 700, pins = { { depot = "../1", gid = "2" } } })
   check(bad == nil, "draft: malformed depot is rejected")
+  check(mp.build_draft_lua({ appid = "4294967296" }) == nil,
+    "draft: appid above uint32 is rejected")
+  check(mp.build_draft_lua({ appid = 700,
+    pins = { { depot = "4294967296", gid = "2" } } }) == nil,
+    "draft: depot id above uint32 is rejected")
 
   local inert_key = string.rep("f", 64)
   local strict, strict_err = mp.merge_lua_text(700, table.concat({
@@ -339,6 +344,27 @@ do
   eq(pins[285900].depots[285904], "123456789012345", "parse: dlc gid")
 end
 
+-- ── 3a. malformed/empty pin entries are inert ─────────────────────────────
+do
+  local pins = mp.parse_pins(table.concat({
+    "ManifestPins:",
+    "  3892270:",
+    "    locked: true",
+    "  10:",
+    "    locked: true",
+    "    depots:",
+    '      0: "1"',
+    '      11: "0"',
+    '      12: "18446744073709551616"',
+    '      13: "123"',
+  }, "\n"))
+  check(pins[3892270] == nil, "parse: locked app without depots is discarded")
+  eq(pins[10].depots[13], "123", "parse: valid sibling depot survives")
+  check(pins[10].depots[0] == nil and pins[10].depots[11] == nil
+      and pins[10].depots[12] == nil,
+    "parse: zero IDs/GIDs and uint64 overflow are discarded")
+end
+
 -- ── 4. emit + parse round-trip ─────────────────────────────────────────────
 do
   local pins = {
@@ -350,6 +376,16 @@ do
   local back = mp.parse_pins(block)
   eq(back[1054490].locked, true, "roundtrip: locked")
   eq(back[1054490].depots[1054491], "4091695229428697509", "roundtrip: gid")
+
+  local guarded = mp.emit_pins({
+    [1] = { locked = true, depots = {} },
+    [2] = { locked = true, depots = { [20] = "0", [21] = "21" } },
+  })
+  check(guarded:find("  1:", 1, true) == nil,
+    "emit: empty locked entry is not serialized")
+  check(guarded:find('21: "21"', 1, true) ~= nil
+      and guarded:find('20: "0"', 1, true) == nil,
+    "emit: invalid depot pin is omitted without dropping valid siblings")
 end
 
 -- ── 5. splice preserves the rest of the file ───────────────────────────────
@@ -427,6 +463,11 @@ do
 
   mp.clear_dlc_pin(pins, 8, 80)
   check(pins[8] == nil, "clear_dlc_pin: drops app when last depot gone and unlocked")
+
+  local locked_single = { [9] = { locked = true, depots = { [90] = "900" } } }
+  mp.clear_dlc_pin(locked_single, 9, 90)
+  check(locked_single[9] == nil,
+    "clear_dlc_pin: drops locked app when its final depot is cleared")
 end
 
 -- ── 8. RPC round-trip on a temp config (set/clear via JSON) ────────────────
@@ -451,6 +492,32 @@ do
   local rf2 = io.open(cfgpath, "rb"); local body2 = rf2:read("*a"); rf2:close()
   check(body2:find("12345", 1, true) == nil, "rpc clear_dlc_pin: pin removed")
   check(body2:find("LogLevel: 2", 1, true) ~= nil, "rpc clear_dlc_pin: rest survives")
+
+  local wf = assert(io.open(cfgpath, "wb"))
+  wf:write(table.concat({
+    "AdditionalApps:",
+    "  - 3892270",
+    "ManifestPins:",
+    "  3892270:",
+    "    locked: true",
+    "    depots:",
+    '      3892271: "1458003443751887758"',
+    "LogLevel: 2",
+    "",
+  }, "\n")); wf:close()
+  local locked_clear = json.decode(mp.clear_dlc_pin_rpc(ctx,
+    json.encode({ appid = 3892270, depot = 3892271 })))
+  eq(locked_clear.success, true, "rpc clear final locked depot: success")
+  local lf = assert(io.open(cfgpath, "rb")); local locked_body = lf:read("*a"); lf:close()
+  check(locked_body:find("ManifestPins:", 1, true) == nil,
+    "rpc clear final locked depot: removes stale lock block")
+  check(locked_body:find("AdditionalApps:", 1, true) ~= nil
+      and locked_body:find("LogLevel: 2", 1, true) ~= nil,
+    "rpc clear final locked depot: preserves unrelated config")
+
+  local invalid = json.decode(mp.set_dlc_pin_rpc(ctx,
+    json.encode({ appid = 3892270, depot = 3892271, gid = "0" })))
+  eq(invalid.success, false, "rpc set_dlc_pin: rejects zero gid")
   os.remove(cfgpath)
 end
 

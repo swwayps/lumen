@@ -101,6 +101,17 @@ function harness() {
 }
 
 async function main() {
+  const updatesSource = fs.readFileSync(
+    path.join(__dirname, "..", "lua", "menu", "07-updates-tab.js"), "utf8");
+  for (const fn of ["ClearDlcPin", "SetDlcPin", "ClearGamePin", "SetGamePin"]) {
+    const start = updatesSource.indexOf(`call("${fn}"`);
+    assert(start !== -1, `${fn} call must exist`);
+    const success = updatesSource.indexOf(".then(function", start);
+    const validation = updatesSource.indexOf(".then(parseRpc)", start);
+    assert(validation !== -1 && validation < success,
+      `${fn} must validate the RPC result before changing UI state`);
+  }
+
   const h = harness();
   let pins = 0;
   h.run(250900, function () {
