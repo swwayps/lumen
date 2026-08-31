@@ -117,6 +117,65 @@ local SAMPLE = {
   { title = "Friends",         url = "https://steamcommunity.com/chat",      webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/E" },
 }
 
+-- Opening a menu/modal must follow the surface that is actually composited on
+-- top. A Store/Community target may stay alive after navigation, so its URL is
+-- not proof that it is visible. The probe and the call are one CDP evaluation
+-- to avoid a hide/show race between two commands.
+do
+  assert_true(type(injector.fire_visible_webview) == "function",
+    "injector exposes the visible-webview relay for testing")
+
+  local seen = {}
+  local fired, uncertain = injector.fire_visible_webview(
+    SAMPLE, 8080, "window.__lumenOpenOverlay&&window.__lumenOpenOverlay()",
+    function(port, ws, expr, timeout)
+      seen[#seen + 1] = { port = port, ws = ws, expr = expr, timeout = timeout }
+      if ws:sub(-1) == "C" then return "hidden" end
+      if ws:sub(-1) == "D" then return "fired" end
+      return "hidden"
+    end)
+  assert_true(fired and uncertain == nil,
+    "a hidden Store target is skipped and the visible Community target is used")
+  assert_true(#seen == 2
+      and seen[1].ws:sub(-1) == "C"
+      and seen[2].ws:sub(-1) == "D",
+    "only Store/Community targets are probed, in target-list order")
+  assert_true(seen[1].port == 8080 and seen[1].timeout <= 0.5
+      and seen[1].expr:find("document.visibilityState", 1, true)
+      and seen[1].expr:find("document.hidden", 1, true)
+      and seen[1].expr:find("__lumenOpenOverlay", 1, true),
+    "the bounded atomic expression checks visibility and calls the requested helper")
+
+  local hidden_fired, hidden_uncertain = injector.fire_visible_webview({ SAMPLE[3] },
+    8080, "window.__lumenOpenOverlay&&window.__lumenOpenOverlay()",
+    function() return "hidden" end)
+  assert_true(not hidden_fired and hidden_uncertain == nil,
+    "an explicitly hidden webview allows the caller to fall back to the shell")
+
+  local failed_fired, failed_reason = injector.fire_visible_webview({ SAMPLE[3] },
+    8080, "window.__lumenOpenOverlay&&window.__lumenOpenOverlay()",
+    function() return nil, "timeout" end)
+  assert_true(not failed_fired and failed_reason == "timeout",
+    "a failed visibility probe is distinguishable from a hidden webview")
+
+  local unready_fired, unready_reason = injector.fire_visible_webview({ SAMPLE[3] },
+    8080, "window.__lumenOpenOverlay&&window.__lumenOpenOverlay()",
+    function() return "unready" end)
+  assert_true(not unready_fired and unready_reason == "unready",
+    "a visible webview without the menu bundle does not fall through behind it")
+
+  local spoof_probed = false
+  local spoof_fired, spoof_reason = injector.fire_visible_webview({{
+      url = "https://store.steampowered.com.evil.test/",
+      webSocketDebuggerUrl = "ws://localhost:8080/devtools/page/spoof",
+    }}, 8080, "window.__lumenOpenOverlay&&window.__lumenOpenOverlay()", function()
+      spoof_probed = true
+      return "fired"
+    end)
+  assert_true(not spoof_probed and not spoof_fired and spoof_reason == nil,
+    "lookalike Store hosts are not treated as Steam webviews")
+end
+
 -- select_targets(targetsList, wantedTitles, wantedOrigins) is the pure
 -- matcher the injector uses to decide which CEF targets receive the assets.
 assert_true(type(cdp.select_targets) == "function",

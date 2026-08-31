@@ -291,6 +291,53 @@ function injector.is_menu_shell_title(title)
   return title == "Steam" or title == "Steam Big Picture Mode"
 end
 
+local function menu_webview_url(url)
+  local host = tostring(url or ""):match("^https://([^/%?#]+)")
+  if not host then return false end
+  host = host:lower()
+  return host == "store.steampowered.com" or host == "steamcommunity.com"
+end
+
+-- A Store/Community target can remain alive while hidden, so its URL alone is
+-- not enough to decide where a modal belongs. Probe visibility and execute the
+-- requested menu helper in the SAME Runtime.evaluate call: this removes the
+-- race where the page changes between a visibility check and the actual open.
+--
+-- Returns true when the webview handled the call. A nil reason means every
+-- matching webview explicitly reported itself hidden, so the caller may safely
+-- fall back to the shell. Any reason is ambiguous and must fail closed instead
+-- of drawing a split overlay behind a possibly-visible Store page.
+function injector.fire_visible_webview(targets, port, expr, evaluate)
+  if type(port) ~= "number" then return false, "unverified port" end
+  if type(evaluate) ~= "function" then return false, "no evaluator" end
+
+  local first_fn, second_fn = tostring(expr or ""):match(
+    "^window%.([%w_]+)&&window%.([%w_]+)%(")
+  if not first_fn or first_fn ~= second_fn then
+    return false, "invalid menu expression"
+  end
+
+  local wrapped = "(function(){"
+    .. "if(document.visibilityState!=='visible'||document.hidden===true)return'hidden';"
+    .. "var f=window[" .. json.encode(first_fn) .. "];"
+    .. "if(typeof f!=='function')return'unready';"
+    .. "try{" .. expr .. ";return'fired';}catch(e){return'error';}})()"
+  local uncertain
+
+  for _, target in ipairs(targets or {}) do
+    local ws = target.webSocketDebuggerUrl
+    if ws and menu_webview_url(target.url) then
+      local ok, status, err = pcall(evaluate, port, ws, wrapped, 0.5)
+      if not ok then err, status = status, nil end
+      if status == "fired" then return true end
+      if status ~= "hidden" and not uncertain then
+        uncertain = tostring(err or status or "no result")
+      end
+    end
+  end
+  return false, uncertain
+end
+
 function injector.gamepad_toast_expr(event)
   return "(function(){try{return typeof window.__lumenGamepadToast==='function'" ..
     "&&window.__lumenGamepadToast(" .. json.encode(event or {}) ..
@@ -1451,51 +1498,47 @@ function State:open_external_url(url)
   end
   return false
 end
---   * a store/community web view is the CURRENT page -> render in that web view
---     ONLY (it composites above the shell, so the shell's own overlay would be
---     hidden behind it / misaligned -> the "split" bug);
---   * otherwise (library/home and other shell pages) the content lives in the
---     shell window itself -> render there.
--- "Current" is decided from a fresh /json target list, NOT from self.conns: a
--- web view conn can linger briefly after you navigate away (its socket isn't
--- detected closed yet), and targeting that stale conn would render into a dead
--- view. Close always goes to every context so nothing is left open behind.
--- Evaluate `expr` in whichever context is currently ON TOP: the active store/
--- community web view if one is the current page (it composites above the shell,
--- so a shell-only render would sit hidden behind it), else the shell window.
--- "Current" is decided from a fresh /json target list, NOT from self.conns (a
--- web-view conn can linger briefly after navigating away). Shared by the
--- overlay open and the slsteam-moon warning so both surface where the user can
--- see them.
+
+-- Evaluate `expr` on the surface actually composited on top. A fresh target
+-- list finds Store/Community candidates, then fire_visible_webview verifies
+-- document visibility and performs the call atomically. Hidden stale targets
+-- are ignored; only when all candidates are hidden do we use the shell.
+-- Shared by every menu modal so sibling relays cannot regress independently.
 function State:_fire_on_top(expr)
   local function fire(conn)
     if conn and conn.sock then
       send_cmd(conn.sock, conn.session, "Runtime.evaluate",
         { expression = expr, returnByValue = true })
+      return true
     end
+    return false
   end
 
-  local live_webview_ws = {}
-  local targets = list_all_targets()
-  if targets then
-    for _, t in ipairs(targets) do
-      local u = t.url or ""
-      if u:find("store.steampowered.com", 1, true) or u:find("steamcommunity.com", 1, true) then
-        live_webview_ws[t.webSocketDebuggerUrl] = true
-      end
-    end
+  local targets, target_err = list_all_targets()
+  if not targets then
+    log("top-surface lookup failed: " .. tostring(target_err))
+    return false
   end
 
-  local fired = false
+  local port = verified_cef_port()
+  if not port then return false end
+  local fired, uncertain = injector.fire_visible_webview(
+    targets, port, expr, cdpreq.evaluate)
+  if fired then return true end
+  if uncertain then
+    log("top-surface relay deferred: " .. uncertain)
+    return false
+  end
+
+  -- Every Store/Community target explicitly reported itself hidden: the
+  -- content is in the shell window itself.
+  local shell_fired = false
   for _, conn in pairs(self.conns) do
-    if conn.sock and live_webview_ws[conn.ws_url] then fire(conn); fired = true end
-  end
-  if not fired then
-    -- No active web view: the content is in the shell window itself.
-    for _, conn in pairs(self.conns) do
-      if conn.sock and injector.is_menu_shell_title(conn.title) then fire(conn) end
+    if conn.sock and injector.is_menu_shell_title(conn.title) then
+      shell_fired = fire(conn) or shell_fired
     end
   end
+  return shell_fired
 end
 
 function State:broadcast_overlay(open)
