@@ -13,7 +13,9 @@ const cloud = fs.readFileSync(path.join(menuDir, "12-cloud-tab.js"), "utf8");
 const source = core + "\n" + cloud +
   "\nwindow.__testCloudMerge = typeof cloudMergeApps === \"function\" ? cloudMergeApps : null;" +
   "\nwindow.__testCloudAppsResolved = typeof cloudAppsResolved === \"function\" ? cloudAppsResolved : null;" +
-  "\nwindow.__testCloudRemoteSet = typeof cloudRemoteSet === \"function\" ? cloudRemoteSet : null;\n})();";
+  "\nwindow.__testCloudRemoteSet = typeof cloudRemoteSet === \"function\" ? cloudRemoteSet : null;" +
+  "\nwindow.__testCloudBadgeKind = typeof cloudBadgeKind === \"function\" ? cloudBadgeKind : null;" +
+  "\nwindow.__testCloudComparableDraft = typeof cloudComparableDraft === \"function\" ? cloudComparableDraft : null;\n})();";
 
 const context = {
   window: {},
@@ -82,6 +84,28 @@ const presenceOnly = merge([], presence, 7)[0];
 eq(presenceOnly.statsKnown, false,
   "presence-only remote game never presents made-up zero statistics");
 
+const badgeKind = context.window.__testCloudBadgeKind;
+if (typeof badgeKind !== "function") {
+  console.error("FAIL: cloudBadgeKind is not defined");
+  process.exit(1);
+}
+eq(badgeKind({ local: true, remote: true }, true), "both",
+  "presence in both locations is not mislabeled as synced");
+eq(badgeKind({ local: true, remote: false }, true), "local", "local badge kind");
+eq(badgeKind({ local: false, remote: true }, true), "cloud", "cloud badge kind");
+
+const comparableDraft = context.window.__testCloudComparableDraft;
+if (typeof comparableDraft !== "function") {
+  console.error("FAIL: cloudComparableDraft is not defined");
+  process.exit(1);
+}
+const pendingAuth = comparableDraft({
+  provider: "local", sync_activity: false, sign_out_provider: null,
+  settings: { local: {} }, authenticated: { gdrive: true, onedrive: false },
+});
+eq(pendingAuth.authenticated.gdrive, true,
+  "a staged OAuth login remains part of the draft even after selecting another provider");
+
 if (!cloud.includes("local_appids")) {
   console.error("FAIL: remote RPC payload does not include local_appids");
   process.exit(1);
@@ -94,9 +118,24 @@ if (!cloud.includes("if (!cloudAppsResolved(currentAccount, remoteSets))")) {
   console.error("FAIL: cloud games draw does not retain loading until remote state is complete");
   process.exit(1);
 }
-if (!cloud.includes("localStorage.getItem") || !cloud.includes("localStorage.setItem")) {
-  console.error("FAIL: remote app presence is not cached for the next settings open");
+if (cloud.includes("cloudReadRemoteCache") || cloud.includes("cloudWriteRemoteCache")) {
+  console.error("FAIL: stale remote presence cache still influences cloud status");
   process.exit(1);
+}
+if (cloud.includes('loc = app.local && app.remote ? "synced"')) {
+  console.error("FAIL: both-presence still maps to Synced");
+  process.exit(1);
+}
+if (!cloud.includes("appsRemoteFail")) {
+  console.error("FAIL: remote provider errors are not rendered explicitly");
+  process.exit(1);
+}
+for (const field of ["endpoint", "sign_payload", "allow_insecure_http",
+                     "allow_insecure_tls", "ca_cert_path"]) {
+  if (!cloud.includes(field)) {
+    console.error(`FAIL: provider settings omit upstream field ${field}`);
+    process.exit(1);
+  }
 }
 
 console.log("test_cloud_remote_ui: ALL PASS");

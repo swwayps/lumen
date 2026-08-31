@@ -553,6 +553,14 @@
       "color:#b8bcbf;}",
       ".lumen-cloud-btn.secondary:hover{background:rgba(255,255,255,.08);color:#fff;",
       "border-color:rgba(255,255,255,.3);}",
+      ".lumen-cloud-btn.busy{opacity:.6;pointer-events:none;}",
+      ".lumen-cloud-actions{position:sticky;bottom:0;z-index:4;display:flex;align-items:center;",
+      "justify-content:space-between;gap:12px;margin:18px -8px 0;padding:12px;",
+      "background:#23262d;border:1px solid rgba(255,255,255,.12);border-radius:5px;",
+      "box-shadow:0 -8px 24px rgba(0,0,0,.25);color:#dcdedf;font-size:13px;font-weight:600;}",
+      ".lumen-cloud-action-buttons{display:flex;gap:8px;align-items:center;}",
+      ".lumen-cloud-pending{margin-top:8px;padding:16px;background:rgba(26,159,255,.08);",
+      "border:1px solid rgba(26,159,255,.25);border-radius:4px;display:flex;flex-direction:column;gap:5px;}",
       // Cloud Saves games list: search + cards (reuses .lumen-game* look) + a
       // per-game location/sync badge with a leading status dot.
       ".lumen-cloud-search{width:100%;box-sizing:border-box;background:#1a1d23;color:#dcdedf;",
@@ -574,7 +582,7 @@
       "flex:0 0 auto;}",
       ".lumen-capsule-badge.b-local{background:#2b303a;color:#9fb3c4;}",
       ".lumen-capsule-badge.b-cloud{background:#14283a;color:#66c0f4;}",
-      ".lumen-capsule-badge.b-synced{background:#15321f;color:#6fd08c;}",
+      ".lumen-capsule-badge.b-both{background:#1e2933;color:#9bc8e4;}",
       ".lumen-capsule-badge.b-checking{background:#2b303a;color:#8f98a0;}",
       ".lumen-capsule-badge .lumen-spin{width:11px;height:11px;border-width:2px;}",
       // loading spinner (version line + state pill while versions are fetched)

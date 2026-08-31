@@ -239,16 +239,64 @@ do
   eq(p2.authenticated, true, "authenticated after exchange")
   ok(sent_response, "browser got the closing response")
 
-  -- token file + provider written
+  -- OAuth completion is staged: the live hook/config stays untouched until the
+  -- user chooses Save and restart.
+  ok(io.open(dir .. "/tokens_gdrive.json", "rb") == nil,
+    "OAuth does not replace the live token before apply")
+  eq(cs.read_config(cfgp).provider, "local", "provider stays local before apply")
+  eq(p2.pending, true, "completed OAuth reports a pending credential")
+
+  local restarted = false
+  local applied = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "gdrive",
+    sync_activity = true,
+  }, {
+    restart = function()
+      local live = cs.read_config(cfgp)
+      eq(live.provider, "gdrive", "config is committed before restart")
+      restarted = true
+      return true
+    end,
+  }))
+  eq(applied.success, true, "apply and restart succeeds")
+  eq(restarted, true, "restart is requested once")
+
   local tf = io.open(dir .. "/tokens_gdrive.json", "rb")
-  ok(tf ~= nil, "token file written")
+  ok(tf ~= nil, "staged token is promoted on apply")
   local tok = json.decode(tf:read("*a")); tf:close()
   eq(tok.refresh_token, "RT", "refresh token stored")
   eq(tok.access_token, "AT", "access token stored")
   eq(tok.expires_at, 1000 + 3600, "expires_at = now + expires_in")
-  eq(cs.read_config(cfgp).provider, "gdrive", "provider set after auth")
+  local applied_cfg = cs.read_config(cfgp)
+  eq(applied_cfg.provider, "gdrive", "provider set on apply")
+  eq(applied_cfg.sync_achievements, true, "unified activity enables achievements")
+  eq(applied_cfg.sync_playtime, true, "unified activity enables playtime")
+  eq(applied_cfg.stats_sync_enabled, true, "unified activity enables the upstream master gate")
+  eq(applied_cfg.token_paths.gdrive, dir .. "/tokens_gdrive.json",
+    "apply registers the exact provider token path")
+
+  -- A failed restart rolls every committed file back, including sign-out.
+  local rolled = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "local",
+    sync_activity = false,
+    sign_out_provider = "gdrive",
+  }, { restart = function() return false, "restart failed" end }))
+  eq(rolled.success, false, "restart failure is reported")
+  eq(cs.read_config(cfgp).provider, "gdrive", "provider rolls back after restart failure")
+  eq(cs.read_config(cfgp).sync_achievements, true, "activity rolls back after restart failure")
+  ok(io.open(dir .. "/tokens_gdrive.json", "rb") ~= nil,
+    "signed-out token is restored after restart failure")
 
   os.execute("rm -rf '" .. dir .. "'")
+end
+
+
+-- The upstream master gate participates in the unified activity setting.
+do
+  local p = tmpfile('{"provider":"local","stats_sync_enabled":false,"sync_achievements":true,"sync_playtime":true}')
+  local st = json.decode(cs.status(p))
+  eq(st.sync_activity, false, "disabled upstream master gate reports activity off")
+  os.remove(p)
 end
 
 -- ── auth_poll reports timeout past the deadline ─────────────────────────────
@@ -311,6 +359,144 @@ do
   eq(json.decode(res4).success, true, "SignOut via dispatch succeeds")
   eq(cs.read_config(p).provider, "local", "SignOut reset provider via dispatch")
   os.remove(p)
+end
+
+-- ── non-OAuth providers: folder, R2 and generic S3 ─────────────────────────
+do
+  local dir = os.tmpname(); os.remove(dir); assert(os.execute("mkdir -p '" .. dir .. "'"))
+  local cfgp = dir .. "/config.json"
+  local f = assert(io.open(cfgp, "wb")); f:write('{"provider":"local","keep":17}'); f:close()
+
+  local probed
+  local r2 = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "r2",
+    sync_activity = true,
+    credentials = {
+      account_id = "acct",
+      access_key_id = "access",
+      secret_access_key = "secret",
+      bucket = "bucket",
+      key_prefix = "cloudredirect/",
+    },
+  }, {
+    probe = function(provider) probed = provider; return true end,
+    restart = function() return true end,
+  }))
+  eq(r2.success, true, "R2 draft applies")
+  eq(probed, "r2", "R2 bucket is probed before restart")
+  local r2path = dir .. "/r2_credentials.json"
+  local rf = assert(io.open(r2path, "rb")); local r2cred = json.decode(rf:read("*a")); rf:close()
+  eq(r2cred.account_id, "acct", "R2 account stored")
+  eq(r2cred.secret_access_key, "secret", "R2 secret stored")
+  local r2cfg = cs.read_config(cfgp)
+  eq(r2cfg.provider, "r2", "R2 becomes active")
+  eq(r2cfg.token_paths.r2, r2path, "R2 credential path registered")
+  eq(r2cfg.keep, 17, "unrelated config survives R2 apply")
+  local r2status = json.decode(cs.status(cfgp))
+  eq(r2status.authenticated, true, "valid R2 credentials are recognized")
+  eq(r2status.providers.r2.settings.account_id, "acct", "R2 non-secret fields are exposed")
+  eq(r2status.providers.r2.settings.has_secret, true, "R2 reports a stored secret")
+  eq(r2status.providers.r2.settings.secret_access_key, nil, "R2 secret is never exposed")
+
+  local before = assert(io.open(cfgp, "rb")):read("*a")
+  local s3fail = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "s3",
+    sync_activity = false,
+    credentials = {
+      access_key_id = "s3-access",
+      secret_access_key = "s3-secret",
+      bucket = "saves",
+      endpoint = "minio.example.test:9000",
+      region = "us-east-1",
+    },
+  }, {
+    probe = function(provider) eq(provider, "s3", "S3 probe provider"); return false, "unreachable" end,
+    restart = function() error("must not restart after a failed probe") end,
+  }))
+  eq(s3fail.success, false, "failed S3 connection prevents apply")
+  eq(assert(io.open(cfgp, "rb")):read("*a"), before, "failed S3 probe rolls config back")
+  ok(io.open(dir .. "/s3_credentials.json", "rb") == nil,
+    "failed S3 probe removes the new credential file")
+
+  local s3ok = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "s3",
+    sync_activity = false,
+    credentials = {
+      access_key_id = "s3-access", secret_access_key = "s3-secret",
+      bucket = "saves", endpoint = "minio.example.test:9000", region = "us-east-1",
+      key_prefix = "cloudredirect/", sign_payload = true,
+      allow_insecure_http = true, allow_insecure_tls = true,
+      ca_cert_path = "/etc/ssl/private-minio-ca.pem",
+    },
+  }, {
+    probe = function(provider) eq(provider, "s3", "S3 success probe provider"); return true end,
+    restart = function() return true end,
+  }))
+  eq(s3ok.success, true, "S3-compatible draft applies")
+  local sf = assert(io.open(dir .. "/s3_credentials.json", "rb"))
+  local s3cred = json.decode(sf:read("*a")); sf:close()
+  eq(s3cred.endpoint, "minio.example.test:9000", "S3 endpoint is stored")
+  eq(s3cred.sign_payload, true, "S3 payload signing option is stored")
+  eq(s3cred.allow_insecure_http, true, "S3 HTTP transport option is stored")
+  eq(s3cred.allow_insecure_tls, true, "S3 TLS transport option is stored")
+  eq(s3cred.ca_cert_path, "/etc/ssl/private-minio-ca.pem", "S3 CA path is stored")
+  local s3status = json.decode(cs.status(cfgp)).providers.s3.settings
+  eq(s3status.has_secret, true, "S3 status reports its stored secret without exposing it")
+  eq(s3status.secret_access_key, nil, "S3 status never exposes the secret")
+  eq(s3status.sign_payload, true, "S3 status returns advanced signing state")
+
+  local folder = dir .. "/network-saves"
+  local folder_result = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "folder",
+    sync_activity = false,
+    sync_folder_path = folder,
+  }, { restart = function() return true end }))
+  eq(folder_result.success, true, "custom folder applies")
+  local folder_cfg = cs.read_config(cfgp)
+  eq(folder_cfg.provider, "folder", "custom folder becomes active")
+  eq(folder_cfg.sync_folder_path, folder, "custom folder path is persisted")
+  eq(json.decode(cs.status(cfgp)).authenticated, true, "custom folder is ready")
+
+  -- Provider switches can copy the old provider before committing the restart.
+  local migrated
+  local switched = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "r2",
+    sync_activity = false,
+    credentials = {
+      account_id = "acct2", access_key_id = "access2",
+      secret_access_key = "secret2", bucket = "bucket2",
+    },
+    migrate = true,
+  }, {
+    probe = function() return true end,
+    migrate = function(source, destination)
+      migrated = source .. ":" .. destination
+      return true, { migrated = 4, skipped = 2, failed = 0 }
+    end,
+    restart = function() return true end,
+  }))
+  eq(switched.success, true, "provider switch with migration applies")
+  eq(migrated, "folder:r2", "migration runs from the applied provider to the draft provider")
+
+  local stable = assert(io.open(cfgp, "rb")):read("*a")
+  local migration_failed = json.decode(cs.apply_and_restart(cfgp, {
+    provider = "s3",
+    sync_activity = false,
+    credentials = {
+      access_key_id = "sa", secret_access_key = "ss", bucket = "sb",
+      endpoint = "s3.example", region = "us-east-1",
+    },
+    migrate = true,
+  }, {
+    probe = function() return true end,
+    migrate = function() return false, "one file failed" end,
+    restart = function() error("must not restart after migration failure") end,
+  }))
+  eq(migration_failed.success, false, "migration failure prevents provider switch")
+  eq(assert(io.open(cfgp, "rb")):read("*a"), stable,
+    "migration failure restores the applied configuration")
+
+  os.execute("rm -rf '" .. dir .. "'")
 end
 
 -- ── remote apps: provider/auth gating + structured cloud statistics ─────────
@@ -409,6 +595,61 @@ do
   eq(presence_account, 1052518393, "registered RPC forwards the selected account")
   eq(json.decode(raw).appids[2], 311690, "registered RPC returns remote appids")
   ok(json.decode(raw).apps == nil, "registered RPC omits expensive remote metadata")
+  os.execute("rm -rf '" .. dir .. "'")
+end
+
+-- ── remote listing for R2/S3 and custom-folder providers ────────────────────
+do
+  local dir = os.tmpname(); os.remove(dir); assert(os.execute("mkdir -p '" .. dir .. "'"))
+  local cli = dir .. "/cloud_redirect_cli"
+  local cf = assert(io.open(cli, "wb")); cf:write("stub"); cf:close()
+  local cfgp = dir .. "/config.json"
+  local cred = dir .. "/r2_credentials.json"
+  local cr = assert(io.open(cred, "wb"))
+  cr:write('{"account_id":"a","access_key_id":"k","secret_access_key":"s","bucket":"b"}')
+  cr:close()
+  local cfg = assert(io.open(cfgp, "wb"))
+  cfg:write(json.encode({ provider = "r2", token_paths = { r2 = cred } }))
+  cfg:close()
+
+  local command
+  local r2 = json.decode(cs.remote_appids(cfgp, 77, {
+    cli_path = cli,
+    exec = function(cmd)
+      command = cmd
+      return '{"success":true,"app_ids":["250900","311690"]}\n[INFO] Shutdown complete', true
+    end,
+  }))
+  eq(r2.success, true, "R2 remote listing succeeds through the official CLI")
+  eq(r2.appids[1], 250900, "R2 app ids are normalized to numbers")
+  ok(command:find("list%-remote%-app%-ids") ~= nil and command:find("r2", 1, true) ~= nil,
+    "R2 listing invokes the provider-aware CLI command")
+
+  local failed = json.decode(cs.remote_appids(cfgp, 77, {
+    cli_path = cli,
+    exec = function() return '{"success":false,"error":"offline"}', false end,
+  }))
+  eq(failed.success, false, "R2 listing failure remains an error")
+  eq(failed.error, "offline", "R2 listing exposes the provider error")
+
+  local probe_ok = cs.probe_provider(cfgp, "r2", {
+    cli_path = cli,
+    exec = function()
+      return '[INFO] starting\n{"success":true,"app_ids":[]}\n[INFO] Shutdown complete', true
+    end,
+  })
+  eq(probe_ok, true, "provider probe ignores log lines after the JSON response")
+
+  local folder = dir .. "/folder"
+  assert(os.execute("mkdir -p '" .. folder .. "/77/42' '" .. folder .. "/77/99'"))
+  local ff = assert(io.open(cfgp, "wb"))
+  ff:write(json.encode({ provider = "folder", sync_folder_path = folder }))
+  ff:close()
+  local listed = json.decode(cs.remote_appids(cfgp, 77))
+  eq(listed.success, true, "custom folder listing succeeds")
+  eq(listed.appids[1], 42, "custom folder first app found")
+  eq(listed.appids[2], 99, "custom folder second app found")
+
   os.execute("rm -rf '" .. dir .. "'")
 end
 

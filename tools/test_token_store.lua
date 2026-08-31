@@ -31,15 +31,45 @@ end
 do
   -- A relative override stays inside the config directory.
   local p = cloudsettings.token_path_for(config_path, "gdrive",
-    { token_path = "mytokens.json" })
+    { provider = "gdrive", token_path = "mytokens.json" })
   ok(p == base .. "/mytokens.json", "a relative override is honoured")
+end
+
+do
+  -- Per-provider paths take precedence, matching CloudRedirect's resolver.
+  local p = cloudsettings.token_path_for(config_path, "gdrive", {
+    token_path = "legacy.json",
+    token_paths = { gdrive = "providers/google.json" },
+  })
+  ok(p == base .. "/providers/google.json",
+    "token_paths[provider] wins over the legacy token_path")
+end
+
+do
+  local p = cloudsettings.token_path_for(config_path, "gdrive", {
+    token_paths = { gdrive = base .. "/providers/google.json" },
+  })
+  ok(p == base .. "/providers/google.json",
+    "an absolute registered path inside the config directory is honoured")
+  local escaped = cloudsettings.token_path_for(config_path, "gdrive", {
+    token_paths = { gdrive = base .. "/../escape.json" },
+  })
+  ok(escaped == base .. "/tokens_gdrive.json",
+    "an absolute registered path cannot traverse out of the config directory")
+end
+
+do
+  ok(cloudsettings.token_path_for(config_path, "r2", {}) ==
+      base .. "/r2_credentials.json", "R2 uses the upstream credential filename")
+  ok(cloudsettings.token_path_for(config_path, "s3", {}) ==
+      base .. "/s3_credentials.json", "S3 uses the upstream credential filename")
 end
 
 do
   -- An absolute override is refused: it let config.json choose any path on the
   -- filesystem for a file holding a long-lived credential.
   local p = cloudsettings.token_path_for(config_path, "gdrive",
-    { token_path = "/tmp/anywhere.json" })
+    { provider = "gdrive", token_path = "/tmp/anywhere.json" })
   ok(p == base .. "/tokens_gdrive.json", "an absolute override is ignored")
 end
 
@@ -48,7 +78,7 @@ do
   for _, bad in ipairs({ "../escape.json", "a/../../escape.json",
                          "./../escape.json", "sub/../../escape.json" }) do
     local p = cloudsettings.token_path_for(config_path, "gdrive",
-      { token_path = bad })
+      { provider = "gdrive", token_path = bad })
     ok(p == base .. "/tokens_gdrive.json",
       "a traversing override is ignored: " .. bad)
   end
@@ -57,14 +87,14 @@ end
 do
   -- A path with a separator but no traversal is allowed (a subdirectory is fine).
   local p = cloudsettings.token_path_for(config_path, "gdrive",
-    { token_path = "sub/tokens.json" })
+    { provider = "gdrive", token_path = "sub/tokens.json" })
   ok(p == base .. "/sub/tokens.json", "a subdirectory override is honoured")
 end
 
 do
   for _, bad in ipairs({ "tok\0ens.json", "tok\nens.json", "" }) do
     local p = cloudsettings.token_path_for(config_path, "gdrive",
-      { token_path = bad })
+      { provider = "gdrive", token_path = bad })
     ok(p == base .. "/tokens_gdrive.json",
       "a malformed override is ignored")
   end

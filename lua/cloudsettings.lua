@@ -1,12 +1,9 @@
 -- cloudsettings: backend for the Lumen settings-menu "Cloud Saves" tab.
 --
--- Sets up CloudRedirect cloud saves WITHOUT the flatpak. The hook (the 32-bit
--- cloud_redirect.so) and the old flatpak GUI coordinate only through files under
--- ~/.config/CloudRedirect/ (config.json + tokens_<provider>.json); the flatpak
--- reimplemented OAuth + file writes in C#. We do the same in Lua here, talking
--- to the SAME file contract — no hook rebuild, no --cli, no flatpak, no
--- background process. The OAuth2 authorization-code + PKCE(S256) flow is ported
--- from CloudRedirect's ui/Services/OAuthService.cs.
+-- Sets up CloudRedirect cloud saves without the flatpak. OAuth and config IO
+-- stay in Lua; provider-generic bucket probes, remote listing and migration use
+-- CloudRedirect's own small CLI beside the 32-bit hook so S3/R2/folder semantics
+-- remain identical to upstream.
 --
 -- All the exposed RPCs return JSON strings (the callServerMethod convention the
 -- polyfill resolves). Pure helpers (pkce/url/body/callback parsing) and the
@@ -17,6 +14,8 @@ local nonce = require("nonce")
 local privatefs = require("privatefs")
 local sha256 = require("sha256")
 local b64 = require("b64")
+local lfs = require("lfs")
+local utils = require("utils")
 
 local cloudsettings = {}
 
@@ -49,6 +48,7 @@ local PROVIDERS = {
 }
 
 local CALLBACK_TIMEOUT = 5 * 60 -- 5 minutes, matching OAuthService.cs
+local staged_tokens = {}
 
 -- ── pure helpers ────────────────────────────────────────────────────────────
 
@@ -178,8 +178,41 @@ local function set_config_key(path, key, value)
   return write_config(path, cfg)
 end
 
--- Resolve the token file for a provider: a config.token_path override relative to
--- the config dir, else tokens_<provider>.json beside config.
+local function read_file_snapshot(path)
+  local f = io.open(path, "rb")
+  if not f then return { path = path, exists = false } end
+  local data = f:read("*a") or ""
+  f:close()
+  return { path = path, exists = true, data = data }
+end
+
+local function restore_file_snapshot(snap, private)
+  if not snap or not snap.path then return end
+  if not snap.exists then os.remove(snap.path); return end
+  if private then
+    local ok, value = pcall(json.decode, snap.data or "")
+    if ok and type(value) == "table" then
+      cloudsettings.write_token_file(snap.path, value)
+      return
+    end
+  end
+  local tmp = snap.path .. ".rollback.lumen"
+  local f = io.open(tmp, "wb")
+  if not f then return end
+  f:write(snap.data or "")
+  f:close()
+  os.rename(tmp, snap.path)
+end
+
+local function default_credential_name(provider)
+  if provider == "r2" then return "r2_credentials.json" end
+  if provider == "s3" then return "s3_credentials.json" end
+  return "tokens_" .. tostring(provider) .. ".json"
+end
+
+-- Resolve the credential file exactly like CloudRedirect: a per-provider entry
+-- wins, then the active provider's legacy token_path, then the provider's
+-- convention filename. Relative paths are anchored beside config.json.
 --
 -- The override used to accept an ABSOLUTE path, so whoever could write
 -- config.json chose where a long-lived refresh token was stored. It is now
@@ -188,16 +221,26 @@ end
 function cloudsettings.token_path_for(config_path, provider, cfg)
   cfg = cfg or {}
   local dir = dirname(config_path)
-  local tp = cfg.token_path
-  if type(tp) == "string" and tp ~= "" and tp:sub(1, 1) ~= "/"
-      and not tp:find("[%z\n\r]") then
-    local contained = true
-    for seg in tp:gmatch("[^/]+") do
-      if seg == ".." then contained = false; break end
-    end
-    if contained then return dir .. "/" .. tp end
+  local tp
+  if type(cfg.token_paths) == "table" then tp = cfg.token_paths[provider] end
+  if (type(tp) ~= "string" or tp == "") and cfg.provider == provider then
+    tp = cfg.token_path
   end
-  return dir .. "/tokens_" .. provider .. ".json"
+  local function has_parent_segment(path)
+    for seg in path:gmatch("[^/]+") do
+      if seg == ".." then return true end
+    end
+    return false
+  end
+  if type(tp) == "string" and tp ~= "" and tp:sub(1, 1) ~= "/"
+      and not tp:find("[%z\n\r]") and not has_parent_segment(tp) then
+    return dir .. "/" .. tp
+  end
+  if type(tp) == "string" and tp:sub(1, #dir + 1) == dir .. "/"
+      and not tp:find("[%z\n\r]") and not has_parent_segment(tp) then
+    return tp
+  end
+  return dir .. "/" .. default_credential_name(provider)
 end
 -- Local alias for the call sites below (kept for readability).
 local token_path_for = cloudsettings.token_path_for
@@ -251,6 +294,73 @@ local function has_refresh_token(token_file)
   return type(tok.refresh_token) == "string" and tok.refresh_token ~= ""
 end
 
+local function read_json_file(path)
+  local f = io.open(path, "rb")
+  if not f then return nil end
+  local raw = f:read("*a") or ""
+  f:close()
+  local ok, value = pcall(json.decode, raw)
+  if not ok or type(value) ~= "table" then return nil end
+  return value
+end
+
+local function nonempty(value)
+  return type(value) == "string" and value:match("%S") ~= nil
+end
+
+local function static_credentials_valid(provider, value)
+  if type(value) ~= "table" then return false end
+  if provider == "r2" then
+    return nonempty(value.account_id) and nonempty(value.access_key_id)
+      and nonempty(value.secret_access_key) and nonempty(value.bucket)
+  end
+  if provider == "s3" then
+    return nonempty(value.access_key_id) and nonempty(value.secret_access_key)
+      and nonempty(value.bucket) and nonempty(value.endpoint)
+      and nonempty(value.region)
+  end
+  return false
+end
+
+local function sanitized_credentials(provider, value)
+  value = type(value) == "table" and value or {}
+  local out = { has_secret = nonempty(value.secret_access_key) }
+  local keys = provider == "r2"
+    and { "account_id", "access_key_id", "bucket", "key_prefix", "endpoint" }
+    or { "access_key_id", "bucket", "endpoint", "region", "key_prefix",
+         "sign_payload", "allow_insecure_http", "allow_insecure_tls", "ca_cert_path" }
+  for _, key in ipairs(keys) do out[key] = value[key] end
+  if provider == "s3" then
+    out.sign_payload = value.sign_payload == true
+    out.allow_insecure_http = value.allow_insecure_http == true
+    out.allow_insecure_tls = value.allow_insecure_tls == true
+  end
+  return out
+end
+
+local function provider_status(config_path, provider, cfg)
+  if provider == "local" then return { authenticated = false } end
+  if provider == "folder" then
+    local path = cfg.sync_folder_path
+    return {
+      authenticated = nonempty(path) and lfs.attributes(path, "mode") == "directory",
+      settings = { sync_folder_path = path or "" },
+    }
+  end
+  local path = token_path_for(config_path, provider, cfg)
+  if provider == "gdrive" or provider == "onedrive" then
+    return {
+      authenticated = has_refresh_token(path),
+      pending = staged_tokens[provider] ~= nil,
+    }
+  end
+  local value = read_json_file(path)
+  return {
+    authenticated = static_credentials_valid(provider, value),
+    settings = sanitized_credentials(provider, value),
+  }
+end
+
 -- ── RPC-facing operations (return JSON strings) ─────────────────────────────
 
 -- status(config_path) -> {success, provider, authenticated, sync_achievements,
@@ -260,16 +370,20 @@ end
 function cloudsettings.status(config_path)
   local cfg = cloudsettings.read_config(config_path)
   local provider = cfg.provider or "local"
-  local authed = false
-  if provider == "gdrive" or provider == "onedrive" then
-    authed = has_refresh_token(token_path_for(config_path, provider, cfg))
+  local providers = {}
+  for _, name in ipairs({ "local", "folder", "gdrive", "onedrive", "r2", "s3" }) do
+    providers[name] = provider_status(config_path, name, cfg)
   end
+  local authed = providers[provider] and providers[provider].authenticated == true
   return json.encode({
     success = true,
     provider = provider,
     authenticated = authed,
     sync_achievements = cfg.sync_achievements == true,
     sync_playtime = cfg.sync_playtime == true,
+    sync_activity = cfg.stats_sync_enabled ~= false and
+      cfg.sync_achievements == true and cfg.sync_playtime == true,
+    providers = providers,
   })
 end
 
@@ -305,6 +419,282 @@ function cloudsettings.sign_out(config_path, provider)
   local ok, err = set_config_key(config_path, "provider", "local")
   if not ok then return json.encode({ success = false, error = tostring(err) }) end
   return json.encode({ success = true, authenticated = false })
+end
+
+-- Apply the complete Cloud Saves draft and immediately request a Steam
+-- restart. Until this function runs, OAuth and UI edits are only staged. If the
+-- restart helper refuses to launch, every changed file is restored.
+function cloudsettings.apply_and_restart(config_path, request, deps)
+  request = request or {}
+  deps = deps or {}
+  local provider = request.provider
+  local supported = {
+    ["local"] = true, folder = true, gdrive = true, onedrive = true,
+    r2 = true, s3 = true,
+  }
+  if not supported[provider] then
+    return json.encode({ success = false, error = "unknown provider" })
+  end
+
+  local cfg = cloudsettings.read_config(config_path)
+  local source_provider = cfg.provider or "local"
+  local snapshots = { { value = read_file_snapshot(config_path), private = false } }
+  local final_token
+  local staged_token
+  if provider == "gdrive" or provider == "onedrive" then
+    final_token = token_path_for(config_path, provider, cfg)
+    staged_token = staged_tokens[provider]
+    if not staged_token and not has_refresh_token(final_token) then
+      return json.encode({ success = false, error = "provider not authenticated" })
+    end
+    snapshots[#snapshots + 1] = {
+      value = read_file_snapshot(final_token), private = true,
+    }
+  elseif provider == "r2" or provider == "s3" then
+    final_token = token_path_for(config_path, provider, cfg)
+    snapshots[#snapshots + 1] = {
+      value = read_file_snapshot(final_token), private = true,
+    }
+  end
+
+  local sign_out = request.sign_out_provider
+  local sign_out_path
+  if supported[sign_out] and sign_out ~= "local" and sign_out ~= "folder" then
+    sign_out_path = token_path_for(config_path, sign_out, cfg)
+    if sign_out_path ~= final_token then
+      snapshots[#snapshots + 1] = {
+        value = read_file_snapshot(sign_out_path), private = true,
+      }
+    end
+  end
+
+  local function rollback()
+    for i = #snapshots, 1, -1 do
+      restore_file_snapshot(snapshots[i].value, snapshots[i].private)
+    end
+  end
+
+  if staged_token then
+    local f = io.open(staged_token, "rb")
+    local raw = f and (f:read("*a") or "") or ""
+    if f then f:close() end
+    local ok_token, token = pcall(json.decode, raw)
+    if not ok_token or type(token) ~= "table" or
+        not cloudsettings.write_token_file(final_token, token) then
+      rollback()
+      return json.encode({ success = false, error = "cannot promote token" })
+    end
+  end
+
+
+  if provider == "r2" or provider == "s3" then
+    local supplied = type(request.credentials) == "table" and request.credentials or {}
+    local previous = read_json_file(final_token) or {}
+    local credentials = {}
+    for key, value in pairs(supplied) do credentials[key] = value end
+    if not nonempty(credentials.secret_access_key) then
+      credentials.secret_access_key = previous.secret_access_key
+    end
+    if not static_credentials_valid(provider, credentials) then
+      rollback()
+      return json.encode({ success = false, error = "missing provider credentials" })
+    end
+    if not cloudsettings.write_token_file(final_token, credentials) then
+      rollback()
+      return json.encode({ success = false, error = "cannot write provider credentials" })
+    end
+  elseif provider == "folder" then
+    local folder = request.sync_folder_path
+    if not nonempty(folder) or folder:sub(1, 1) ~= "/" or folder:find("[%z\n\r]") then
+      rollback()
+      return json.encode({ success = false, error = "invalid sync folder" })
+    end
+    local quoted = "'" .. folder:gsub("'", "'\\''") .. "'"
+    if os.execute("mkdir -p -- " .. quoted .. " 2>/dev/null") ~= true then
+      rollback()
+      return json.encode({ success = false, error = "cannot create sync folder" })
+    end
+    cfg.sync_folder_path = folder
+  end
+
+  if sign_out_path then os.remove(sign_out_path) end
+
+  cfg.provider = provider
+  cfg.stats_sync_enabled = request.sync_activity == true
+  cfg.sync_achievements = request.sync_activity == true
+  cfg.sync_playtime = request.sync_activity == true
+  if final_token then
+    if type(cfg.token_paths) ~= "table" then cfg.token_paths = {} end
+    cfg.token_paths[provider] = final_token
+  end
+  if request.migrate == true and source_provider ~= provider and
+      source_provider ~= "local" and provider ~= "local" and
+      source_provider ~= "folder" then
+    if type(cfg.token_paths) ~= "table" then cfg.token_paths = {} end
+    cfg.token_paths[source_provider] = token_path_for(config_path, source_provider,
+      cloudsettings.read_config(config_path))
+  end
+  local ok_write, write_err = write_config(config_path, cfg)
+  if not ok_write then
+    rollback()
+    return json.encode({ success = false, error = tostring(write_err) })
+  end
+
+
+  if provider == "r2" or provider == "s3" then
+    local probe = deps.probe
+    local probe_ok, probe_err
+    if type(probe) == "function" then
+      local called, a, b = pcall(probe, provider, config_path)
+      probe_ok, probe_err = called and a == true, called and b or a
+    else
+      probe_ok, probe_err = cloudsettings.probe_provider(config_path, provider)
+    end
+    if not probe_ok then
+      rollback()
+      return json.encode({ success = false, error = tostring(probe_err or "connection test failed") })
+    end
+  end
+
+
+  if request.migrate == true and source_provider ~= provider and
+      source_provider ~= "local" and provider ~= "local" then
+    local migrate = deps.migrate
+    local migrated, migration_result
+    if type(migrate) == "function" then
+      local called, a, b = pcall(migrate, source_provider, provider, config_path)
+      migrated, migration_result = called and a == true, called and b or a
+    else
+      migrated, migration_result = cloudsettings.migrate_providers(
+        config_path, source_provider, provider)
+    end
+    if not migrated then
+      rollback()
+      return json.encode({ success = false,
+        error = tostring(migration_result or "migration failed") })
+    end
+  end
+
+  local restart = deps.restart
+  local ok_restart, restart_err = false, "restart unavailable"
+  if type(restart) == "function" then
+    local called, a, b = pcall(restart)
+    if called then ok_restart, restart_err = a == true, b
+    else restart_err = a end
+  end
+  if not ok_restart then
+    rollback()
+    return json.encode({ success = false, error = tostring(restart_err or "restart failed") })
+  end
+
+  for staged_provider, path in pairs(staged_tokens) do
+    os.remove(path)
+    staged_tokens[staged_provider] = nil
+  end
+  return json.encode({ success = true, restarting = true })
+end
+
+local function shell_quote(value)
+  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+function cloudsettings.default_cli_path()
+  local home = os.getenv("HOME") or ""
+  if home == "" then return nil end
+  return home .. "/.local/share/CloudRedirect/cloud_redirect_cli"
+end
+
+local function last_json_object(output)
+  local result
+  for line in tostring(output or ""):gmatch("[^\n]+") do
+    local ok, value = pcall(json.decode, line)
+    if ok and type(value) == "table" then result = value end
+  end
+  return result
+end
+
+function cloudsettings.probe_provider(config_path, provider, deps)
+  deps = deps or {}
+  local cli = deps.cli_path or cloudsettings.default_cli_path()
+  if not cli or lfs.attributes(cli, "mode") ~= "file" then
+    return false, "CloudRedirect CLI not installed"
+  end
+  local exec = deps.exec or utils.exec
+  local out, command_ok = exec(shell_quote(cli) .. " list-remote-app-ids " ..
+    shell_quote(provider) .. " 0 2>/dev/null")
+  local result = last_json_object(out)
+  if not command_ok or type(result) ~= "table" or result.success ~= true then
+    return false, type(result) == "table" and result.error or "connection test failed"
+  end
+  return true
+end
+
+function cloudsettings.migrate_providers(config_path, source, destination, deps)
+  deps = deps or {}
+  -- `migrate` streams JSON lines rather than one response object. Run it once
+  -- directly and inspect the authoritative final `complete` record.
+  local cli = deps.cli_path or cloudsettings.default_cli_path()
+  if not cli or lfs.attributes(cli, "mode") ~= "file" then
+    return false, "CloudRedirect CLI not installed"
+  end
+  local exec = deps.exec or utils.exec
+  local out = exec(shell_quote(cli) .. " migrate " .. shell_quote(source) .. " " ..
+    shell_quote(destination) .. " 2>/dev/null")
+  local complete, err
+  for line in tostring(out or ""):gmatch("[^\n]+") do
+    local ok, value = pcall(json.decode, line)
+    if ok and type(value) == "table" and value.type == "complete" then complete = value end
+    if ok and type(value) == "table" and value.type == "error" and not value.file then
+      err = value.message or err
+    end
+  end
+  if not complete or tonumber(complete.failed) ~= 0 then
+    return false, err or (complete and "migration completed with errors" or "migration failed")
+  end
+  return true, complete
+end
+
+local function cli_json(command, args, deps)
+  deps = deps or {}
+  local cli = deps.cli_path or cloudsettings.default_cli_path()
+  if not cli or lfs.attributes(cli, "mode") ~= "file" then
+    return nil, "CloudRedirect CLI not installed"
+  end
+  local parts = { shell_quote(cli), command }
+  for _, value in ipairs(args or {}) do parts[#parts + 1] = shell_quote(value) end
+  local exec = deps.exec or utils.exec
+  local out, command_ok = exec(table.concat(parts, " ") .. " 2>/dev/null")
+  local result = last_json_object(out)
+  if type(result) ~= "table" then
+    return nil, command_ok and "invalid CLI response" or "CloudRedirect CLI failed"
+  end
+  if result.success ~= true then return nil, result.error or "provider operation failed" end
+  return result
+end
+
+local function folder_appids(root, account)
+  local path = tostring(root or "") .. "/" .. tostring(account)
+  if lfs.attributes(path, "mode") ~= "directory" then return {} end
+  local ids = {}
+  local ok = pcall(function()
+    for name in lfs.dir(path) do
+      local id = math.tointeger(tonumber(name))
+      if id and id > 0 and lfs.attributes(path .. "/" .. name, "mode") == "directory" then
+        ids[#ids + 1] = id
+      end
+    end
+  end)
+  if not ok then return nil, "cannot list sync folder" end
+  table.sort(ids)
+  return ids
+end
+
+function cloudsettings.discard_pending()
+  for provider, path in pairs(staged_tokens) do
+    os.remove(path)
+    staged_tokens[provider] = nil
+  end
+  return json.encode({ success = true })
 end
 
 -- ── OAuth flow (authorize / auth_poll) ──────────────────────────────────────
@@ -468,7 +858,8 @@ function cloudsettings.auth_poll(deps)
 
   local expires_in = tonumber(tok.expires_in) or 3600
   local token_file = token_path_for(config_path, provider, cloudsettings.read_config(config_path))
-  if not cloudsettings.write_token_file(token_file, {
+  local staged_file = token_file .. ".lumen-pending"
+  if not cloudsettings.write_token_file(staged_file, {
         access_token = tok.access_token or "",
         refresh_token = tok.refresh_token,
         expires_at = d.now() + expires_in,
@@ -476,8 +867,8 @@ function cloudsettings.auth_poll(deps)
     return finish({ status = "error", error = "cannot write token" })
   end
 
-  set_config_key(config_path, "provider", provider)
-  return finish({ status = "done", authenticated = true })
+  staged_tokens[provider] = staged_file
+  return finish({ status = "done", authenticated = true, pending = true })
 end
 
 -- ── local apps list (Cloud Saves games list, phase 1) ──────────────────────
@@ -705,6 +1096,24 @@ end
 function cloudsettings.remote_appids(config_path, account, deps)
   local cfg = cloudsettings.read_config(config_path)
   local provider = cfg.provider or "local"
+  local acct = math.tointeger(tonumber(account))
+  if not acct then return json.encode({ success = false, error = "bad account" }) end
+  if provider == "folder" then
+    local appids, err = folder_appids(cfg.sync_folder_path, acct)
+    if not appids then return json.encode({ success = false, error = err, provider = provider }) end
+    return json.encode({ success = true, appids = json.array(appids), provider = provider })
+  end
+  if provider == "r2" or provider == "s3" then
+    local result, err = cli_json("list-remote-app-ids", { provider, tostring(acct) }, deps)
+    if not result then return json.encode({ success = false, error = err, provider = provider }) end
+    local appids = {}
+    for _, raw in ipairs(type(result.app_ids) == "table" and result.app_ids or {}) do
+      local id = math.tointeger(tonumber(raw))
+      if id and id > 0 then appids[#appids + 1] = id end
+    end
+    table.sort(appids)
+    return json.encode({ success = true, appids = json.array(appids), provider = provider })
+  end
   if provider ~= "gdrive" and provider ~= "onedrive" then
     return json.encode({ success = true, appids = json.array({}),
                          provider = provider, reason = "local" })
@@ -713,8 +1122,6 @@ function cloudsettings.remote_appids(config_path, account, deps)
   if not rt then
     return json.encode({ success = false, reason = "not_authenticated", provider = provider })
   end
-  local acct = math.tointeger(tonumber(account))
-  if not acct then return json.encode({ success = false, error = "bad account" }) end
   local ok, cr = pcall(require, "cloudremote")
   if not ok then return json.encode({ success = false, error = "cloudremote unavailable" }) end
   local appids, err = cr.list_appids(provider, rt, acct, deps)
@@ -737,7 +1144,7 @@ local function decode_arg(json_str)
   return {}
 end
 
--- register(registry[, config_path]): install the six Cloud Saves RPCs. The path
+-- register(registry[, config_path]): install the Cloud Saves RPCs. The path
 -- is injectable for host tests; nil uses the real ~/.config/CloudRedirect path.
 function cloudsettings.register(registry, config_path)
   local cp = config_path or cloudsettings.default_config_path()
@@ -755,6 +1162,26 @@ function cloudsettings.register(registry, config_path)
   registry.LumenCloudAuthPoll = function() return cloudsettings.auth_poll() end
   registry.LumenCloudSignOut = function(j)
     return cloudsettings.sign_out(cp, decode_arg(j).provider)
+  end
+  registry.LumenCloudApplyAndRestart = function(j)
+    local request = decode_arg(j)
+    return cloudsettings.apply_and_restart(cp, request, {
+      restart = function()
+        if type(registry.RestartSteam) ~= "function" then
+          return false, "restart unavailable"
+        end
+        local ok, raw = pcall(registry.RestartSteam)
+        if not ok then return false, raw end
+        local parsed_ok, result = pcall(json.decode, raw)
+        if not parsed_ok or type(result) ~= "table" or result.success ~= true then
+          return false, type(result) == "table" and result.error or "restart failed"
+        end
+        return true
+      end,
+    })
+  end
+  registry.LumenCloudDiscardPending = function()
+    return cloudsettings.discard_pending()
   end
   registry.LumenCloudOpenUrl = function(j)
     return cloudsettings.open_url(decode_arg(j).url)

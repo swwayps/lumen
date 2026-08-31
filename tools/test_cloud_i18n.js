@@ -26,28 +26,24 @@ const okmsg = (m) => console.log("ok   " + m);
   else okmsg("12-cloud-tab.js: no hardcoded English cloud strings");
   // Must define renderCloud and call the backend RPCs.
   if (!/function\s+renderCloud/.test(src)) fail("12-cloud-tab.js missing renderCloud()");
-  for (const rpc of ["LumenCloudStatus", "LumenCloudSetProvider", "LumenCloudSetToggle",
-                     "LumenCloudAuthorize", "LumenCloudAuthPoll", "LumenCloudSignOut",
-                     "LumenCloudApps", "LumenCloudRemoteApps"]) {
+  for (const rpc of ["LumenCloudStatus", "LumenCloudApplyAndRestart",
+                     "LumenCloudDiscardPending", "LumenCloudAuthorize",
+                     "LumenCloudAuthPoll", "LumenCloudApps", "LumenCloudRemoteApps"]) {
     if (!src.includes(rpc)) fail("12-cloud-tab.js does not call " + rpc);
   }
   if (fails === 0) okmsg("12-cloud-tab.js defines renderCloud and calls all LumenCloud* RPCs");
 
-  // A stats toggle must persist UNCONDITIONALLY (so turning it back off in the
-  // same session writes false, never a stuck "on"); the restart modal only
-  // shows on enable and must NOT gate the write. Assert the SetToggle write
-  // comes before the `if (on)` modal in cloudStatsToggle.
-  const m = src.match(/function\s+cloudStatsToggle[\s\S]*?\n {2}}/);
-  if (!m) fail("12-cloud-tab.js missing cloudStatsToggle()");
-  else {
-    const fn = m[0];
-    const writeAt = fn.indexOf("LumenCloudSetToggle");
-    const ifOnAt = fn.search(/if\s*\(\s*on\s*\)/);
-    if (writeAt === -1) fail("cloudStatsToggle doesn't write the toggle");
-    else if (ifOnAt !== -1 && writeAt > ifOnAt)
-      fail("cloudStatsToggle gates the write behind `if (on)` — disable wouldn't persist");
-    else okmsg("cloudStatsToggle persists unconditionally; modal only on enable");
+  if (src.includes("LumenCloudSetProvider") || src.includes("LumenCloudSetToggle"))
+    fail("Cloud draft still writes provider/toggles immediately");
+  else okmsg("Cloud provider and activity edits stay in a draft until apply");
+  for (const provider of ["folder", "r2", "s3"]) {
+    if (!src.includes('"' + provider + '"')) fail("missing provider option: " + provider);
   }
+  if (!src.includes("saveRestart") || !src.includes("cancelChanges"))
+    fail("Cloud draft action bar is missing");
+  if (!src.includes("cloudConfirmMigration") || !src.includes("migrateAndContinue") ||
+      !src.includes("switchWithoutMigration") || !src.includes("request.migrate"))
+    fail("provider switch does not offer the migration decision at apply time");
 }
 
 // 2) The overlay must wire in the cloud tab (a selectTab("cloud") branch and a
@@ -117,8 +113,19 @@ if (!ptCloud) {
   const empty = Object.keys(ptCloud).filter((k) => typeof ptCloud[k] !== "string" || !ptCloud[k].length);
   if (empty.length) fail("pt-BR cloud empty/non-string keys: " + empty.join(", "));
 
-  for (const k of ["title", "signIn", "signOut", "syncAchievements", "provider"]) {
+  for (const k of ["title", "signIn", "signOut", "syncActivity", "provider"]) {
     if (ptCloud[k] === enCloud[k]) fail(`pt-BR cloud.${k} is still English: ${JSON.stringify(ptCloud[k])}`);
+  }
+  if (ptCloud.syncActivity !== "Sincronizar conquistas e tempo de jogo")
+    fail("pt-BR unified activity label is not the approved copy");
+  if (ptCloud.syncActivityDesc !== "Sincroniza as conquistas nativas e o tempo de jogo da Steam com o seu provedor de armazenamento.")
+    fail("pt-BR unified activity description is not the approved copy");
+  for (const key of ["migrationTitle", "migrateAndContinue", "switchWithoutMigration"]) {
+    if (!ptCloud[key]) fail("pt-BR cloud missing migration copy: " + key);
+  }
+  for (const key of ["r2Endpoint", "s3SignPayload", "s3AllowInsecureHttp",
+                     "s3AllowInsecureTls", "s3CaCertPath"]) {
+    if (!ptCloud[key]) fail("pt-BR cloud missing S3/R2 setting copy: " + key);
   }
 }
 

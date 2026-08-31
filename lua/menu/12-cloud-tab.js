@@ -2,15 +2,15 @@
 // LM-FRAGMENT source fragment of lumen_menu, assembled in order into ONE IIFE
 // LM-FRAGMENT by boot.lua (read_menu_js). Not a standalone module. See 01-core.js.
 //
-// Sets up CloudRedirect cloud saves without the flatpak: pick a provider, sign
-// in (OAuth in the backend, browser-driven), toggle the two stats switches. All
-// state lives in the hook's ~/.config/CloudRedirect file contract; this tab
-// only drives the LumenCloud* backend RPCs. No folder picker (the local path is
-// fixed) and no schema toggle (it's a technical prerequisite, kept on).
+// Cloud settings use a draft: provider, credentials and activity sync are
+// committed together only by "Save and restart". The running hook therefore
+// never disagrees with a half-applied settings screen.
 
   // Poll handle for an in-flight sign-in, so switching tabs / re-rendering
   // cancels it instead of leaking a timer.
   var _cloudAuthTimer = null;
+  var _cloudApplied = null;
+  var _cloudDraft = null;
   function cloudStopAuthPoll() {
     if (_cloudAuthTimer) { clearTimeout(_cloudAuthTimer); _cloudAuthTimer = null; }
   }
@@ -46,29 +46,235 @@
     return row;
   }
 
-  // Persist a stats toggle. The write is UNCONDITIONAL for both on and off, so
-  // turning it back off in the same session truly writes false (never a stuck
-  // "on" state) — the modal is purely informational and doesn't gate the write.
-  // On enable we tell the user it only applies after a Steam restart (the hook
-  // reads these flags once at startup).
-  function cloudStatsToggle(S, key, on) {
-    call("LumenCloudSetToggle", { json: JSON.stringify({ key: key, value: on }) })
-      .catch(function () {});
-    if (on) aboutModal(S.syncRestartTitle, S.syncRestartBody, S.syncRestartOk);
+  function cloudClone(value) {
+    return JSON.parse(JSON.stringify(value == null ? {} : value));
   }
 
-  // Draw the tab from a status object {provider, authenticated, sync_*}.
+  function cloudMakeDraft(status) {
+    var providers = status.providers || {};
+    var authenticated = {};
+    var settings = {};
+    ["local", "folder", "gdrive", "onedrive", "r2", "s3"].forEach(function (name) {
+      authenticated[name] = !!(providers[name] && providers[name].authenticated);
+      settings[name] = cloudClone(providers[name] && providers[name].settings || {});
+    });
+    return {
+      provider: status.provider || "local",
+      sync_activity: status.sync_activity === true,
+      authenticated: authenticated,
+      settings: settings,
+      sign_out_provider: null,
+    };
+  }
+
+  function cloudComparableDraft(draft) {
+    var provider = draft.provider;
+    return {
+      provider: provider,
+      sync_activity: !!draft.sync_activity,
+      sign_out_provider: draft.sign_out_provider || null,
+      settings: (provider === "folder" || provider === "r2" || provider === "s3")
+        ? draft.settings[provider] || {} : {},
+      authenticated: {
+        gdrive: !!draft.authenticated.gdrive,
+        onedrive: !!draft.authenticated.onedrive,
+      },
+    };
+  }
+
+  function cloudDraftDirty() {
+    if (!_cloudDraft || !_cloudApplied) return false;
+    return JSON.stringify(cloudComparableDraft(_cloudDraft)) !==
+      JSON.stringify(cloudComparableDraft(cloudMakeDraft(_cloudApplied)));
+  }
+
+  function cloudDraftRequest() {
+    var provider = _cloudDraft.provider;
+    var request = {
+      provider: provider,
+      sync_activity: !!_cloudDraft.sync_activity,
+    };
+    if (_cloudDraft.sign_out_provider) request.sign_out_provider = _cloudDraft.sign_out_provider;
+    if (provider === "folder") {
+      request.sync_folder_path = (_cloudDraft.settings.folder || {}).sync_folder_path || "";
+    } else if (provider === "r2" || provider === "s3") {
+      request.credentials = cloudClone(_cloudDraft.settings[provider] || {});
+      delete request.credentials.has_secret;
+    }
+    return request;
+  }
+
+  function cloudTextRow(labelText, value, placeholder, secret, onInput) {
+    var row = document.createElement("div"); row.className = "lumen-row";
+    var wrap = document.createElement("div"); wrap.className = "lumen-lblwrap";
+    var label = document.createElement("div"); label.className = "lbl"; label.textContent = labelText;
+    wrap.appendChild(label); row.appendChild(wrap);
+    var ctrl = document.createElement("span"); ctrl.className = "lumen-ctrl";
+    var input = document.createElement("input"); input.type = secret ? "password" : "text";
+    input.value = value || ""; input.placeholder = placeholder || "";
+    input.addEventListener("input", function () { onInput(input.value); cloudRefreshDraftActions(); });
+    ctrl.appendChild(input); row.appendChild(ctrl); return row;
+  }
+
+  var _cloudActions = null;
+  function cloudRefreshDraftActions() {
+    if (!_cloudActions) return;
+    _cloudActions.style.display = cloudDraftDirty() ? "flex" : "none";
+  }
+
+  function cloudPendingApps(body, S) {
+    var title = document.createElement("div"); title.className = "lumen-sub-title";
+    title.style.marginTop = "24px"; title.textContent = S.appsTitle; body.appendChild(title);
+    var note = document.createElement("div"); note.className = "lumen-cloud-pending";
+    var strong = document.createElement("div"); strong.className = "lbl"; strong.textContent = S.pendingTitle;
+    var desc = document.createElement("div"); desc.className = "lumen-desc"; desc.textContent = S.pendingBody;
+    note.appendChild(strong); note.appendChild(desc); body.appendChild(note);
+  }
+
+  function cloudRenderActions(body, S) {
+    var actions = document.createElement("div"); actions.className = "lumen-cloud-actions";
+    var label = document.createElement("span"); label.textContent = S.pendingTitle;
+    var buttons = document.createElement("span"); buttons.className = "lumen-cloud-action-buttons";
+    var cancel = document.createElement("div"); cancel.className = "lumen-cloud-btn secondary";
+    cancel.textContent = S.cancelChanges;
+    cancel.addEventListener("click", function () {
+      call("LumenCloudDiscardPending", {}).catch(function () {}).then(function () {
+        _cloudDraft = null; return cloudReload(body);
+      });
+    });
+    var save = document.createElement("div"); save.className = "lumen-cloud-btn";
+    save.textContent = S.saveRestart;
+    save.addEventListener("click", function () {
+      if (save.classList.contains("busy")) return;
+      var source = _cloudApplied && _cloudApplied.provider || "local";
+      if (source !== "local" && _cloudDraft.provider !== "local" &&
+          source !== _cloudDraft.provider) {
+        cloudConfirmMigration(body, S, save, source, _cloudDraft.provider);
+      } else {
+        cloudApplyDraft(body, S, save, false);
+      }
+    });
+    buttons.appendChild(cancel); buttons.appendChild(save);
+    actions.appendChild(label); actions.appendChild(buttons); body.appendChild(actions);
+    _cloudActions = actions; cloudRefreshDraftActions();
+  }
+
+  function cloudProviderLabel(S, provider) {
+    return {
+      local: S.providerNone, folder: S.providerFolder, gdrive: S.providerGdrive,
+      onedrive: S.providerOnedrive, r2: S.providerR2, s3: S.providerS3,
+    }[provider] || provider;
+  }
+
+  function cloudApplyDraft(body, S, save, migrate) {
+    save.classList.add("busy"); save.textContent = migrate ? S.migrating : S.applyBusy;
+    var progress = migrate ? showProgress(S.migrationTitle) : null;
+    if (progress) progress.update(S.migrating);
+    var request = cloudDraftRequest();
+    request.migrate = migrate === true;
+    return call("LumenCloudApplyAndRestart", { json: JSON.stringify(request) })
+      .then(function (raw) {
+        var result; try { result = JSON.parse(raw); } catch (e) {}
+        if (!result || !result.success) throw new Error(result && result.error || "apply failed");
+      })
+      .catch(function (e) {
+        if (progress) progress.close();
+        save.classList.remove("busy"); save.textContent = S.saveRestart;
+        aboutModal(S.pendingTitle, S.saveFail + (e && e.message ? e.message : e), S.syncRestartOk);
+      });
+  }
+
+  function cloudConfirmMigration(body, S, save, source, destination) {
+    injectStyles();
+    var back = document.createElement("div"); back.className = "lumen-modal-back";
+    var card = document.createElement("div"); card.className = "lumen-modal";
+    var title = document.createElement("div"); title.className = "mt";
+    title.textContent = S.migrationTitle;
+    var copy = document.createElement("div"); copy.className = "mb";
+    copy.textContent = S.migrationBody
+      .replace("{source}", cloudProviderLabel(S, source))
+      .replace("{destination}", cloudProviderLabel(S, destination));
+    var row = document.createElement("div"); row.className = "mrow";
+    var close = function () { if (back.parentNode) back.remove(); };
+    var cancel = document.createElement("button"); cancel.className = "lumen-mbtn";
+    cancel.textContent = S.cancelChanges; cancel.addEventListener("click", close);
+    var skip = document.createElement("button"); skip.className = "lumen-mbtn";
+    skip.textContent = S.switchWithoutMigration;
+    skip.addEventListener("click", function () { close(); cloudApplyDraft(body, S, save, false); });
+    var move = document.createElement("button"); move.className = "lumen-mbtn primary";
+    move.textContent = S.migrateAndContinue;
+    move.addEventListener("click", function () { close(); cloudApplyDraft(body, S, save, true); });
+    row.appendChild(cancel); row.appendChild(skip); row.appendChild(move);
+    card.appendChild(title); card.appendChild(copy); card.appendChild(row); back.appendChild(card);
+    (document.body || document.documentElement).appendChild(back);
+  }
+
+  function cloudRenderProviderSettings(body, S, provider) {
+    var current = _cloudDraft.settings[provider] || (_cloudDraft.settings[provider] = {});
+    if (provider === "folder") {
+      body.appendChild(cloudTextRow(S.folderPath, current.sync_folder_path,
+        "/mnt/cloud-saves", false, function (value) { current.sync_folder_path = value; }));
+      var hint = document.createElement("div"); hint.className = "lumen-desc";
+      hint.textContent = S.folderPathHint; body.appendChild(hint); return;
+    }
+    if (provider !== "r2" && provider !== "s3") return;
+    if (provider === "r2") {
+      body.appendChild(cloudTextRow(S.accountId, current.account_id, "", false,
+        function (value) { current.account_id = value; }));
+    }
+    if (provider === "s3") {
+      body.appendChild(cloudTextRow(S.endpoint, current.endpoint, "s3.example.com", false,
+        function (value) { current.endpoint = value; }));
+      body.appendChild(cloudTextRow(S.region, current.region, "us-east-1", false,
+        function (value) { current.region = value; }));
+    }
+    body.appendChild(cloudTextRow(S.accessKey, current.access_key_id, "", false,
+      function (value) { current.access_key_id = value; }));
+    body.appendChild(cloudTextRow(S.secretKey, "", current.has_secret ? S.secretStored : "", true,
+      function (value) { current.secret_access_key = value; }));
+    body.appendChild(cloudTextRow(S.bucket, current.bucket, "", false,
+      function (value) { current.bucket = value; }));
+    body.appendChild(cloudTextRow(S.keyPrefix, current.key_prefix, "cloudredirect/", false,
+      function (value) { current.key_prefix = value; }));
+    if (provider === "r2") {
+      body.appendChild(cloudTextRow(S.r2Endpoint, current.endpoint,
+        "<account>.r2.cloudflarestorage.com", false,
+        function (value) { current.endpoint = value; }));
+      return;
+    }
+    var advanced = document.createElement("div"); advanced.className = "lumen-sub-title";
+    advanced.style.marginTop = "20px"; advanced.textContent = S.advancedSettings;
+    body.appendChild(advanced);
+    body.appendChild(cloudToggleRow(S.s3SignPayload, S.s3SignPayloadDesc,
+      current.sign_payload === true, function (on) {
+        current.sign_payload = on; cloudRefreshDraftActions();
+      }));
+    body.appendChild(cloudToggleRow(S.s3AllowInsecureHttp, S.s3AllowInsecureHttpDesc,
+      current.allow_insecure_http === true, function (on) {
+        current.allow_insecure_http = on; cloudRefreshDraftActions();
+      }));
+    body.appendChild(cloudToggleRow(S.s3AllowInsecureTls, S.s3AllowInsecureTlsDesc,
+      current.allow_insecure_tls === true, function (on) {
+        current.allow_insecure_tls = on; cloudRefreshDraftActions();
+      }));
+    body.appendChild(cloudTextRow(S.s3CaCertPath, current.ca_cert_path,
+      "/path/to/ca.pem", false, function (value) { current.ca_cert_path = value; }));
+  }
+
+  // Draw the tab from the applied status plus the in-memory draft.
   function cloudRender(body, S, status) {
     cloudStopAuthPoll();
     body.textContent = "";
+    _cloudApplied = status;
+    if (!_cloudDraft) _cloudDraft = cloudMakeDraft(status);
 
     var note = document.createElement("div");
     note.className = "lumen-note";
     note.textContent = S.intro;
     body.appendChild(note);
 
-    var provider = status.provider || "local";
-    var signedIn = !!status.authenticated;
+    var provider = _cloudDraft.provider;
+    var signedIn = !!_cloudDraft.authenticated[provider];
 
     // ── provider select ──────────────────────────────────────────────────
     var prow = document.createElement("div");
@@ -83,7 +289,9 @@
     var pctrl = document.createElement("span");
     pctrl.className = "lumen-ctrl";
     var sel = document.createElement("select");
-    [["local", S.providerNone], ["gdrive", S.providerGdrive], ["onedrive", S.providerOnedrive]]
+    [["local", S.providerNone], ["folder", S.providerFolder],
+     ["gdrive", S.providerGdrive], ["onedrive", S.providerOnedrive],
+     ["r2", S.providerR2], ["s3", S.providerS3]]
       .forEach(function (opt) {
         var o = document.createElement("option");
         o.value = opt[0];
@@ -92,14 +300,14 @@
         sel.appendChild(o);
       });
     sel.addEventListener("change", function () {
-      var np = sel.value;
-      call("LumenCloudSetProvider", { json: JSON.stringify({ provider: np }) })
-        .then(function (res) {
-          var r; try { r = JSON.parse(res); } catch (e) {}
-          if (!r || !r.success) throw new Error((r && r.error) || "save failed");
-          cloudReload(body); // re-fetch status so the sign-in section updates
-        })
-        .catch(function (e) { cloudShowError(body, S.saveFail + (e && e.message ? e.message : e)); });
+      if (_cloudDraft.sign_out_provider) {
+        var signedOut = _cloudDraft.sign_out_provider;
+        var appliedProvider = _cloudApplied.providers && _cloudApplied.providers[signedOut];
+        _cloudDraft.authenticated[signedOut] = !!(appliedProvider && appliedProvider.authenticated);
+      }
+      _cloudDraft.provider = sel.value;
+      _cloudDraft.sign_out_provider = null;
+      cloudRender(body, S, status);
     });
     pctrl.appendChild(sel);
     prow.appendChild(pctrl);
@@ -112,7 +320,7 @@
       ln.style.marginTop = "8px";
       ln.textContent = S.localNote;
       body.appendChild(ln);
-    } else {
+    } else if (provider === "gdrive" || provider === "onedrive") {
 
     var srow = document.createElement("div");
     srow.className = "lumen-row";
@@ -131,30 +339,36 @@
     btn.textContent = signedIn ? S.signOut : S.signIn;
     btn.addEventListener("click", function () {
       if (signedIn) {
-        call("LumenCloudSignOut", { json: JSON.stringify({ provider: provider }) })
-          .then(function () { cloudReload(body); })
-          .catch(function (e) { cloudShowError(body, S.saveFail + (e && e.message ? e.message : e)); });
+        _cloudDraft.sign_out_provider = provider;
+        _cloudDraft.authenticated[provider] = false;
+        _cloudDraft.provider = "local";
+        cloudRender(body, S, status);
       } else {
-        cloudStartSignIn(body, S, provider, stat);
+        cloudStartSignIn(body, S, provider, stat, status);
       }
     });
     sctrl.appendChild(btn);
     srow.appendChild(sctrl);
     body.appendChild(srow);
 
-    // ── stats toggles (only meaningful once signed in, but shown regardless) ─
+    } else {
+      cloudRenderProviderSettings(body, S, provider);
+    }
+
+    if (provider !== "local") {
     var st = document.createElement("div");
     st.className = "lumen-sub-title";
     st.style.marginTop = "24px";
     st.textContent = S.statsTitle;
     body.appendChild(st);
-    body.appendChild(cloudToggleRow(S.syncAchievements, S.syncAchievementsDesc,
-      status.sync_achievements, function (on) { cloudStatsToggle(S, "sync_achievements", on); }));
-    body.appendChild(cloudToggleRow(S.syncPlaytime, S.syncPlaytimeDesc,
-      status.sync_playtime, function (on) { cloudStatsToggle(S, "sync_playtime", on); }));
+    body.appendChild(cloudToggleRow(S.syncActivity, S.syncActivityDesc,
+      _cloudDraft.sync_activity, function (on) {
+        _cloudDraft.sync_activity = on; cloudRefreshDraftActions();
+      }));
     }
 
-    // ── games list (one card per game with cloud-save data) ──────────────
+    cloudRenderActions(body, S);
+    if (cloudDraftDirty()) { cloudPendingApps(body, S); return Promise.resolve(); }
     return cloudRenderAppsSection(body, S, status);
   }
 
@@ -166,10 +380,14 @@
     return (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + " " + u[i];
   }
 
-  // Location/sync badge for a game card. While the remote listing for the
-  // account is still being fetched (`resolved` false), show a spinner instead
-  // of a premature "On this PC" — the card only settles to local/cloud/synced
-  // once we actually know the remote state.
+  function cloudBadgeKind(app, resolved) {
+    if (!resolved) return "checking";
+    if (app.local && app.remote) return "both";
+    return app.remote ? "cloud" : "local";
+  }
+
+  // Presence in both places is deliberately neutral: it does not prove equal
+  // CNs/manifests and must never be presented as "Synced".
   function cloudBadge(S, app, resolved) {
     var b = document.createElement("span");
     b.className = "lumen-capsule-badge";
@@ -182,8 +400,8 @@
     }
     var dot = document.createElement("span"); dot.className = "d";
     var txt = document.createElement("span");
-    var loc = app.local && app.remote ? "synced" : (app.remote ? "cloud" : "local");
-    if (loc === "synced") { b.classList.add("b-synced"); txt.textContent = S.badgeSynced; }
+    var loc = cloudBadgeKind(app, resolved);
+    if (loc === "both") { b.classList.add("b-both"); txt.textContent = S.badgeBoth; }
     else if (loc === "cloud") { b.classList.add("b-cloud"); txt.textContent = S.badgeCloud; }
     else { b.classList.add("b-local"); txt.textContent = S.badgeLocal; }
     b.appendChild(dot); b.appendChild(txt);
@@ -290,28 +508,6 @@
     return set;
   }
 
-  function cloudRemoteCacheKey(provider, account) {
-    return "lumen-cloud-apps-v1:" + String(provider || "local") + ":" + String(account || "none");
-  }
-
-  function cloudReadRemoteCache(provider, account) {
-    if (provider === "local" || account == null) return null;
-    try {
-      var cached = JSON.parse(localStorage.getItem(cloudRemoteCacheKey(provider, account)) || "null");
-      if (!cached || !Array.isArray(cached.appids)) return null;
-      return cloudRemoteSet(cached.appids);
-    } catch (e) { return null; }
-  }
-
-  function cloudWriteRemoteCache(provider, account, remoteSet) {
-    if (provider === "local" || account == null) return;
-    try {
-      localStorage.setItem(cloudRemoteCacheKey(provider, account), JSON.stringify({
-        savedAt: Date.now(), appids: Object.keys(remoteSet || {}).map(Number),
-      }));
-    } catch (e) {}
-  }
-
   // Render the games list into its own section under the settings. Fetches the
   // unified app list (LumenCloudApps), with a search box that filters by name or
   // app id. Kept in a dedicated container so a re-render doesn't touch the rest.
@@ -353,11 +549,11 @@
     var allApps = [];          // local apps (per Steam account)
     var nameCache = {};
     var remoteSets = {};       // account id -> { appid: {appid,files,size} }
+    var remoteErrors = {};
     var remotePending = {};
     var currentAccount = null; // selected account id (null = show all)
     var provider = status && status.provider || "local";
-    var remoteEnabled = (provider === "gdrive" || provider === "onedrive")
-      && status && status.authenticated === true;
+    var remoteEnabled = provider !== "local" && status && status.authenticated === true;
 
     // Build the merged view for the current account: local apps annotated with
     // whether they also exist remotely, plus remote-only games as extra cards.
@@ -369,6 +565,12 @@
 
     function draw() {
       var q = (search.value || "").trim().toLowerCase();
+      if (currentAccount != null && remoteErrors[currentAccount]) {
+        list.textContent = "";
+        var remoteErr = document.createElement("div"); remoteErr.className = "lumen-err";
+        remoteErr.textContent = S.appsRemoteFail + remoteErrors[currentAccount];
+        list.appendChild(remoteErr); return;
+      }
       // Remote state for the selected account is "resolved" once its fetch has
       // completed (remoteSets[account] set, even to an empty set). Keep the
       // section's loading state until then so the user sees one complete,
@@ -406,9 +608,10 @@
     function ensureRemote(account, refresh) {
       if (account == null) { draw(); return Promise.resolve(); }
       if (!remoteEnabled) {
-        remoteSets[account] = {};
+        if (provider === "local") remoteSets[account] = {};
+        else remoteErrors[account] = S.statusNotSignedIn;
         draw();
-        return Promise.resolve(remoteSets[account]);
+        return Promise.resolve(remoteSets[account] || null);
       }
       if (remotePending[account]) return remotePending[account];
       if (remoteSets[account] && !refresh) { draw(); return Promise.resolve(remoteSets[account]); }
@@ -428,8 +631,8 @@
             records = r.appids;
           }
           var set = cloudRemoteSet(records);
+          delete remoteErrors[account];
           remoteSets[account] = set;
-          cloudWriteRemoteCache(provider, account, set);
           if (typeof fetchAppName === "function") {
             Object.keys(set).forEach(function (rawId) {
               var id = Number(rawId);
@@ -439,10 +642,11 @@
           draw();
           return set;
         })
-        .catch(function () {
-          if (!remoteSets[account]) remoteSets[account] = {};
+        .catch(function (error) {
+          delete remoteSets[account];
+          remoteErrors[account] = error && error.message ? error.message : String(error);
           draw();
-          return remoteSets[account];
+          return null;
         })
         .then(function (set) { remotePending[account] = null; return set; });
       return remotePending[account];
@@ -451,9 +655,6 @@
     search.addEventListener("input", draw);
     acctSel.addEventListener("change", function () {
       currentAccount = Number(acctSel.value);
-      if (!remoteSets[currentAccount]) {
-        remoteSets[currentAccount] = cloudReadRemoteCache(provider, currentAccount);
-      }
       draw();
       ensureRemote(currentAccount, true);
     });
@@ -474,9 +675,6 @@
           });
           acctSel.value = String(currentAccount);
           acctRow.style.display = "";
-        }
-        if (currentAccount != null && remoteEnabled) {
-          remoteSets[currentAccount] = cloudReadRemoteCache(provider, currentAccount);
         }
         draw();
         if (typeof fetchAppName === "function") {
@@ -523,28 +721,34 @@
 
   // Kick off the OAuth flow: authorize, open the browser (focused), then poll
   // until done/timeout/error.
-  function cloudStartSignIn(body, S, provider, statusEl) {
+  function cloudStartSignIn(body, S, provider, statusEl, appliedStatus) {
     statusEl.textContent = S.signingIn;
     call("LumenCloudAuthorize", { json: JSON.stringify({ provider: provider }) })
       .then(function (res) {
         var r; try { r = JSON.parse(res); } catch (e) {}
         if (!r || r.status === "error") throw new Error((r && r.error) || "authorize failed");
         cloudOpenAuthUrl(r.auth_url);
-        cloudPollAuth(body, S, statusEl);
+        cloudPollAuth(body, S, provider, statusEl, appliedStatus);
       })
       .catch(function (e) { statusEl.textContent = S.signInFail + (e && e.message ? e.message : e); });
   }
 
-  function cloudPollAuth(body, S, statusEl) {
+  function cloudPollAuth(body, S, provider, statusEl, appliedStatus) {
     cloudStopAuthPoll();
     _cloudAuthTimer = setTimeout(function () {
       call("LumenCloudAuthPoll", {})
         .then(function (res) {
           var r; try { r = JSON.parse(res); } catch (e) {}
           if (!r) throw new Error("poll failed");
-          if (r.status === "waiting") { cloudPollAuth(body, S, statusEl); return; }
+          if (r.status === "waiting") {
+            cloudPollAuth(body, S, provider, statusEl, appliedStatus); return;
+          }
           cloudStopAuthPoll();
-          if (r.status === "done") { statusEl.textContent = S.signInDone; cloudReload(body); }
+          if (r.status === "done") {
+            _cloudDraft.authenticated[provider] = true;
+            _cloudDraft.sign_out_provider = null;
+            cloudRender(body, S, appliedStatus);
+          }
           else if (r.status === "timeout") { statusEl.textContent = S.signInTimeout; }
           else { statusEl.textContent = S.signInFail + (r.error || r.status); }
         })
