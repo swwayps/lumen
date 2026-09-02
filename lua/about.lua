@@ -27,15 +27,21 @@ local about = {}
 -- read THAT asset's fingerprint, not just the tag).
 about.COMPONENTS = {
   { key = "slsteam_moon", name = "slsteam-moon",    repo = "swwayps/slsteam-moon",
+    mirror_key = "slsteam-moon",
     asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$",
     beta_path = "dist/slsteam-moon-linux.zip" },
   { key = "plugin",       name = "LuaTools plugin", repo = "swwayps/luatools-moon",
+    mirror_key = "plugin",
     asset_pat = "^luatools%-linux%.zip$",
     beta_path = "dist/luatools-linux.zip" },
   { key = "lumen",        name = "Lumen",           repo = "swwayps/lumen",
+    mirror_key = "lumen",
     asset_pat = "^lumen%-linux%.zip$",
     beta_path = "dist/lumen-linux.zip" },
 }
+
+about.MIRROR_MANIFEST_URL =
+  "https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@main/manifest.json"
 
 -- The public one-liner the Update All button runs in a terminal. Raw-branch URL
 -- (not a release asset) so installer fixes go live without a rebuild.
@@ -236,6 +242,39 @@ function about.api_url(repo)
   return "https://api.github.com/repos/" .. repo .. "/releases/latest"
 end
 
+function about.parse_mirror_manifest(body)
+  if type(body) ~= "string" or body == "" then return nil end
+  local ok, data = pcall(json.decode, body)
+  if not ok or type(data) ~= "table" or data.schema ~= 1
+      or type(data.components) ~= "table" then
+    return nil
+  end
+  return data
+end
+
+function about.mirror_info(manifest, key)
+  local v = type(manifest) == "table" and type(manifest.components) == "table"
+    and manifest.components[key] or nil
+  if type(v) ~= "table" or type(v.tag) ~= "string" or v.tag == "" then
+    return nil
+  end
+  return {
+    tag = v.tag,
+    asset_at = (type(v.asset_at) == "string" and v.asset_at ~= "" and v.asset_at) or nil,
+    size = (type(v.size) == "number" and v.size) or nil,
+    id = ((type(v.id) == "number" or type(v.id) == "string") and v.id) or nil,
+  }
+end
+
+function about.fetch_mirror_manifest(http_mod)
+  local r, _ = http_mod.get(about.MIRROR_MANIFEST_URL, {
+    timeout = 6,
+    headers = { ["Accept"] = "application/json", ["User-Agent"] = "lumen" },
+  })
+  if not r or r.status ~= 200 then return nil end
+  return about.parse_mirror_manifest(r.body)
+end
+
 -- GitHub's contents endpoint returns only small metadata and proves both the
 -- beta branch and its expected dist asset exist; it never downloads the ZIP.
 function about.beta_api_url(component)
@@ -321,11 +360,23 @@ function about.get_versions(opts)
   local channels = about.read_channels(
     opts.channels_path or about.channels_path(), opts.read_file)
 
+  local mirror_manifest, mirror_fetched
+  local function stable_info(component)
+    local latest = about.fetch_latest_info(component, http_mod)
+    if latest and latest.id ~= nil then return latest end
+    if not mirror_fetched then
+      mirror_manifest = about.fetch_mirror_manifest(http_mod)
+      mirror_fetched = true
+    end
+    return about.mirror_info(mirror_manifest,
+      component.mirror_key or component.key) or latest
+  end
+
   local out = {}
   for _, c in ipairs(about.COMPONENTS) do
     if include_plugin or c.key ~= "plugin" then
       local inst = about.installed_entry(installed, c.key)
-      local stable_latest = about.fetch_latest_info(c, http_mod)
+      local stable_latest = stable_info(c)
       local beta_latest = about.fetch_beta_info(c, http_mod)
       local beta_available = beta_latest ~= nil
       local channel = channels[c.key] == "beta" and beta_available and "beta" or "stable"
@@ -386,6 +437,7 @@ function about.new_update_probe(opts)
     local ok, handle = pcall(http_mod.start, url, request_opts)
     return { handle = ok and handle or nil, done = not (ok and handle) }
   end
+  probe.mirror = start(about.MIRROR_MANIFEST_URL)
   for _, component in ipairs(about.COMPONENTS) do
     if include_plugin or component.key ~= "plugin" then
       probe.tasks[#probe.tasks + 1] = {
@@ -416,6 +468,8 @@ function about.poll_update_probe(probe)
   end
   if probe.result then return probe.result end
   local pending = false
+  poll_update_slot(probe.http, probe.mirror)
+  if not probe.mirror.done then pending = true end
   for _, task in ipairs(probe.tasks) do
     poll_update_slot(probe.http, task.stable)
     poll_update_slot(probe.http, task.beta)
@@ -424,11 +478,18 @@ function about.poll_update_probe(probe)
   if pending then return { success = true, pending = true, available = false } end
 
   local available = false
+  local mirror_response = probe.mirror.response
+  local mirror_manifest = mirror_response and mirror_response.status == 200
+    and about.parse_mirror_manifest(mirror_response.body) or nil
   for _, task in ipairs(probe.tasks) do
     local stable_response = task.stable.response
     local beta_response = task.beta.response
     local stable_latest = stable_response and stable_response.status == 200
       and about.parse_latest_info(stable_response.body, task.component.asset_pat) or nil
+    if not stable_latest or stable_latest.id == nil then
+      stable_latest = about.mirror_info(mirror_manifest,
+        task.component.mirror_key or task.component.key) or stable_latest
+    end
     local beta_latest = beta_response and beta_response.status == 200
       and about.parse_beta_info(beta_response.body) or nil
     local requested = probe.channels[task.component.key]

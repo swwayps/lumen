@@ -108,6 +108,26 @@ check("parse missing tag", about.parse_latest_info('{"assets":[]}', "^x$") == ni
 check("parse bad json", about.parse_latest_info("not json", "^x$") == nil)
 check("parse empty", about.parse_latest_info("", "^x$") == nil)
 
+-- ── jsDelivr release manifest fallback ─────────────────────────────────────
+local mirror_body = '{"schema":1,"components":{'
+  .. '"slsteam-moon":{"tag":"v2.9","id":291,"asset_at":"2026-09-02T00:00:00Z","size":491},'
+  .. '"plugin":{"tag":"v2.9","id":292,"asset_at":"2026-09-02T00:00:00Z","size":492},'
+  .. '"lumen":{"tag":"v2.9","id":293,"asset_at":"2026-09-02T00:00:00Z","size":493}'
+  .. '}}'
+local mirror_ready = type(about.parse_mirror_manifest) == "function"
+  and type(about.mirror_info) == "function"
+check("exports jsDelivr mirror parsing", mirror_ready)
+if mirror_ready then
+  local manifest = about.parse_mirror_manifest(mirror_body)
+  local info = about.mirror_info(manifest, "lumen")
+  check("mirror parses latest tag", info and info.tag == "v2.9")
+  check("mirror preserves replacement fingerprint", info
+    and info.id == 293 and info.asset_at == "2026-09-02T00:00:00Z"
+      and info.size == 493)
+  check("mirror rejects wrong schema",
+    about.parse_mirror_manifest('{"schema":2,"components":{}}') == nil)
+end
+
 -- ── read_installed (rich + legacy shapes) ────────────────────────────────────
 local function reader_returning(s) return function() return s end end
 do
@@ -264,11 +284,11 @@ if has_async_probe then
         .. '"lumen":{"tag":"v2.8","id":1}}'
     end,
   })
-  check("boot probe starts every required release request concurrently",
-    probe ~= nil and started == 3)
+  check("boot probe starts release and mirror requests concurrently",
+    probe ~= nil and started == 4)
   local pending = about.poll_update_probe(probe)
   check("first boot probe poll is pending and non-blocking",
-    pending and pending.pending == true and first_poll_started == 3)
+    pending and pending.pending == true and first_poll_started == 4)
   local complete = about.poll_update_probe(probe)
   check("boot probe detects an available component update",
     complete and complete.pending == false and complete.available == true)
@@ -312,6 +332,31 @@ do
   local by = {}
   for _, c in ipairs(res.components) do by[c.key] = c end
   check("gv forge-down plugin unknown", by.plugin.state == "unknown")
+end
+
+do
+  -- GitHub can be down while the commit-pinned release mirror stays healthy.
+  local http = { get = function(url)
+    if url:find("cdn.jsdelivr.net", 1, true) then
+      return { status = 200, body = mirror_body }, nil
+    end
+    return nil, "github down"
+  end }
+  local res = about.get_versions({
+    http = http,
+    read_file = reader_returning(
+      '{"slsteam_moon":{"tag":"v2.8","id":281},'
+        .. '"plugin":{"tag":"v2.8","id":282},'
+        .. '"lumen":{"tag":"v2.8","id":283}}'),
+  })
+  local by = {}
+  for _, c in ipairs(res.components) do by[c.key] = c end
+  check("gv GitHub-down uses mirrored slsteam release",
+    by.slsteam_moon.latest == "v2.9" and by.slsteam_moon.state == "update")
+  check("gv GitHub-down uses mirrored plugin release",
+    by.plugin.latest == "v2.9" and by.plugin.state == "update")
+  check("gv GitHub-down uses mirrored Lumen release",
+    by.lumen.latest == "v2.9" and by.lumen.state == "update")
 end
 
 do
