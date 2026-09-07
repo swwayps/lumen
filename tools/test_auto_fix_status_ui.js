@@ -185,8 +185,8 @@ async function main() {
     !button.classList.contains("lumen-auto-fix-active")
       && button.textContent.includes("Cancelling fix"));
   advance(400);
-  check("U7 contraction clears the copy only after the exit transition",
-    button.textContent === "🌕");
+  check("U7 contraction swaps in the resting copy only after the exit transition",
+    button.textContent === "🌕Lumen");
   context.handleMoonButtonClick({ preventDefault() {}, stopPropagation() {} });
   check("U8 the idle moon keeps opening Lumen settings", settingsOpened === 2);
 
@@ -200,6 +200,12 @@ async function main() {
   check("U11 auto-fix modal CSS was removed",
     !pillCss.includes("lumen-auto-fix-overlay")
       && !pillCss.includes("lumen-auto-fix-action"));
+  check("U11a hovering the moon opens the pill without JS",
+    pillCss.includes("#lumen-moon-btn:hover .lumen-auto-fix-pill-copy,"));
+  check("U11b the pill body wears the Lumen accent, animated in and out",
+    pillCss.includes("#lumen-moon-btn:hover,#lumen-moon-btn.lumen-auto-fix-active{opacity:1;"
+      + "background:var(--lumen-theme-accent,#1a9fff);color:#fff;}")
+      && pillCss.includes("transition:background-color .26s"));
 
   context.showMoonPillMessage("settings", "Lumen settings");
   check("U12 a regular settings message can occupy the pill",
@@ -240,9 +246,12 @@ async function main() {
     check("U19 boot messaging exposes its resolved-status selector", canFinishBoot);
     if (canFinishBoot) {
       advance(5400);
+      check("U20 the update notice stays as the resting copy for hover",
+        !button.classList.contains("lumen-auto-fix-active")
+          && button.textContent.includes("Updates available"));
       context.finishMoonPillBootMessage(null);
-      check("U20 a failed update check falls back silently to Lumen settings",
-        button.textContent.includes("Lumen settings")
+      check("U21 a failed update check falls back silently to the brand copy",
+        button.textContent.includes("Lumen")
           && !button.textContent.includes("Updates available"));
     }
   }

@@ -7,8 +7,10 @@
   var _moonPillMessageTimer = null;
   var _moonPillCopyTimer = null;
   var _moonPillBootStarted = false;
+  var _moonPillUpdates = false;
   var MOON_PILL_MESSAGE_MS = 5000;
   var MOON_PILL_COLLAPSE_MS = 280;
+  var MOON_PILL_IDLE_LABEL = "Lumen"; // brand name, never translated
 
   function autoFixCopy() {
     if (typeof autoFixStrings === "function") return autoFixStrings();
@@ -67,12 +69,25 @@
     return MOON_PILL_COLLAPSE_MS;
   }
 
+  // What the pill says when it is closed. It stays in the DOM (hidden behind the
+  // moon) so hovering can open it with CSS alone.
+  function moonPillRestingLabel() {
+    return _moonPillUpdates ? autoFixCopy().updatesAvailable : MOON_PILL_IDLE_LABEL;
+  }
+
   function collapseMoonPill(button, copy) {
     button.classList.remove("lumen-auto-fix-active");
+    var resting = moonPillRestingLabel();
     if (_moonPillCopyTimer) clearTimeout(_moonPillCopyTimer);
+    // Nothing to contract: swap now, so the closed pill is hover-ready at once.
+    if (!copy.textContent || copy.textContent === resting) {
+      copy.textContent = resting;
+      return;
+    }
+    // Otherwise keep the outgoing copy until the contraction has played out.
     _moonPillCopyTimer = setTimeout(function () {
       _moonPillCopyTimer = null;
-      if (!button.classList.contains("lumen-auto-fix-active")) copy.textContent = "";
+      if (!button.classList.contains("lumen-auto-fix-active")) copy.textContent = resting;
     }, moonPillMotionMs());
   }
 
@@ -126,12 +141,8 @@
   }
 
   function finishMoonPillBootMessage(result) {
-    var S = autoFixCopy();
-    if (result && result.available === true) {
-      showMoonPillMessage("updates", S.updatesAvailable);
-      return;
-    }
-    showMoonPillMessage("settings", S.settings);
+    _moonPillUpdates = !!(result && result.available === true);
+    showMoonPillMessage(_moonPillUpdates ? "updates" : "settings", moonPillRestingLabel());
   }
 
   function startMoonPillBootMessage() {
@@ -155,8 +166,8 @@
         return;
       }
       collapseMoonPill(button, copy);
-      button.title = "Lumen settings";
-      button.setAttribute("aria-label", "Lumen settings");
+      button.title = S.settings;
+      button.setAttribute("aria-label", S.settings);
       return;
     }
     var progress = autoFixProgress(job.progress);

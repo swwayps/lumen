@@ -49,18 +49,25 @@
       ".lumen-cloud-btn.secondary.active-focus{background:rgba(255,255,255,.08);color:#fff;}",
       "#" + BTN_ID + "{display:inline-flex;align-items:center;justify-content:flex-start;gap:0;",
       "cursor:pointer;font-size:13px;line-height:1;height:22px;padding:0;margin:0 2px;overflow:hidden;",
-      "opacity:.8;-webkit-app-region:no-drag;user-select:none;border-radius:999px;white-space:nowrap;}",
-      "#" + BTN_ID + ":hover{opacity:1;background:rgba(255,255,255,.08);}",
+      "opacity:.8;-webkit-app-region:no-drag;user-select:none;border-radius:999px;white-space:nowrap;",
+      "transition:background-color .26s cubic-bezier(.4,0,.2,1),opacity .18s cubic-bezier(.4,0,.2,1);}",
+      // The fill starts as a 22px circle right under the moon and grows to the
+      // right with the copy, so the pill slides out of the moon (and back into
+      // it) instead of popping up beside it. Lumen accent, same as the buttons.
+      "#" + BTN_ID + ":hover,#" + BTN_ID + ".lumen-auto-fix-active{opacity:1;",
+      "background:var(--lumen-theme-accent,#1a9fff);color:#fff;}",
       "#" + BTN_ID + ":focus-visible{opacity:1;outline:2px solid #66c0f4;outline-offset:1px;}",
-      "#" + BTN_ID + ".lumen-auto-fix-active{opacity:1;background:#17334a;color:#fff;}",
       ".lumen-moon-glyph{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 22px;}",
       ".lumen-auto-fix-pill-copy{display:inline-block;max-width:0;margin-left:0;padding:0;overflow:hidden;opacity:0;",
       "transform:translateX(-6px);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;",
       "transition:max-width .26s cubic-bezier(.4,0,.2,1),margin-left .26s cubic-bezier(.4,0,.2,1),",
       "padding .26s cubic-bezier(.4,0,.2,1),opacity .18s cubic-bezier(.4,0,.2,1),",
       "transform .26s cubic-bezier(.4,0,.2,1);}",
+      // Hover opens the pill too: the resting copy ("Lumen", or the update
+      // notice) is always in the DOM, so this needs no JS.
+      "#" + BTN_ID + ":hover .lumen-auto-fix-pill-copy,",
       "#" + BTN_ID + ".lumen-auto-fix-active .lumen-auto-fix-pill-copy{max-width:180px;margin-left:0;padding:0 9px 0 6px;opacity:1;transform:none;}",
-      "@media (prefers-reduced-motion:reduce){.lumen-auto-fix-pill-copy{transition:none!important;}}",
+      "@media (prefers-reduced-motion:reduce){.lumen-auto-fix-pill-copy,#" + BTN_ID + "{transition:none!important;}}",
       "#" + OVERLAY_ID + "{position:fixed;inset:0;z-index:99999;display:flex;",
       "align-items:center;justify-content:center;background:rgba(0,0,0,.55);",
       "font-family:'Motiva Sans',Arial,Helvetica,sans-serif;}",
