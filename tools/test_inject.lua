@@ -43,6 +43,13 @@ do
   -- treat them as a lower trust level than the client's own contexts.
   assert_true(source:find("remote = true", 1, true),
     "web-view channels are marked as remote content")
+  -- Gamepad UI keeps only the store webview (origin-matched). The title-matched
+  -- shell channel stays desktop-only: the menu has no menubar to anchor to.
+  assert_true(source:find(
+      '{ titles = { ["Steam"] = true }, assets = build_menu_assets() }', 1, true),
+    "the menu bundle channel matches the desktop shell only")
+  assert_true(not source:find('["Steam Big Picture Mode"] = true', 1, true),
+    "no channel routes the Big Picture surface to an asset bundle")
 end
 
 do

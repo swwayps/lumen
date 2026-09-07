@@ -309,8 +309,9 @@ local loop = require("loop")
 -- loop's autostart watch keep covering drift in the meantime.
 -- Injection channels:
 --   * web views (store/community)  -> luatools.js + lumen_menu.js
---   * the visible client shell (desktop or Gamepad UI) -> lumen_menu.js
---     (the desktop shell carries the menubar button next to Help)
+--   * the visible DESKTOP shell -> lumen_menu.js (menubar button next to Help)
+-- Gamepad UI gets no menu bundle on purpose: its shell ("Steam Big Picture
+-- Mode") matches no channel, so Game Mode keeps only the store web view.
 -- The native menubar (Steam/View/Friends/Games/Help) lives in the main window
 -- target titled "Steam". luatools.js must NEVER reach the main window: it
 -- monkey-patches history.pushState, observes document.body and runs periodic
@@ -337,8 +338,7 @@ loop.run({
     { origins = { { host = "store.steampowered.com" },
                   { host = "steamcommunity.com" } },
       remote = true, assets = webview_assets },
-    { titles = { ["Steam"] = true, ["Steam Big Picture Mode"] = true },
-      assets = build_menu_assets() },
+    { titles = { ["Steam"] = true }, assets = build_menu_assets() },
     -- Control link to the only context with SteamClient. The tiny toast bridge
     -- also renders queued service alerts inside Gamepad UI.
     { titles = { ["SharedJSContext"] = true }, control = true,

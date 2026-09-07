@@ -284,11 +284,10 @@ function injector.targets_have_gamepad_ui(targets)
   return false
 end
 
--- The two top-level shells which can host Lumen's visible menu UI.
--- Keep this title check shared by injection relays so desktop and Gamepad UI
--- receive the same menu behavior.
+-- The shell hosting Lumen's menu UI. Only the desktop shell gets the menu
+-- bundle (see boot.lua channels), so menu relays must target no other title.
 function injector.is_menu_shell_title(title)
-  return title == "Steam" or title == "Steam Big Picture Mode"
+  return title == "Steam"
 end
 
 local function menu_webview_url(url)

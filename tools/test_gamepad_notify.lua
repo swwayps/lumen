@@ -44,9 +44,12 @@ check("SharedJSContext alone is not a ready shell",
   not injector.targets_ui_ready({
     { title = "SharedJSContext", url = "https://steamloopback.host/routes/steamweb" },
   }))
-check("desktop and Big Picture are visible menu shells",
-  injector.is_menu_shell_title("Steam")
-    and injector.is_menu_shell_title("Steam Big Picture Mode"))
+-- The menu bundle is desktop-only, so Big Picture is not a menu shell even
+-- though it IS Gamepad UI (the toast checks above still route there).
+check("the desktop shell is the visible menu shell",
+  injector.is_menu_shell_title("Steam"))
+check("Big Picture is not a visible menu shell",
+  not injector.is_menu_shell_title("Steam Big Picture Mode"))
 check("SharedJSContext is not a visible menu shell",
   not injector.is_menu_shell_title("SharedJSContext"))
 
