@@ -90,11 +90,20 @@ check("U33 the cleanup switch belongs to the Discord card it applies to",
 check("U36 neither method card is flagged as the recommended one",
   !/discordFlag|method-flag|recommended:/.test(account)
     && !styles.includes(".lumen-account-method-flag"));
+// The two actions must line up across the cards. Bottom-anchoring them cannot do
+// it — the Discord card carries a cleanup row below its button — so both sit
+// directly under a copy block held to the same height instead.
+check("U38 the two sign-in actions line up, top and bottom",
+  !/lumen-account-code-row\{[^}]*margin-top:auto/.test(styles)
+    && !/lumen-account-login-grid>section>button\{[^}]*margin-top:auto/.test(styles)
+    && /lumen-account-login-grid p\{[^}]*min-height:/.test(styles)
+    && /lumen-account-code-row\{[^}]*height:34px/.test(styles)
+    && /lumen-account-button\{[^}]*min-height:34px/.test(styles));
 check("U35 the code card ends at its action, with no footer or dividing rule",
   !/method-note|codeSafety/.test(account)
     && !styles.includes(".lumen-account-method-note")
     && styles.includes(".lumen-account-code-row input{min-width:0;flex:1;")
-    && styles.includes(".lumen-account-login-grid>section>button{margin-top:auto;align-self:stretch;}"));
+    && styles.includes(".lumen-account-login-grid>section>button{align-self:stretch;}"));
 check("U34 a sign-in handoff runs the OAuth progress animation",
   account.includes("function luaToolsHandoff(section)")
     && account.includes('track.className = "lumen-account-oauth"')

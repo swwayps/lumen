@@ -202,10 +202,15 @@
       ".lumen-account-method-icon svg{width:18px;height:18px}",
       ".lumen-account-method-icon.code{border-color:rgba(102,192,244,.36);color:#66c0f4;background:rgba(102,192,244,.13);}",
       ".lumen-account-login-grid h3{margin:0 0 7px;color:#fff;font-size:15px;font-weight:700;}",
-      ".lumen-account-login-grid p{margin:0 0 16px;color:#9ba3ab;font-size:12px;line-height:1.5;}",
+      // Two lines' worth of room whether the copy needs it or not. It is what keeps
+      // the two cards' headers the same height, and so their actions on one line.
+      ".lumen-account-login-grid p{margin:0 0 16px;min-height:36px;color:#9ba3ab;font-size:12px;line-height:1.5;}",
       // The card's only action reads as its call to action, so it spans the card
-      // rather than sitting as a small tag in the corner of a wide panel.
-      ".lumen-account-login-grid>section>button{margin-top:auto;align-self:stretch;}",
+      // rather than sitting as a small tag in the corner of a wide panel. NOT
+      // bottom-anchored: the Discord card has a cleanup row under its button, so
+      // pushing both actions down put them on different lines. They follow the copy
+      // instead, which is held to a fixed height above.
+      ".lumen-account-login-grid>section>button{align-self:stretch;}",
       // The Discord-cleanup preference, inside the card whose button it qualifies.
       // The whole row is the <label>, so the copy toggles the switch too.
       ".lumen-account-method-option{display:flex;align-items:center;gap:14px;width:100%;box-sizing:border-box;",
@@ -230,11 +235,13 @@
       "animation:lumen-oauth-pulse 1.4s ease-in-out infinite;}",
       "@keyframes lumen-oauth-sweep{0%{transform:translateX(-100%);}100%{transform:translateX(340%);}}",
       "@keyframes lumen-oauth-pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.07);}}",
-      ".lumen-account-code-row{display:flex;align-items:stretch;gap:8px;width:100%;margin-top:auto;}",
+      // Same height as .lumen-account-button's min-height, so this row and the
+      // Discord button match on both edges rather than only on their top.
+      ".lumen-account-code-row{display:flex;align-items:stretch;gap:8px;width:100%;height:34px;}",
       // The field grows with the card. At a fixed 104px it left a dead strip of
       // panel to the right of the button, which read as an unfinished row.
       ".lumen-account-code-row input{min-width:0;flex:1;box-sizing:border-box;background:#171a20;color:#fff;",
-      "border:1px solid #414955;border-radius:3px;padding:8px 9px;font:700 14px monospace;letter-spacing:.12em;",
+      "border:1px solid #414955;border-radius:3px;padding:4px 9px;font:700 14px monospace;letter-spacing:.12em;",
       "text-align:center;text-transform:uppercase;}",
       ".lumen-account-code-row input:focus,.lumen-fixes-search:focus{outline:2px solid #66c0f4;outline-offset:1px;border-color:#66c0f4;}",
       ".lumen-account-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;",
