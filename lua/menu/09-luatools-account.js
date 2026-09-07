@@ -49,8 +49,6 @@
       codePlaceholder: "ABC123", codeButton: "Entrar com código", waiting: "Aguardando autorização do Discord…",
       signingIn: "Entrando…", invalidCode: "Digite o código de 6 caracteres.",
       clearAfter: "Limpar o Discord do Steam depois", clearAfterHint: "Desconecta o Discord apenas do navegador do Steam. Sua sessão lua.tools continua ativa.",
-      security: "Discord no Steam",
-      keepDiscordHint: "Mantém o Discord conectado no navegador interno do Steam. Ative esta opção somente se necessário.",
       clearingDiscord: "Atualizando…", cleared: "Discord desconectado do navegador do Steam.",
       clearFailed: "Não foi possível limpar o Discord. Feche as páginas do Discord no Steam e tente novamente.",
       logout: "Sair do lua.tools",
@@ -72,8 +70,6 @@
       codePlaceholder: "ABC123", codeButton: "Sign in with code", waiting: "Waiting for Discord authorization…",
       signingIn: "Signing in…", invalidCode: "Enter the six-character code.",
       clearAfter: "Clear Discord from Steam afterwards", clearAfterHint: "Signs Discord out of Steam's browser only. Your lua.tools session stays connected.",
-      security: "Discord in Steam",
-      keepDiscordHint: "Keeps Discord signed in to Steam's internal browser. Enable this only when necessary.",
       clearingDiscord: "Updating…", cleared: "Discord signed out from Steam's browser.",
       clearFailed: "Discord could not be cleared. Close Discord pages in Steam and try again.",
       logout: "Sign out of lua.tools",
@@ -296,30 +292,19 @@
     identity.appendChild(name); identity.appendChild(state);
     var logout = luaToolsButton(S.logout, false); logout.className += " lumen-account-logout";
 
-    var setting = document.createElement("section"); setting.className = "lumen-account-security";
-    var settingCopy = document.createElement("span"); settingCopy.className = "lumen-account-security-copy";
-    var settingTitle = document.createElement("strong"); settingTitle.textContent = S.security;
-    var settingHint = document.createElement("small"); settingHint.textContent = S.keepDiscordHint;
-    settingCopy.appendChild(settingTitle); settingCopy.appendChild(settingHint);
-    var toggle = document.createElement("label"); toggle.className = "lumen-sw lumen-account-retention-switch";
-    var input = document.createElement("input"); input.type = "checkbox";
-    input.checked = !!options.keepSignedIn; input.setAttribute("aria-label", S.security);
-    var slider = document.createElement("span"); slider.className = "sl";
-    toggle.appendChild(input); toggle.appendChild(slider);
-
+    // Nothing to configure once connected: the Discord-cleanup preference belongs
+    // to the sign-in choice that uses it and has already run by the time this card
+    // exists. Re-offering it here made the screen look like a settings page for a
+    // decision that was over.
     var statusNode = document.createElement("div");
     statusNode.className = "lumen-account-status"; statusNode.setAttribute("aria-live", "polite");
-    input.addEventListener("change", function () {
-      if (typeof options.onKeepChange === "function") options.onKeepChange(input.checked, input, statusNode);
-    });
     logout.addEventListener("click", function () {
       if (typeof options.onLogout === "function") options.onLogout(logout, statusNode);
     });
 
     profile.appendChild(avatar); profile.appendChild(identity); profile.appendChild(logout);
-    setting.appendChild(settingCopy); setting.appendChild(toggle);
-    root.appendChild(profile); root.appendChild(setting); root.appendChild(statusNode);
-    return { node: root, retentionInput: input, statusNode: statusNode, logout: logout };
+    root.appendChild(profile); root.appendChild(statusNode);
+    return { node: root, statusNode: statusNode, logout: logout };
   }
 
   function luaToolsTagsForFix(fix) {
@@ -852,16 +837,6 @@
 
     function renderConnected(status) {
       var view = luaToolsBuildConnectedAccount(status, {
-        keepSignedIn: !clearPreference(),
-        onKeepChange: function (keepSignedIn, input, statusNode) {
-          saveClearPreference(!keepSignedIn);
-          if (keepSignedIn) {
-            statusNode.textContent = ""; statusNode.className = "lumen-account-status";
-            return;
-          }
-          input.disabled = true;
-          luaToolsClearDiscord(statusNode).then(function () { input.disabled = false; });
-        },
         onLogout: function (logout, statusNode) {
           logout.disabled = true;
           call("LogoutLuaTools", {}).then(luaToolsParse).then(function (result) {

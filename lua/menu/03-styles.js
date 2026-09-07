@@ -283,13 +283,6 @@
       // Sign-out stays quiet until you reach for it, then admits what it does.
       ".lumen-account-logout{flex:0 0 auto;margin-left:auto;background:transparent;}",
       ".lumen-account-logout:hover{border-color:#a2464b;background:rgba(236,92,92,.1);color:#f0908f;}",
-      // One settings row, shared by the connected card and the sign-in screen, so
-      // the same preference isn't a switch in one state and a checkbox in the other.
-      ".lumen-account-security{display:flex;align-items:center;gap:24px;padding:17px 20px;}",
-      ".lumen-account-connected+.lumen-account-security{border-top:1px solid rgba(255,255,255,.08);}",
-      ".lumen-account-security-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:5px;}",
-      ".lumen-account-security-copy strong{color:#eef0f2;font-size:13px;font-weight:700;}",
-      ".lumen-account-security-copy small{max-width:68ch;color:#9ba3ab;font-size:11.5px;line-height:1.45;}",
       ".lumen-account-retention-switch{flex:0 0 38px}.lumen-account-retention-switch input:focus-visible+.sl{outline:2px solid #66c0f4;outline-offset:2px;}",
       ".lumen-account-card>.lumen-account-status{min-height:0;margin:0;padding:0 20px 16px;}",
       ".lumen-account-card>.lumen-account-status:empty{display:none;}",
@@ -355,7 +348,7 @@
       "#" + OVERLAY_ID + " ::-webkit-scrollbar{width:9px;height:9px}#" + OVERLAY_ID + " ::-webkit-scrollbar-track{background:#202329;}",
       "#" + OVERLAY_ID + " ::-webkit-scrollbar-thumb{background:#4a515c;border:2px solid #202329;border-radius:8px;}",
       "@media(max-width:760px){.lumen-account-login-grid{grid-template-columns:1fr}.lumen-account-login-grid>section+section{border-left:0;border-top:1px solid #414955;}.lumen-fixes-list{grid-template-columns:repeat(2,minmax(0,1fr))}}",
-      "@media(max-width:520px){.lumen-account-connected{flex-wrap:wrap}.lumen-account-logout{margin-left:60px}.lumen-account-security{align-items:flex-start}.lumen-fixes-list{grid-template-columns:1fr}.lumen-fixes-fix-card-top{flex-direction:column}.lumen-fixes-fix-actions{width:100%;min-width:0;flex-basis:auto;align-items:flex-start}.lumen-fixes-fix-status{text-align:left;}}",
+      "@media(max-width:520px){.lumen-account-connected{flex-wrap:wrap}.lumen-account-logout{margin-left:60px}.lumen-fixes-list{grid-template-columns:1fr}.lumen-fixes-fix-card-top{flex-direction:column}.lumen-fixes-fix-actions{width:100%;min-width:0;flex-basis:auto;align-items:flex-start}.lumen-fixes-fix-status{text-align:left;}}",
       // Game Updates tab
       ".lumen-gu-search{width:100%;box-sizing:border-box;background:#1a1d23;color:#dcdedf;",
       "border:1px solid #3d4450;border-radius:3px;padding:8px 10px;font-size:13px;",

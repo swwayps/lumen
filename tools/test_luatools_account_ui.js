@@ -29,11 +29,12 @@ check("U6 Discord OAuth and bot code are peer login choices",
   account.includes('className = "lumen-account-login-grid"')
     && account.includes('setAttribute("data-method", "discord")')
     && account.includes('setAttribute("data-method", "code")'));
-check("U7 connected account uses one Discord-retention switch",
+check("U7 the connected card offers sign-out and nothing else to configure",
   account.includes('lumen.luaTools.clearDiscordAfterLogin')
     && account.includes('function luaToolsBuildConnectedAccount(status, options)')
-    && account.includes('keepSignedIn: !clearPreference()')
-    && !account.includes('var clearButton = luaToolsButton(S.clearDiscord, false)'));
+    && !/keepSignedIn|onKeepChange|retentionInput/.test(account)
+    && !/security:|keepDiscordHint/.test(account)
+    && !styles.includes(".lumen-account-security"));
 check("U8 UI uses the dedicated auth and catalogue RPCs",
   account.includes('call("StartLuaToolsDiscordLogin"')
     && account.includes('call("LoginLuaToolsWithCode"')
@@ -52,10 +53,10 @@ check("U24 the two sign-in methods are peer cards, Discord owning the loud actio
     // one filled call to action per screen: the code path is the quiet fallback
     && !/luaToolsButton\(S\.(discordButton|codeButton), true\)/.test(account));
 check("U25 the Discord-cleanup preference is a switch row, never a checkbox",
-  account.includes('setting.className = "lumen-account-security"')
+  account.includes('row.className = "lumen-account-method-option"')
     && account.includes('toggle.className = "lumen-sw lumen-account-retention-switch"')
     && account.includes("lumen.luaTools.clearDiscordAfterLogin")
-    && styles.includes(".lumen-account-connected+.lumen-account-security{border-top:"));
+    && styles.includes(".lumen-account-retention-switch{flex:0 0 38px}"));
 check("U28 the lua.tools mark is embedded locally, not fetched",
   /var LUA_TOOLS_LOGO = "data:image\/png;base64,/.test(account)
     && account.includes("function luaToolsLogoImage(className)")

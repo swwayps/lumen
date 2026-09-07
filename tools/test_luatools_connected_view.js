@@ -61,45 +61,37 @@ assert.strictEqual(
   "connected account view should have a dedicated component builder",
 );
 
-const retentionChanges = [];
 let logoutCount = 0;
 const view = context.luaToolsBuildConnectedAccount(
   { account: { displayName: "SWay", avatarUrl: "" } },
-  {
-    keepSignedIn: false,
-    onKeepChange: (keepSignedIn) => retentionChanges.push(keepSignedIn),
-    onLogout: () => { logoutCount += 1; },
-  },
+  { onLogout: () => { logoutCount += 1; } },
 );
 const elements = descendants(view.node);
 const buttons = elements.filter((node) => node.tagName === "BUTTON");
 const checkboxes = elements.filter((node) => node.tagName === "INPUT" && node.type === "checkbox");
 
+// Once connected there is nothing left to decide: the Discord-cleanup preference
+// belongs to the sign-in choice that uses it, and it already ran. The screen
+// states who you are and offers the one action that still applies.
 assert.strictEqual(buttons.length, 1, "connected view should expose only the sign-out button");
-assert.strictEqual(checkboxes.length, 1, "Discord retention should be a single switch");
-assert.strictEqual(checkboxes[0].checked, false, "Discord retention should reflect the safer default");
-assert.match(view.node.textContent, /Discord in Steam/);
-assert.match(
-  view.node.textContent,
-  /Keeps Discord signed in to Steam's internal browser\. Enable this only when necessary\./,
-);
+assert.strictEqual(checkboxes.length, 0, "connected view should carry no settings switch");
+assert.doesNotMatch(view.node.textContent, /Discord in Steam/);
+assert.doesNotMatch(view.node.textContent, /Keeps Discord signed in/);
+assert.match(view.node.textContent, /SWay/);
+assert.match(view.node.textContent, /Connected/);
+assert.match(view.node.textContent, /Sign out of lua\.tools/);
 assert.doesNotMatch(view.node.textContent, /Ryuu|OAuth|MFA/i);
 
-checkboxes[0].checked = true;
-checkboxes[0].listeners.change();
-assert.deepStrictEqual(retentionChanges, [true], "switch should report the requested retention state");
 buttons[0].listeners.click();
 assert.strictEqual(logoutCount, 1, "the remaining button should sign out of lua.tools");
 
 context.lang = "pt-BR";
 const portuguese = context.luaToolsBuildConnectedAccount(
   { account: { displayName: "SWay", avatarUrl: "" } },
-  { keepSignedIn: false, onKeepChange() {}, onLogout() {} },
+  { onLogout() {} },
 );
-assert.match(portuguese.node.textContent, /Discord no Steam/);
-assert.match(
-  portuguese.node.textContent,
-  /Mantém o Discord conectado no navegador interno do Steam\. Ative esta opção somente se necessário\./,
-);
+assert.match(portuguese.node.textContent, /Conectado/);
+assert.match(portuguese.node.textContent, /Sair do lua\.tools/);
+assert.doesNotMatch(portuguese.node.textContent, /Discord no Steam/);
 
-console.log("ok   connected lua.tools account uses one clear Discord-retention control");
+console.log("ok   connected lua.tools account states the account and offers only sign-out");
