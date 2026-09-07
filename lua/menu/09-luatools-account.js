@@ -17,12 +17,30 @@
   var LUA_TOOLS_BACK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
   var LUA_TOOLS_CUBE_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 16-9 5-9-5V8l9-5 9 5z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>';
   var LUA_TOOLS_CALENDAR_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>';
+  // lua.tools brand mark, embedded as a data URI. The menu bundle is injected
+  // over CDP with no static file server behind it, so the bytes travel with the
+  // script; pointing at the remote copy would make the settings window fetch a
+  // third-party asset every time it opens. Source: status.lua.tools
+  // /upload/logo1.png, 128x128 PNG, sha256 26056dbc170a35922f0ebce931421fd37fa78c8f3b835c4cbe783619b296ecd8.
+  var LUA_TOOLS_LOGO = "data:image/png;base64,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";
+
+  // The mark as an <img>. Decorative everywhere it is used (the text beside it
+  // already names the account), so it carries an empty alt and is hidden from
+  // assistive tech rather than announced twice.
+  function luaToolsLogoImage(className) {
+    var image = document.createElement("img");
+    image.src = LUA_TOOLS_LOGO;
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    if (className) image.className = className;
+    return image;
+  }
 
   function luaToolsStrings() {
     var pt = pickLang() === "pt-BR";
     return pt ? {
       fixesTab: "Fixes", accountTitle: "Conta lua.tools", signIn: "Entrar no lua.tools",
-      unlock: "Desbloqueie fixes, Luie e outros recursos úteis.", connected: "Conectado",
+      unlock: "Desbloqueie Fixes e Luie", connected: "Conectado",
       checking: "Verificando sua conta\u2026",
       accountIntro: "Escolha como conectar sua conta. As duas opções criam a mesma sessão segura do lua.tools.",
       discordTitle: "Continuar com Discord", discordBody: "Abra a autorização oficial dentro do navegador do Steam.",
@@ -30,7 +48,9 @@
       codeBody: "Execute /login no Discord do LuaTools e digite o código de 6 caracteres.",
       codePlaceholder: "ABC123", codeButton: "Entrar com código", waiting: "Aguardando autorização do Discord…",
       signingIn: "Entrando…", invalidCode: "Digite o código de 6 caracteres.",
-      clearAfter: "Limpar o Discord do Steam depois do login pelo Discord", clearAfterHint: "Recomendado. Isso desconecta o Discord somente do navegador interno do Steam; sua sessão lua.tools continua ativa. O login por código não mexe no Discord do Steam.",
+      recommended: "Recomendado",
+      codeSafety: "O login por código não mexe no Discord do Steam.",
+      clearAfter: "Limpar o Discord do Steam depois", clearAfterHint: "Desconecta o Discord apenas do navegador do Steam. Sua sessão lua.tools continua ativa.",
       security: "Discord no Steam",
       keepDiscordHint: "Mantém o Discord conectado no navegador interno do Steam. Ative esta opção somente se necessário.",
       clearingDiscord: "Atualizando…", cleared: "Discord desconectado do navegador do Steam.",
@@ -45,7 +65,7 @@
       notInstalled: "Jogo não instalado", manifest: "Manifest", archive: "Arquivos do fix",
     } : {
       fixesTab: "Fixes", accountTitle: "lua.tools account", signIn: "Sign in to lua.tools",
-      unlock: "Unlock fixes, Luie, and other quality-of-life features.", connected: "Connected",
+      unlock: "Unlock Fixes and Luie", connected: "Connected",
       checking: "Checking your account\u2026",
       accountIntro: "Choose how to connect your account. Both options create the same secure lua.tools session.",
       discordTitle: "Continue with Discord", discordBody: "Open the official authorization inside Steam's browser.",
@@ -53,7 +73,9 @@
       codeBody: "Run /login in the LuaTools Discord and enter the six-character code.",
       codePlaceholder: "ABC123", codeButton: "Sign in with code", waiting: "Waiting for Discord authorization…",
       signingIn: "Signing in…", invalidCode: "Enter the six-character code.",
-      clearAfter: "Clear Discord from Steam after Discord sign-in", clearAfterHint: "Recommended. This signs Discord out only inside Steam's browser; your lua.tools session stays connected. Code sign-in never touches Steam's Discord session.",
+      recommended: "Recommended",
+      codeSafety: "Code sign-in never touches Steam's Discord session.",
+      clearAfter: "Clear Discord from Steam afterwards", clearAfterHint: "Signs Discord out of Steam's browser only. Your lua.tools session stays connected.",
       security: "Discord in Steam",
       keepDiscordHint: "Keeps Discord signed in to Steam's internal browser. Enable this only when necessary.",
       clearingDiscord: "Updating…", cleared: "Discord signed out from Steam's browser.",
@@ -231,6 +253,23 @@
     button.className = "lumen-account-button" + (primary ? " primary" : "");
     button.textContent = label;
     return button;
+  }
+
+  // Both sign-in paths hand off to Discord — one to an authorization window, one
+  // to a code the bot has to redeem — and neither reports progress. The status
+  // line said "Waiting…" and nothing else moved, which read as a dead screen. Fit
+  // the card with the indeterminate sweep OAuth handoffs use, so the wait is
+  // visibly live and belongs to the card you actually pressed.
+  function luaToolsHandoff(section) {
+    var track = document.createElement("div");
+    track.className = "lumen-account-oauth";
+    track.setAttribute("aria-hidden", "true");
+    track.appendChild(document.createElement("span"));
+    section.appendChild(track);
+    return function (active) {
+      section.classList.toggle("handoff", !!active);
+      track.classList.toggle("on", !!active);
+    };
   }
 
   function luaToolsFixesBackButton(label, onBack) {
@@ -674,25 +713,28 @@
       catch (e) {}
     }
 
-    // The Discord-cleanup preference, as the same settings row the connected card
-    // uses for it. It was a bare checkbox floating under the method cards, so one
-    // preference had two different controls depending on whether you were signed in.
+    // The Discord-cleanup preference. It governs the Discord path alone (code
+    // sign-in never touches Steam's Discord session), so it belongs INSIDE the
+    // Discord card. As its own settings card under the grid it read as a third,
+    // global option and made the two method cards look like a subsection of it.
+    // The whole row is the label, so the copy is a hit target too.
     function preferenceRow() {
-      var card = document.createElement("div"); card.className = "lumen-account-card";
-      var row = document.createElement("section"); row.className = "lumen-account-security";
-      var copy = document.createElement("span"); copy.className = "lumen-account-security-copy";
+      var row = document.createElement("label"); row.className = "lumen-account-method-option";
+      var copy = document.createElement("span");
       var strong = document.createElement("strong"); strong.textContent = S.clearAfter;
       var small = document.createElement("small"); small.textContent = S.clearAfterHint;
       copy.appendChild(strong); copy.appendChild(small);
-      var toggle = document.createElement("label");
+      // A <span>, not the usual <label>: nesting a label inside this row's label
+      // is invalid, and the outer one already forwards clicks to the input.
+      var toggle = document.createElement("span");
       toggle.className = "lumen-sw lumen-account-retention-switch";
       var input = document.createElement("input"); input.type = "checkbox"; input.checked = clearPreference();
       input.setAttribute("aria-label", S.clearAfter);
       var slider = document.createElement("span"); slider.className = "sl";
       toggle.appendChild(input); toggle.appendChild(slider);
-      row.appendChild(copy); row.appendChild(toggle); card.appendChild(row);
+      row.appendChild(copy); row.appendChild(toggle);
       input.addEventListener("change", function () { saveClearPreference(input.checked); });
-      return { node: card, input: input };
+      return { node: row, input: input };
     }
 
     function renderSignedOut() {
@@ -701,19 +743,32 @@
       var discord = document.createElement("section"); discord.setAttribute("data-method", "discord");
       var discordIcon = document.createElement("span"); discordIcon.className = "lumen-account-method-icon"; discordIcon.innerHTML = LUA_TOOLS_DISCORD_SVG;
       var discordTitle = document.createElement("h3"); discordTitle.textContent = S.discordTitle;
+      // Both cards are equally usable, so nothing in the layout said which one to
+      // reach for. The pill does, in one word, without demoting the code path. It
+      // is a badge on the card, not part of the heading: inside the h3 it had to
+      // wrap onto its own line in a half-width card and pushed the copy down.
+      var discordFlag = document.createElement("span");
+      discordFlag.className = "lumen-account-method-flag";
+      discordFlag.textContent = S.recommended;
       var discordBody = document.createElement("p"); discordBody.textContent = S.discordBody;
       // Brand-filled, with the Discord mark on it: the recommended path should be
       // the one obvious button, not a twin of the code fallback's blue.
       var discordButton = luaToolsButton("", false);
       discordButton.className += " discord";
       var discordButtonIcon = document.createElement("span");
+      // The mark sat on the label's baseline because a bare inline <span> gives an
+      // svg nothing to centre against, so it rode low next to the text.
+      discordButtonIcon.className = "lumen-account-button-icon";
       discordButtonIcon.innerHTML = LUA_TOOLS_DISCORD_SVG;
       var discordButtonLabel = document.createElement("span");
       discordButtonLabel.textContent = S.discordButton;
       discordButton.appendChild(discordButtonIcon);
       discordButton.appendChild(discordButtonLabel);
+      var preference = preferenceRow();
+      discord.appendChild(discordFlag);
       discord.appendChild(discordIcon); discord.appendChild(discordTitle);
       discord.appendChild(discordBody); discord.appendChild(discordButton);
+      discord.appendChild(preference.node);
 
       var code = document.createElement("section"); code.setAttribute("data-method", "code");
       var codeIcon = document.createElement("span"); codeIcon.className = "lumen-account-method-icon code"; codeIcon.innerHTML = LUA_TOOLS_CODE_SVG;
@@ -725,16 +780,23 @@
       codeInput.setAttribute("aria-label", S.codeTitle);
       var codeButton = luaToolsButton(S.codeButton, false);
       codeRow.appendChild(codeInput); codeRow.appendChild(codeButton);
-      code.appendChild(codeIcon); code.appendChild(codeTitle); code.appendChild(codeBody); code.appendChild(codeRow);
+      // The Discord card gained a footer row, which left the code card ending in a
+      // block of empty panel. Close it in the SAME slot with the fact the trimmed
+      // cleanup hint used to carry: the two cards now share one rhythm — icon and
+      // copy, action, footer — instead of one being padded out to match the other.
+      var note = document.createElement("small"); note.className = "lumen-account-method-note";
+      note.textContent = S.codeSafety;
+      code.appendChild(codeIcon); code.appendChild(codeTitle); code.appendChild(codeBody);
+      code.appendChild(codeRow); code.appendChild(note);
       grid.appendChild(discord); grid.appendChild(code);
-      var preference = preferenceRow();
+      var discordHandoff = luaToolsHandoff(discord);
+      var codeHandoff = luaToolsHandoff(code);
       var statusNode = document.createElement("div"); statusNode.className = "lumen-account-status"; statusNode.setAttribute("aria-live", "polite");
       // No third "paste a session cookie" path: lua.tools issues its session
       // through Discord, so hand-pasted cookies were a dead end that only made
       // the screen look like it had a hidden expert mode. The backend RPC
       // (AdoptLuaToolsSessionValue) is untouched if it's ever needed again.
-      panel.appendChild(intro); panel.appendChild(grid);
-      panel.appendChild(preference.node); panel.appendChild(statusNode);
+      panel.appendChild(intro); panel.appendChild(grid); panel.appendChild(statusNode);
 
       codeInput.addEventListener("input", function () {
         codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
@@ -747,12 +809,14 @@
         if (!/^[A-Z0-9]{6}$/.test(codeInput.value)) {
           statusNode.textContent = S.invalidCode; statusNode.className = "lumen-account-status error"; codeInput.focus(); return;
         }
-        codeButton.disabled = true; statusNode.textContent = S.signingIn; statusNode.className = "lumen-account-status";
+        codeButton.disabled = true; codeHandoff(true);
+        statusNode.textContent = S.signingIn; statusNode.className = "lumen-account-status";
         call("LoginLuaToolsWithCode", { code: codeInput.value, contentScriptQuery: "" }).then(luaToolsParse).then(function (result) {
           if (!(result && result.success && result.configured)) throw new Error((result && result.error) || "sign-in failed");
           return finishLogin(false);
         }).catch(function (error) {
-          codeButton.disabled = false; statusNode.textContent = error && error.message ? error.message : String(error);
+          codeButton.disabled = false; codeHandoff(false);
+          statusNode.textContent = error && error.message ? error.message : String(error);
           statusNode.className = "lumen-account-status error";
         });
       }
@@ -760,7 +824,8 @@
       codeInput.addEventListener("keydown", function (event) { if (event.key === "Enter") submitCode(); });
 
       discordButton.addEventListener("click", function () {
-        discordButton.disabled = true; statusNode.textContent = S.signingIn; statusNode.className = "lumen-account-status";
+        discordButton.disabled = true; discordHandoff(true);
+        statusNode.textContent = S.signingIn; statusNode.className = "lumen-account-status";
         call("StartLuaToolsDiscordLogin", {}).then(luaToolsParse).then(function (started) {
           if (!(started && started.status === "waiting" && started.authUrl)) throw new Error((started && started.error) || "sign-in unavailable");
           return call("__lumenLuaToolsLoginOpen", { url: started.authUrl }).then(luaToolsParse);
@@ -787,14 +852,16 @@
             }).catch(function (error) {
               call("CancelLuaToolsDiscordLogin", {}).catch(function () {});
               call("__lumenLuaToolsLoginClose", {}).catch(function () {});
-              discordButton.disabled = false; statusNode.textContent = error && error.message ? error.message : String(error);
+              discordButton.disabled = false; discordHandoff(false);
+              statusNode.textContent = error && error.message ? error.message : String(error);
               statusNode.className = "lumen-account-status error";
             });
           }
           setTimeout(poll, 700);
         }).catch(function (error) {
           call("CancelLuaToolsDiscordLogin", {}).catch(function () {});
-          discordButton.disabled = false; statusNode.textContent = error && error.message ? error.message : String(error);
+          discordButton.disabled = false; discordHandoff(false);
+          statusNode.textContent = error && error.message ? error.message : String(error);
           statusNode.className = "lumen-account-status error";
         });
       });

@@ -90,9 +90,21 @@
       ".lumen-account-entry:hover{background:rgba(255,255,255,.04);}",
       ".lumen-account-entry.active{background:#3d4450;}",
       ".lumen-account-entry:focus-visible{outline:2px solid #66c0f4;outline-offset:-3px;}",
-      ".lumen-account-avatar{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;",
+      ".lumen-account-avatar{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;",
       "box-sizing:border-box;flex:0 0 32px;border:1px solid rgba(255,255,255,.13);border-radius:50%;",
       "background:rgba(255,255,255,.05);color:#a6afb9;overflow:hidden;}",
+      // Two stacked layers, crossfaded: the lua.tools mark at rest, the profile
+      // glyph once the row is pointed at (or gamepad-focused, same treatment).
+      // The mark is inset and contained — cover would crop a square logo into the
+      // circle, and the glyph beside it is drawn at 17px, not edge to edge.
+      ".lumen-account-avatar>img.lumen-account-avatar-brand{position:absolute;inset:0;width:100%;height:100%;",
+      "box-sizing:border-box;padding:4px;object-fit:contain;opacity:1;transition:opacity .14s;}",
+      ".lumen-account-avatar>.lumen-account-avatar-glyph{position:absolute;inset:0;display:flex;",
+      "align-items:center;justify-content:center;opacity:0;transition:opacity .14s;}",
+      ".lumen-account-entry:hover .lumen-account-avatar-brand{opacity:0;}",
+      ".lumen-account-entry:hover .lumen-account-avatar-glyph{opacity:1;}",
+      ".lumen-account-entry.active-focus .lumen-account-avatar-brand{opacity:0;}",
+      ".lumen-account-entry.active-focus .lumen-account-avatar-glyph{opacity:1;}",
       // A rim, not a ring: at full accent this read as a bright blue circle
       // drawn around the avatar rather than as part of it.
       ".lumen-account-entry.connected .lumen-account-avatar{border-color:rgba(102,192,244,.24);",
@@ -100,8 +112,11 @@
       ".lumen-account-avatar svg{width:17px;height:17px}.lumen-account-avatar img{width:100%;height:100%;object-fit:cover;}",
       ".lumen-account-entry>span:last-child{display:flex;min-width:0;flex-direction:column;gap:3px;}",
       ".lumen-account-entry strong{color:#f1f3f5;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+      // Three lines, not two: the 200px sidebar column is ~130px wide once the
+      // avatar and padding are taken out, and a two-line clamp ate the tail of the
+      // signed-out copy with no ellipsis to show it had been cut.
       ".lumen-account-entry small{color:#9aa3ad;font-size:10.5px;line-height:1.3;display:-webkit-box;",
-      "-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}",
+      "-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;}",
       // While the auth status is still being fetched the row says so, with the
       // shared spinner in place of the avatar, instead of guessing "signed out".
       ".lumen-account-entry.checking strong{color:#c5cad0;}",
@@ -118,6 +133,10 @@
       "rgba(74,81,92,.4) 0%,rgba(75,81,92,0) 60%);display:flex;flex-direction:column;overflow:hidden;}",
       ".lumen-ctop{display:flex;align-items:center;padding:24px 24px 14px;}",
       ".lumen-ctop .h{flex:1;color:#fff;font-size:22px;font-weight:700;}",
+      // The account tab is the one header that names a third-party service, so it
+      // is signed with that service's mark rather than left as bare text.
+      ".lumen-account-title{display:inline-flex;align-items:center;gap:10px;}",
+      ".lumen-account-title-mark{width:26px;height:26px;flex:0 0 26px;object-fit:contain;}",
       ".lumen-account-back{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;",
       "margin-right:8px;padding:0;border:0;border-radius:3px;background:transparent;color:#b8bcbf;cursor:pointer;}",
       ".lumen-account-back svg{width:20px;height:20px}.lumen-account-back:hover{color:#fff;background:rgba(255,255,255,.07);}",
@@ -183,10 +202,47 @@
       ".lumen-account-method-icon svg{width:18px;height:18px}",
       ".lumen-account-method-icon.code{border-color:rgba(102,192,244,.36);color:#66c0f4;background:rgba(102,192,244,.13);}",
       ".lumen-account-login-grid h3{margin:0 0 7px;color:#fff;font-size:15px;font-weight:700;}",
+      // Which path to take, said once. Blurple because it recommends the Discord
+      // card specifically, not a generic Lumen-accent callout. Pinned to the card's
+      // top corner, on the method icon's line, so it costs the copy no height.
+      ".lumen-account-method-flag{position:absolute;top:20px;right:20px;padding:2px 8px;",
+      "border-radius:10px;background:rgba(88,101,242,.18);color:#a3abfa;font-size:9.5px;",
+      "font-weight:700;text-transform:uppercase;letter-spacing:.5px;}",
       ".lumen-account-login-grid p{margin:0 0 16px;color:#9ba3ab;font-size:12px;line-height:1.5;}",
-      ".lumen-account-login-grid>section>button{margin-top:auto;}",
+      // The card's only action reads as its call to action, so it spans the card
+      // rather than sitting as a small tag in the corner of a wide panel.
+      ".lumen-account-login-grid>section>button{margin-top:auto;align-self:stretch;}",
+      // Footer slot, shared by both cards so they end on the same line.
+      ".lumen-account-method-note{width:100%;box-sizing:border-box;margin-top:15px;padding-top:14px;",
+      "border-top:1px solid rgba(255,255,255,.08);color:#8f98a0;font-size:10.5px;line-height:1.45;}",
+      // The Discord-cleanup preference, inside the card whose button it qualifies.
+      // The whole row is the <label>, so the copy toggles the switch too.
+      ".lumen-account-method-option{display:flex;align-items:center;gap:14px;width:100%;box-sizing:border-box;",
+      "margin-top:15px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer;}",
+      ".lumen-account-method-option>span:first-child{display:flex;min-width:0;flex:1;flex-direction:column;gap:4px;}",
+      ".lumen-account-method-option strong{color:#dfe3e7;font-size:11.5px;font-weight:700;}",
+      ".lumen-account-method-option small{color:#8f98a0;font-size:10.5px;line-height:1.45;}",
+      // OAuth handoff: an indeterminate sweep pinned to the bottom edge of the card
+      // that owns the wait, plus a brand-tinted rim and a breathing method icon.
+      ".lumen-account-oauth{position:absolute;right:0;bottom:0;left:0;height:2px;overflow:hidden;",
+      "border-radius:0 0 8px 8px;background:rgba(255,255,255,.06);opacity:0;transition:opacity .18s;}",
+      ".lumen-account-oauth.on{opacity:1;}",
+      ".lumen-account-oauth span{position:absolute;top:0;bottom:0;width:38%;",
+      "background:linear-gradient(90deg,rgba(88,101,242,0),#5865f2,rgba(88,101,242,0));",
+      "animation:lumen-oauth-sweep 1.15s linear infinite;}",
+      ".lumen-account-login-grid>section[data-method='code'] .lumen-account-oauth span{",
+      "background:linear-gradient(90deg,rgba(102,192,244,0),#66c0f4,rgba(102,192,244,0));}",
+      ".lumen-account-login-grid>section.handoff{border-color:#5865f2;box-shadow:0 0 0 1px rgba(88,101,242,.25);}",
+      ".lumen-account-login-grid>section[data-method='code'].handoff{border-color:#66c0f4;",
+      "box-shadow:0 0 0 1px rgba(102,192,244,.25);}",
+      ".lumen-account-login-grid>section.handoff .lumen-account-method-icon{",
+      "animation:lumen-oauth-pulse 1.4s ease-in-out infinite;}",
+      "@keyframes lumen-oauth-sweep{0%{transform:translateX(-100%);}100%{transform:translateX(340%);}}",
+      "@keyframes lumen-oauth-pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.07);}}",
       ".lumen-account-code-row{display:flex;align-items:stretch;gap:8px;width:100%;margin-top:auto;}",
-      ".lumen-account-code-row input{min-width:0;width:104px;box-sizing:border-box;background:#171a20;color:#fff;",
+      // The field grows with the card. At a fixed 104px it left a dead strip of
+      // panel to the right of the button, which read as an unfinished row.
+      ".lumen-account-code-row input{min-width:0;flex:1;box-sizing:border-box;background:#171a20;color:#fff;",
       "border:1px solid #414955;border-radius:3px;padding:8px 9px;font:700 14px monospace;letter-spacing:.12em;",
       "text-align:center;text-transform:uppercase;}",
       ".lumen-account-code-row input:focus,.lumen-fixes-search:focus{outline:2px solid #66c0f4;outline-offset:1px;border-color:#66c0f4;}",
@@ -196,7 +252,10 @@
       ".lumen-account-button:hover{background:#3b4350;color:#fff}.lumen-account-button.primary{background:#1a9fff;border-color:#1a9fff;color:#fff;}",
       ".lumen-account-button.primary:hover{background:#3cb0ff;border-color:#3cb0ff}.lumen-account-button:disabled{opacity:.5;cursor:wait;}",
       ".lumen-account-button:focus-visible,.lumen-fixes-game:focus-visible{outline:2px solid #66c0f4;outline-offset:2px;}",
-      ".lumen-account-button svg{width:14px;height:14px;flex:0 0 auto;}",
+      ".lumen-account-button svg{display:block;width:14px;height:14px;flex:0 0 auto;}",
+      // A bare inline wrapper gives the mark nothing to centre against, so it rode
+      // on the label's baseline instead of on its optical middle.
+      ".lumen-account-button-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}",
       // Signing in with Discord IS Discord — brand fill, so the primary action is
       // unmistakable next to the quiet code fallback.
       ".lumen-account-button.discord{background:#5865f2;border-color:#5865f2;color:#fff;}",

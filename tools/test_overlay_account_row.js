@@ -91,6 +91,8 @@ function open(options = {}) {
     "var I18N={en:" + JSON.stringify(strings) + "};",
     "var MOON_SVG='', GU_SVG='', CLOUD_SVG='', ABOUT_SVG='', LUA_TOOLS_FIXES_SVG='',",
     "    LUA_TOOLS_BACK_SVG='', LUA_TOOLS_USER_SVG='<svg/>';",
+    "function luaToolsLogoImage(cls){var i=document.createElement('img');",
+    "  i.className=cls||'';return i;}",
     "var _guClearBtnRef=null;",
     "function pickLang(){return 'en';}",
     "function injectStyles(){}",

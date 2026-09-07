@@ -51,11 +51,52 @@ check("U24 the two sign-in methods are peer cards, Discord owning the loud actio
     && account.includes('discordButton.className += " discord"')
     // one filled call to action per screen: the code path is the quiet fallback
     && !/luaToolsButton\(S\.(discordButton|codeButton), true\)/.test(account));
-check("U25 the Discord-cleanup preference is the shared settings row, not a checkbox",
-  account.includes('card.className = "lumen-account-card"')
-    && account.includes('row.className = "lumen-account-security"')
+check("U25 the Discord-cleanup preference is a switch row, never a checkbox",
+  account.includes('setting.className = "lumen-account-security"')
     && account.includes('toggle.className = "lumen-sw lumen-account-retention-switch"')
+    && account.includes("lumen.luaTools.clearDiscordAfterLogin")
     && styles.includes(".lumen-account-connected+.lumen-account-security{border-top:"));
+check("U28 the lua.tools mark is embedded locally, not fetched",
+  /var LUA_TOOLS_LOGO = "data:image\/png;base64,/.test(account)
+    && account.includes("function luaToolsLogoImage(className)")
+    && !account.includes("https://status.lua.tools"));
+check("U29 the sidebar mark yields to the profile glyph on hover",
+  overlay.includes('luaToolsLogoImage("lumen-account-avatar-brand")')
+    && overlay.includes('glyph.className = "lumen-account-avatar-glyph"')
+    && styles.includes(".lumen-account-entry:hover .lumen-account-avatar-brand{opacity:0;}")
+    && styles.includes(".lumen-account-entry:hover .lumen-account-avatar-glyph{opacity:1;}"));
+check("U30 the account tab title carries the mark before its text",
+  overlay.includes('accountTitle.className = "lumen-account-title"')
+    && overlay.includes('luaToolsLogoImage("lumen-account-title-mark")')
+    && styles.includes(".lumen-account-title{display:inline-flex;align-items:center;"));
+check("U31 the sidebar copy is short enough to render whole",
+  account.includes('unlock: "Unlock Fixes and Luie"')
+    && !/quality-of-life/.test(account)
+    && styles.includes("-webkit-line-clamp:3;"));
+check("U32 the Discord mark is centred against its label",
+  account.includes('discordButtonIcon.className = "lumen-account-button-icon"')
+    && styles.includes(".lumen-account-button-icon{display:inline-flex;align-items:center;")
+    && styles.includes(".lumen-account-button svg{display:block;"));
+check("U33 the cleanup switch belongs to the Discord card it applies to",
+  account.includes("discord.appendChild(preference.node)")
+    && account.includes('row.className = "lumen-account-method-option"')
+    && !account.includes("panel.appendChild(preference.node)")
+    && styles.includes(".lumen-account-method-option{"));
+check("U36 the recommended pill is a card badge, not a heading fragment",
+  account.includes("discord.appendChild(discordFlag)")
+    && !account.includes("discordTitle.appendChild(discordFlag)")
+    && styles.includes(".lumen-account-method-flag{position:absolute;"));
+check("U35 both method cards close with a footer in the same slot",
+  account.includes('note.className = "lumen-account-method-note"')
+    && account.includes("code.appendChild(note)")
+    && styles.includes(".lumen-account-method-note{")
+    && styles.includes(".lumen-account-code-row input{min-width:0;flex:1;")
+    && styles.includes(".lumen-account-login-grid>section>button{margin-top:auto;align-self:stretch;}"));
+check("U34 a sign-in handoff runs the OAuth progress animation",
+  account.includes("function luaToolsHandoff(section)")
+    && account.includes('track.className = "lumen-account-oauth"')
+    && styles.includes("@keyframes lumen-oauth-sweep")
+    && styles.includes(".lumen-account-login-grid>section.handoff{"));
 check("U26 account, catalogue and fix cards share one surface",
   styles.includes(".lumen-account-card{box-sizing:border-box;overflow:hidden;border:1px solid #414955;")
     && styles.includes("border-radius:8px;background:#20242b;}")

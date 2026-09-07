@@ -244,7 +244,16 @@
       if (avatarUrl) {
         var image = document.createElement("img"); image.src = avatarUrl; image.alt = "";
         accountAvatar.appendChild(image);
-      } else accountAvatar.innerHTML = LUA_TOOLS_USER_SVG;
+      } else {
+        // With no Discord picture to show, the row rests on the lua.tools mark and
+        // trades it for the profile glyph on hover: branding at a glance, and the
+        // "this is your account" affordance the moment you aim at the row.
+        accountAvatar.appendChild(luaToolsLogoImage("lumen-account-avatar-brand"));
+        var glyph = document.createElement("span");
+        glyph.className = "lumen-account-avatar-glyph";
+        glyph.innerHTML = LUA_TOOLS_USER_SVG;
+        accountAvatar.appendChild(glyph);
+      }
     }
 
     function invalidateFixes() {
@@ -376,7 +385,14 @@
         restartBtn.style.display = "none";
         clearBtn.style.display = "none";
       } else if (which === "account") {
-        h.textContent = luaToolsStrings().accountTitle;
+        h.textContent = "";
+        var accountTitle = document.createElement("span");
+        accountTitle.className = "lumen-account-title";
+        accountTitle.appendChild(luaToolsLogoImage("lumen-account-title-mark"));
+        var accountTitleText = document.createElement("span");
+        accountTitleText.textContent = luaToolsStrings().accountTitle;
+        accountTitle.appendChild(accountTitleText);
+        h.appendChild(accountTitle);
         resetBtn.style.display = "none";
         restartBtn.style.display = "none";
         clearBtn.style.display = "none";
