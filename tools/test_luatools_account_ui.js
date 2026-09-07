@@ -46,7 +46,7 @@ check("U23 sign-in offers only the two Discord paths",
     && !styles.includes(".lumen-account-advanced")
     && !styles.includes(".lumen-account-cleanup"));
 check("U24 the two sign-in methods are peer cards, Discord owning the loud action",
-  styles.includes(".lumen-account-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;")
+  styles.includes(".lumen-account-login-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));")
     && styles.includes(".lumen-account-button.discord{background:#5865f2;")
     && account.includes('discordButton.className += " discord"')
     // one filled call to action per screen: the code path is the quiet fallback
@@ -99,6 +99,11 @@ check("U38 the two sign-in actions line up, top and bottom",
     && /lumen-account-login-grid p\{[^}]*min-height:/.test(styles)
     && /lumen-account-code-row\{[^}]*height:34px/.test(styles)
     && /lumen-account-button\{[^}]*min-height:34px/.test(styles));
+// `1fr` is minmax(auto,1fr), so the card with the wider min-content takes more
+// than its half and the two actions come out different widths. Floor both.
+check("U39 the two cards claim exactly half the grid each",
+  /lumen-account-login-grid\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/.test(styles)
+    && !/grid-template-columns:1fr 1fr/.test(styles));
 check("U35 the code card ends at its action, with no footer or dividing rule",
   !/method-note|codeSafety/.test(account)
     && !styles.includes(".lumen-account-method-note")

@@ -192,8 +192,11 @@
       ".lumen-account-card{box-sizing:border-box;overflow:hidden;border:1px solid #414955;",
       "border-radius:8px;background:#20242b;}",
       // Sign-in methods are two peer cards, not one panel cut down the middle.
-      ".lumen-account-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;",
-      "align-items:stretch;}",
+      // minmax(0,...), not a bare 1fr: 1fr floors at min-content, so the code card
+      // (input + button on one line) claimed 333px against the Discord card's 307
+      // and the two actions came out 26px apart in width.
+      ".lumen-account-login-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));",
+      "gap:12px;margin-bottom:14px;align-items:stretch;}",
       ".lumen-account-login-grid>section{display:flex;position:relative;flex-direction:column;align-items:flex-start;",
       "gap:0;padding:20px;box-sizing:border-box;border:1px solid #414955;border-radius:8px;background:#20242b;}",
       ".lumen-account-method-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;",
