@@ -101,6 +101,13 @@ check("U38 the two sign-in actions line up, top and bottom",
     && /lumen-account-button\{[^}]*min-height:34px/.test(styles));
 // `1fr` is minmax(auto,1fr), so the card with the wider min-content takes more
 // than its half and the two actions come out different widths. Floor both.
+// The mark is the circle, so the avatar's own rim must not ring it. Stated once,
+// as the absence of chrome at rest, so hover keeps whichever rim the state owns.
+check("U40 the avatar rim stays hidden while the mark is showing",
+  overlay.includes('accountAvatar.classList.add("branded")')
+    && overlay.includes('accountAvatar.classList.remove("branded")')
+    && styles.includes(".lumen-account-entry:not(:hover):not(.active-focus) .lumen-account-avatar.branded{")
+    && /lumen-account-avatar\{[^}]*transition:border-color/.test(styles));
 check("U39 the two cards claim exactly half the grid each",
   /lumen-account-login-grid\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/.test(styles)
     && !/grid-template-columns:1fr 1fr/.test(styles));

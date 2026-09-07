@@ -242,9 +242,13 @@
       accountAvatar.textContent = "";
       var avatarUrl = configured && luaToolsSafeAvatar(status.account && status.account.avatarUrl);
       if (avatarUrl) {
+        accountAvatar.classList.remove("branded");
         var image = document.createElement("img"); image.src = avatarUrl; image.alt = "";
         accountAvatar.appendChild(image);
       } else {
+        // Marks the avatar as wearing the lua.tools badge, which drops its own rim
+        // and fill for as long as the badge is the visible layer.
+        accountAvatar.classList.add("branded");
         // With no Discord picture to show, the row rests on the lua.tools mark and
         // trades it for the profile glyph on hover: branding at a glance, and the
         // "this is your account" affordance the moment you aim at the row.

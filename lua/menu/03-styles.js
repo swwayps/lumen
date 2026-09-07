@@ -92,7 +92,8 @@
       ".lumen-account-entry:focus-visible{outline:2px solid #66c0f4;outline-offset:-3px;}",
       ".lumen-account-avatar{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;",
       "box-sizing:border-box;flex:0 0 32px;border:1px solid rgba(255,255,255,.13);border-radius:50%;",
-      "background:rgba(255,255,255,.05);color:#a6afb9;overflow:hidden;}",
+      "background:rgba(255,255,255,.05);color:#a6afb9;overflow:hidden;",
+      "transition:border-color .14s,background-color .14s;}",
       // Two stacked layers, crossfaded: the lua.tools mark at rest, the profile
       // glyph once the row is pointed at (or gamepad-focused, same treatment).
       // The mark is a round badge, so it fills the circle instead of being inset
@@ -105,6 +106,12 @@
       ".lumen-account-entry:hover .lumen-account-avatar-glyph{opacity:1;}",
       ".lumen-account-entry.active-focus .lumen-account-avatar-brand{opacity:0;}",
       ".lumen-account-entry.active-focus .lumen-account-avatar-glyph{opacity:1;}",
+      // While the mark rests it IS the circle, so the avatar's own rim and fill
+      // must not ring it. Written as the ABSENCE of chrome at rest rather than as
+      // a hover rule that repaints it: hover and gamepad focus then fall back to
+      // whichever rim the row's state already owns (neutral, or connected blue).
+      ".lumen-account-entry:not(:hover):not(.active-focus) .lumen-account-avatar.branded{",
+      "border-color:transparent;background-color:transparent;}",
       // A rim, not a ring: at full accent this read as a bright blue circle
       // drawn around the avatar rather than as part of it.
       ".lumen-account-entry.connected .lumen-account-avatar{border-color:rgba(102,192,244,.24);",
