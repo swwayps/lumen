@@ -48,8 +48,6 @@
       codeBody: "Execute /login no Discord do LuaTools e digite o código de 6 caracteres.",
       codePlaceholder: "ABC123", codeButton: "Entrar com código", waiting: "Aguardando autorização do Discord…",
       signingIn: "Entrando…", invalidCode: "Digite o código de 6 caracteres.",
-      recommended: "Recomendado",
-      codeSafety: "O login por código não mexe no Discord do Steam.",
       clearAfter: "Limpar o Discord do Steam depois", clearAfterHint: "Desconecta o Discord apenas do navegador do Steam. Sua sessão lua.tools continua ativa.",
       security: "Discord no Steam",
       keepDiscordHint: "Mantém o Discord conectado no navegador interno do Steam. Ative esta opção somente se necessário.",
@@ -73,8 +71,6 @@
       codeBody: "Run /login in the LuaTools Discord and enter the six-character code.",
       codePlaceholder: "ABC123", codeButton: "Sign in with code", waiting: "Waiting for Discord authorization…",
       signingIn: "Signing in…", invalidCode: "Enter the six-character code.",
-      recommended: "Recommended",
-      codeSafety: "Code sign-in never touches Steam's Discord session.",
       clearAfter: "Clear Discord from Steam afterwards", clearAfterHint: "Signs Discord out of Steam's browser only. Your lua.tools session stays connected.",
       security: "Discord in Steam",
       keepDiscordHint: "Keeps Discord signed in to Steam's internal browser. Enable this only when necessary.",
@@ -743,16 +739,9 @@
       var discord = document.createElement("section"); discord.setAttribute("data-method", "discord");
       var discordIcon = document.createElement("span"); discordIcon.className = "lumen-account-method-icon"; discordIcon.innerHTML = LUA_TOOLS_DISCORD_SVG;
       var discordTitle = document.createElement("h3"); discordTitle.textContent = S.discordTitle;
-      // Both cards are equally usable, so nothing in the layout said which one to
-      // reach for. The pill does, in one word, without demoting the code path. It
-      // is a badge on the card, not part of the heading: inside the h3 it had to
-      // wrap onto its own line in a half-width card and pushed the copy down.
-      var discordFlag = document.createElement("span");
-      discordFlag.className = "lumen-account-method-flag";
-      discordFlag.textContent = S.recommended;
       var discordBody = document.createElement("p"); discordBody.textContent = S.discordBody;
-      // Brand-filled, with the Discord mark on it: the recommended path should be
-      // the one obvious button, not a twin of the code fallback's blue.
+      // Brand-filled, with the Discord mark on it, so this path is not a twin of
+      // the code fallback's blue.
       var discordButton = luaToolsButton("", false);
       discordButton.className += " discord";
       var discordButtonIcon = document.createElement("span");
@@ -765,7 +754,6 @@
       discordButton.appendChild(discordButtonIcon);
       discordButton.appendChild(discordButtonLabel);
       var preference = preferenceRow();
-      discord.appendChild(discordFlag);
       discord.appendChild(discordIcon); discord.appendChild(discordTitle);
       discord.appendChild(discordBody); discord.appendChild(discordButton);
       discord.appendChild(preference.node);
@@ -780,14 +768,8 @@
       codeInput.setAttribute("aria-label", S.codeTitle);
       var codeButton = luaToolsButton(S.codeButton, false);
       codeRow.appendChild(codeInput); codeRow.appendChild(codeButton);
-      // The Discord card gained a footer row, which left the code card ending in a
-      // block of empty panel. Close it in the SAME slot with the fact the trimmed
-      // cleanup hint used to carry: the two cards now share one rhythm — icon and
-      // copy, action, footer — instead of one being padded out to match the other.
-      var note = document.createElement("small"); note.className = "lumen-account-method-note";
-      note.textContent = S.codeSafety;
       code.appendChild(codeIcon); code.appendChild(codeTitle); code.appendChild(codeBody);
-      code.appendChild(codeRow); code.appendChild(note);
+      code.appendChild(codeRow);
       grid.appendChild(discord); grid.appendChild(code);
       var discordHandoff = luaToolsHandoff(discord);
       var codeHandoff = luaToolsHandoff(code);

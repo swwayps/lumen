@@ -65,6 +65,11 @@ check("U29 the sidebar mark yields to the profile glyph on hover",
     && overlay.includes('glyph.className = "lumen-account-avatar-glyph"')
     && styles.includes(".lumen-account-entry:hover .lumen-account-avatar-brand{opacity:0;}")
     && styles.includes(".lumen-account-entry:hover .lumen-account-avatar-glyph{opacity:1;}"));
+// The mark is itself a round badge, so it is the avatar circle rather than a
+// picture sitting inside one: no inset, or it reads as a shrunken logo in a ring.
+check("U37 the sidebar mark fills the avatar circle",
+  /lumen-account-avatar-brand\{position:absolute;inset:0;width:100%;height:100%;/.test(styles)
+    && !/lumen-account-avatar-brand\{[^}]*padding:/.test(styles));
 check("U30 the account tab title carries the mark before its text",
   overlay.includes('accountTitle.className = "lumen-account-title"')
     && overlay.includes('luaToolsLogoImage("lumen-account-title-mark")')
@@ -82,14 +87,12 @@ check("U33 the cleanup switch belongs to the Discord card it applies to",
     && account.includes('row.className = "lumen-account-method-option"')
     && !account.includes("panel.appendChild(preference.node)")
     && styles.includes(".lumen-account-method-option{"));
-check("U36 the recommended pill is a card badge, not a heading fragment",
-  account.includes("discord.appendChild(discordFlag)")
-    && !account.includes("discordTitle.appendChild(discordFlag)")
-    && styles.includes(".lumen-account-method-flag{position:absolute;"));
-check("U35 both method cards close with a footer in the same slot",
-  account.includes('note.className = "lumen-account-method-note"')
-    && account.includes("code.appendChild(note)")
-    && styles.includes(".lumen-account-method-note{")
+check("U36 neither method card is flagged as the recommended one",
+  !/discordFlag|method-flag|recommended:/.test(account)
+    && !styles.includes(".lumen-account-method-flag"));
+check("U35 the code card ends at its action, with no footer or dividing rule",
+  !/method-note|codeSafety/.test(account)
+    && !styles.includes(".lumen-account-method-note")
     && styles.includes(".lumen-account-code-row input{min-width:0;flex:1;")
     && styles.includes(".lumen-account-login-grid>section>button{margin-top:auto;align-self:stretch;}"));
 check("U34 a sign-in handoff runs the OAuth progress animation",

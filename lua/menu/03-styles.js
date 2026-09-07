@@ -95,10 +95,10 @@
       "background:rgba(255,255,255,.05);color:#a6afb9;overflow:hidden;}",
       // Two stacked layers, crossfaded: the lua.tools mark at rest, the profile
       // glyph once the row is pointed at (or gamepad-focused, same treatment).
-      // The mark is inset and contained — cover would crop a square logo into the
-      // circle, and the glyph beside it is drawn at 17px, not edge to edge.
+      // The mark is a round badge, so it fills the circle instead of being inset
+      // inside it — any padding here reads as a shrunken logo floating in a ring.
       ".lumen-account-avatar>img.lumen-account-avatar-brand{position:absolute;inset:0;width:100%;height:100%;",
-      "box-sizing:border-box;padding:4px;object-fit:contain;opacity:1;transition:opacity .14s;}",
+      "box-sizing:border-box;object-fit:contain;opacity:1;transition:opacity .14s;}",
       ".lumen-account-avatar>.lumen-account-avatar-glyph{position:absolute;inset:0;display:flex;",
       "align-items:center;justify-content:center;opacity:0;transition:opacity .14s;}",
       ".lumen-account-entry:hover .lumen-account-avatar-brand{opacity:0;}",
@@ -202,19 +202,10 @@
       ".lumen-account-method-icon svg{width:18px;height:18px}",
       ".lumen-account-method-icon.code{border-color:rgba(102,192,244,.36);color:#66c0f4;background:rgba(102,192,244,.13);}",
       ".lumen-account-login-grid h3{margin:0 0 7px;color:#fff;font-size:15px;font-weight:700;}",
-      // Which path to take, said once. Blurple because it recommends the Discord
-      // card specifically, not a generic Lumen-accent callout. Pinned to the card's
-      // top corner, on the method icon's line, so it costs the copy no height.
-      ".lumen-account-method-flag{position:absolute;top:20px;right:20px;padding:2px 8px;",
-      "border-radius:10px;background:rgba(88,101,242,.18);color:#a3abfa;font-size:9.5px;",
-      "font-weight:700;text-transform:uppercase;letter-spacing:.5px;}",
       ".lumen-account-login-grid p{margin:0 0 16px;color:#9ba3ab;font-size:12px;line-height:1.5;}",
       // The card's only action reads as its call to action, so it spans the card
       // rather than sitting as a small tag in the corner of a wide panel.
       ".lumen-account-login-grid>section>button{margin-top:auto;align-self:stretch;}",
-      // Footer slot, shared by both cards so they end on the same line.
-      ".lumen-account-method-note{width:100%;box-sizing:border-box;margin-top:15px;padding-top:14px;",
-      "border-top:1px solid rgba(255,255,255,.08);color:#8f98a0;font-size:10.5px;line-height:1.45;}",
       // The Discord-cleanup preference, inside the card whose button it qualifies.
       // The whole row is the <label>, so the copy toggles the switch too.
       ".lumen-account-method-option{display:flex;align-items:center;gap:14px;width:100%;box-sizing:border-box;",
