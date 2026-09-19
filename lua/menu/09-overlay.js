@@ -262,6 +262,9 @@
 
     function invalidateFixes() {
       if (!fixesBody) return;
+      // A login/logout changes what the catalogue returns, so drop the session
+      // cache too, otherwise the stale pre-auth view would persist across opens.
+      if (typeof invalidateLuaToolsFixesCache === "function") invalidateLuaToolsFixesCache();
       initialized.fixes = false;
       fixesBody.textContent = "";
       if (currentTab === "fixes") ensureTab("fixes");

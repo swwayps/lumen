@@ -537,13 +537,30 @@
     });
   }
 
+  // The fixes catalogue is a network fetch (GetLuaToolsFixesCatalogue). Cached at
+  // module scope so it is fetched once per session: reopening the settings window
+  // renders it instantly instead of re-loading every time. invalidateFixes()
+  // (auth change) clears it so a login/logout refetches.
+  var _luaToolsFixesPayloadCache = null;
+  function invalidateLuaToolsFixesCache() { _luaToolsFixesPayloadCache = null; }
+
   function renderLuaToolsFixes(panel, cachedState) {
     var S = luaToolsStrings();
+    // An explicit cachedState (in-session detail back-navigation) wins; otherwise
+    // fall back to the session cache so a fresh window open pays no network cost.
+    if (!(cachedState && cachedState.payload) && _luaToolsFixesPayloadCache) {
+      cachedState = { payload: _luaToolsFixesPayloadCache };
+    }
     if (!(cachedState && cachedState.payload)) panel.textContent = "Loading…";
     return luaToolsLoadFixesCatalogue(cachedState, function () {
       return call("GetLuaToolsFixesCatalogue", {}).then(luaToolsParse);
     }).then(function (viewState) {
       var payload = viewState.payload;
+      // Cache a good, authorized catalogue. authRequired payloads carry no games
+      // and are left uncached so a later login refetches.
+      if (payload && payload.success && Array.isArray(payload.games)) {
+        _luaToolsFixesPayloadCache = payload;
+      }
       panel.textContent = "";
       if (payload && payload.authRequired) {
         var gate = document.createElement("div");
