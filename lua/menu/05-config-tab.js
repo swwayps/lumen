@@ -20,14 +20,6 @@
       d.textContent = ks.desc;
       wrap.appendChild(d);
     }
-    // Per-level guidance line.
-    if (entry.level === "info" && ks.info) {
-      addLine(wrap, ks.info, "info", "\u2139");          // ℹ
-    } else if (entry.level === "advanced") {
-      addLine(wrap, S.warnAdvanced, "advanced", "\u26A0"); // ⚠
-    } else if (entry.level === "danger") {
-      addLine(wrap, S.warnDanger, "danger", "\u26A0");
-    }
     row.appendChild(wrap);
 
     var ctrl = document.createElement("span");

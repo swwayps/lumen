@@ -362,15 +362,6 @@
         var gt = document.createElement("span");
         gt.textContent = guStrings().title;
         h.appendChild(gt);
-        var exp = document.createElement("span");
-        exp.className = "lumen-exp";
-        exp.textContent = guStrings().experimental;
-        h.appendChild(exp);
-        var info = document.createElement("span");
-        info.className = "lumen-info";
-        info.textContent = "i";
-        info.title = guStrings().experimentalHint;
-        h.appendChild(info);
         resetBtn.style.display = "none";
         restartBtn.style.display = "none";
       } else if (which === "cloud") {
