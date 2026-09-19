@@ -203,6 +203,13 @@
         badge.textContent = GU.syntheticBadge;
         title = GU.syntheticTitle;
         body = GU.syntheticBody;
+      } else if (opts.autoUpdateOff) {
+        // Neutral grey: the game isn't broken, the user chose to freeze it
+        // globally. Distinct from the offline (red/error) state.
+        badge.className = "lumen-badge mute";
+        badge.textContent = GU.autoUpdateOffBadge;
+        title = GU.autoUpdateOffTitle;
+        body = GU.autoUpdateOffBody;
       } else {
         badge.className = "lumen-badge err";
         badge.textContent = GU.offlineBadge;

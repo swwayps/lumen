@@ -9,6 +9,10 @@
   var _guClearBtnWanted = true;
   var _guTabActive = false;
   var _providersOffline = false;
+  // Global "Auto-update apps" is off (slsteam-moon config). Unpinned games are
+  // frozen on their installed build, so the per-game "Latest" option is greyed
+  // out with a neutral note. Pinning a specific build still works.
+  var _autoUpdateOff = false;
   function guShowClearBtn(show) {
     _guClearBtnWanted = !!show;
     if (_guClearBtnRef) {
@@ -87,9 +91,10 @@
       };
 
       var latest = verRow({
-        label: GU.latest, selected: !anyPinned && !_providersOffline && !game.synthetic,
-        disabled: _providersOffline || game.synthetic,
+        label: GU.latest, selected: !anyPinned && !_providersOffline && !game.synthetic && !_autoUpdateOff,
+        disabled: _providersOffline || game.synthetic || _autoUpdateOff,
         synthetic: game.synthetic,
+        autoUpdateOff: _autoUpdateOff,
         onClick: function () {
           call("ClearDlcPin", { json: JSON.stringify({ appid: game.appid, depot: d.depot }) })
             .then(parseRpc)
@@ -109,7 +114,7 @@
         if (v.pinned) badges.push({ cls: "lock", text: GU.pinned });
         if (v.installed) badges.push({ cls: "cur", text: GU.current });
         if (v.fromLuaTools) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
-        var isSelected = v.pinned || ((_providersOffline || game.synthetic) && !anyPinned && (v.installed || (!hasInstalled && v.fromLuaTools)));
+        var isSelected = v.pinned || ((_providersOffline || game.synthetic || _autoUpdateOff) && !anyPinned && (v.installed || (!hasInstalled && v.fromLuaTools)));
         var row = verRow({
           label: fmtDate(v.date), gid: v.gid, selected: isSelected, badges: badges,
           onClick: function () {
@@ -265,9 +270,10 @@
     };
 
     var latest = verRow({
-      label: GU.latest, selected: !game.locked && !_providersOffline && !game.offline && !game.synthetic,
-      disabled: _providersOffline || game.offline || game.synthetic,
+      label: GU.latest, selected: !game.locked && !_providersOffline && !game.offline && !game.synthetic && !_autoUpdateOff,
+      disabled: _providersOffline || game.offline || game.synthetic || _autoUpdateOff,
       synthetic: game.synthetic,
+      autoUpdateOff: _autoUpdateOff,
       onClick: function () {
         call("ClearGamePin", { json: JSON.stringify({ appid: game.appid }) })
           .then(parseRpc)
@@ -287,7 +293,7 @@
       var badges = [];
       if (b.installed) badges.push({ cls: "cur", text: GU.current });
       if (b.fromLua) badges.push({ cls: "lt", text: game.fromLuaFile ? GU.fromLuaFile : GU.fromLua });
-      var isSelected = (game.locked && b.pinned) || ((_providersOffline || game.offline || game.synthetic) && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
+      var isSelected = (game.locked && b.pinned) || ((_providersOffline || game.offline || game.synthetic || _autoUpdateOff) && !game.locked && (b.installed || (!hasInstalledBuild && b.fromLua)));
       var row = verRow({
         label: fmtDate(b.date), selected: isSelected, badges: badges,
         onClick: function () {
@@ -413,6 +419,7 @@
     var games = data && Array.isArray(data.games) ? data.games : [];
     return JSON.stringify(stableGameUpdatesValue({
       providers_offline: !!(data && data.providers_offline),
+      auto_update: !(data && data.auto_update === false),
       games: games,
     }));
   }
@@ -427,7 +434,13 @@
       g.depots.forEach(function (d) { d.versions = arr(d.versions); });
       return g.depots.length > 0;
     });
-    return { providers_offline: !!(data && data.providers_offline), games: games };
+    return {
+      providers_offline: !!(data && data.providers_offline),
+      // Absent (older backend) -> treat as on, so "Latest" is never greyed
+      // spuriously; only an explicit false flips it off.
+      auto_update: !(data && data.auto_update === false),
+      games: games,
+    };
   }
 
   // Games can be added from outside this panel — the LuaTools store page, the
@@ -454,6 +467,18 @@
   function reloadGameUpdates(body) {
     invalidateGameUpdatesCache();
     renderGameUpdates(body);
+  }
+
+  // Called by the slsteam-moon settings tab when the global "Auto-update apps"
+  // switch flips, so the Game Updates list greys/ungreys the per-game "Latest"
+  // option live — no tab switch or Steam restart needed for the UI to reflect
+  // it. `enabled` is the new toggle value (true = auto-update on). Set the flag
+  // immediately for any interim paint, drop the now-stale snapshot, and if the
+  // list is on screen re-fetch + repaint from fresh backend state.
+  function applyAutoUpdateSetting(enabled) {
+    _autoUpdateOff = !enabled;
+    if (_guListBody) reloadGameUpdates(_guListBody);
+    else invalidateGameUpdatesCache();
   }
 
   // ── Source drafts + robust file import ──────────────────────────────────
@@ -1420,6 +1445,7 @@
     var paint = function (data) {
       var normalized = normalizeGameUpdatesData(data);
       _providersOffline = normalized.providers_offline;
+      _autoUpdateOff = normalized.auto_update === false;
       // Fingerprint the same normalized data that the renderer consumes. This
       // prevents cjson's empty-table representation ({}) from looking different
       // from the normalized empty array ([]) on the next revalidation.

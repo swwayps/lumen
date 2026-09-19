@@ -111,6 +111,13 @@
               log("SetSlsConfig failed for", entry.key, res);
               return;
             }
+            // Reflect the "Auto-update apps" switch on the Game Updates tab live
+            // (grey/ungrey the per-game "Latest"). The restart prompt below is
+            // about Steam re-checking updates; this is just the UI mirroring the
+            // setting immediately.
+            if (entry.key === "AutoUpdateApps" && typeof applyAutoUpdateSetting === "function") {
+              applyAutoUpdateSetting(newVal);
+            }
             if (entry.restart_on_change) showConfigRestartPrompt(entry, S);
           })
           .catch(function (e) { log("SetSlsConfig error", entry.key, e); });

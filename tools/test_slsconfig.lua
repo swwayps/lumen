@@ -327,4 +327,28 @@ do
   assert_true(not slsconfig.reset_to_defaults("/no/such/dir/cfg.yaml"), "reset refuses missing file")
 end
 
+-- ── AutoUpdateApps is a visible bool defaulting to ON (auto-update) ─────────
+do
+  local entry
+  for _, e in ipairs(slsconfig.SCHEMA) do
+    if e.key == "AutoUpdateApps" then entry = e end
+  end
+  assert_true(entry ~= nil, "AutoUpdateApps present in SCHEMA")
+  assert_eq(entry.hidden, nil, "AutoUpdateApps is visible")
+  assert_eq(entry.type, "bool", "AutoUpdateApps is a bool")
+  assert_eq(entry.default, true, "AutoUpdateApps defaults ON (games track latest)")
+
+  -- Absent key -> default ON, so a config that predates the switch keeps
+  -- auto-updating rather than silently freezing every game.
+  assert_eq(slsconfig.parse("LogLevel: 2\n", false).AutoUpdateApps, true,
+            "AutoUpdateApps default true when absent")
+
+  -- Turning it off round-trips and leaves neighbours intact.
+  local out = slsconfig.set_key(SAMPLE, "AutoUpdateApps", false)
+  assert_true(out:find("AutoUpdateApps: no", 1, true), "AutoUpdateApps written as no")
+  assert_eq(slsconfig.parse(out).AutoUpdateApps, false, "round-trips false")
+  assert_eq(slsconfig.parse(out).DisableFamilyShareLock, true,
+            "neighbour key untouched when AutoUpdateApps flips")
+end
+
 print("test_slsconfig: ALL PASS")
