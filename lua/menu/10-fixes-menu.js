@@ -1143,6 +1143,10 @@
   function fxApply(appid, url, fixType, ctx, win, receiptKind) {
     var S = fxStrings();
     if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
+    // Show the loading view up front: the start RPC does network work (resolve +
+    // begin download), and waiting for it before switching left the tile grid on
+    // screen for a few seconds after the click.
+    fxShowProgress(win, fixType);
     call("ApplyGameFix", {
       appid: appid, downloadUrl: url, installPath: ctx.installPath,
       fixType: fixType, gameName: ctx.gameName || "", contentScriptQuery: "",
@@ -1150,27 +1154,29 @@
     }).then(function (res) {
       var p = fxParse(res);
       if (p && p.success) {
-        fxShowProgress(win, fixType);
         fxPoll(appid, url, fixType, ctx, win,
           receiptKind === FX_FALLBACK_RECEIPT_KIND ? FX_FALLBACK_RECEIPT_KIND : null);
       } else if (fixesAuthExpired(p)) {
-        fxAlert((p && p.error) ? String(p.error) : S.authViewTitle);
+        fxFailProgress(win, (p && p.error) ? String(p.error) : S.authViewTitle);
       } else {
-        fxAlert((p && p.error) ? String(p.error) : S.applyErr);
+        fxFailProgress(win, (p && p.error) ? String(p.error) : S.applyErr);
       }
-    }).catch(function () { fxAlert(S.applyErr); });
+    }).catch(function () { fxFailProgress(win, S.applyErr); });
   }
 
   function fxApplyLuaTools(appid, fixId, fixType, ctx, win) {
     var S = fxStrings();
     if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
+    // Switch to the loading view immediately so the click feels instant.
+    // StartLuaToolsFix resolves the fix and starts the download (a few seconds
+    // of network); waiting on it before showing progress was the delay.
+    fxShowProgress(win, fixType);
     call("StartLuaToolsFix", {
       appid: appid, fixId: fixId, installPath: ctx.installPath,
       gameName: ctx.gameName || "", contentScriptQuery: "",
     }).then(function (res) {
       var p = fxParse(res);
       if (p && p.success) {
-        fxShowProgress(win, fixType);
         fxPoll(appid, null, fixType, ctx, win, fixId);
         return;
       }
@@ -1181,8 +1187,8 @@
         }
         return;
       }
-      fxAlert((p && p.error) ? String(p.error) : S.applyErr);
-    }).catch(function () { fxAlert(S.applyErr); });
+      fxFailProgress(win, (p && p.error) ? String(p.error) : S.applyErr);
+    }).catch(function () { fxFailProgress(win, S.applyErr); });
   }
 
   function fxShowProgress(win, fixType) {
@@ -1197,6 +1203,18 @@
     body.querySelector("#lumen-fx-pmsg").textContent = S.applying.replace("{fix}", fixType);
     var f = win.querySelector(".lumen-fx-foot");
     if (f) f.remove();
+  }
+
+  // The loading view now shows before the start RPC resolves, so a start failure
+  // is reported in place (message + Close) instead of as a popup layered over a
+  // frozen "Applying…" screen — matching how fxPoll reports later failures.
+  function fxFailProgress(win, text) {
+    var S = fxStrings();
+    var msg = win.querySelector("#lumen-fx-pmsg");
+    if (msg) msg.textContent = S.failed.replace("{error}", text || S.unknownError);
+    var bar = win.querySelector(".lumen-fx-pbar > i");
+    if (bar) bar.style.transform = "scaleX(0)";
+    fxFooterClose(win);
   }
 
   function fxPoll(appid, url, fixType, ctx, win, officialFixId) {
