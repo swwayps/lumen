@@ -495,6 +495,64 @@ do
   end
 end
 
+-- ── GetAboutVersions caches across opens ─────────────────────────────────────
+-- get_versions runs on every settings-window open and blocks the single injector
+-- thread on release-API calls; uncached, repeated open/close piled network I/O
+-- ahead of the open/close relays and grew laggier each click. The register-level
+-- cache serves subsequent opens without re-fetching.
+do
+  local gets = 0
+  local function api_body(url)
+    local name = url:find("lumen", 1, true) and "lumen-linux.zip"
+      or url:find("luatools-moon", 1, true) and "luatools-linux.zip"
+      or "slsteam-moon-linux-2.6-lumen.zip"
+    return '{"tag_name":"v2.6","assets":[{"name":"' .. name ..
+      '","id":100,"created_at":"2026-06-21T03:15:25Z","size":100}]}'
+  end
+  local http = { get = function(url)
+    gets = gets + 1
+    return { status = 200, body = api_body(url) }, nil
+  end }
+  local registry = {}
+  about.register(registry, {
+    versions_path = "/versions",
+    channels_path = "/channels",
+    read_file = function() return "{}" end,
+    http = http,
+    channel_deps = {
+      write_file = function() return true end,
+      rename = function() return true end,
+    },
+  })
+  local first = registry.GetAboutVersions()
+  local after_first = gets
+  check("versions fetch reached the network", after_first > 0)
+  local second = registry.GetAboutVersions()
+  check("second open is served from cache (no new fetch)", gets == after_first)
+  check("cached payload is identical", second == first)
+  registry.SetAboutChannel('{"channel":"beta"}')
+  registry.GetAboutVersions()
+  check("channel change invalidates the cache (re-fetch)", gets > after_first)
+end
+
+-- A failed/offline probe must NOT be cached, or the tab would stay stale for the
+-- whole TTL after the network recovers.
+do
+  local gets = 0
+  local http = { get = function() gets = gets + 1; return nil, "down" end }
+  local registry = {}
+  about.register(registry, {
+    versions_path = "/versions",
+    channels_path = "/channels",
+    read_file = function() return "{}" end,
+    http = http,
+  })
+  registry.GetAboutVersions()
+  local after_first = gets
+  registry.GetAboutVersions()
+  check("an offline fetch is not cached (retries next open)", gets > after_first)
+end
+
 -- ── --noplugin behaviour ──────────────────────────────────────────────────────
 do
   -- get_versions with include_plugin=false drops the LuaTools plugin row.

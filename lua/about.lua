@@ -410,6 +410,20 @@ function about.get_versions(opts)
   }
 end
 
+-- True when a get_versions result carries at least one resolved latest tag,
+-- i.e. the release lookup actually reached the network. An offline probe leaves
+-- every component's latest as "", which the caller uses to skip caching a
+-- failed fetch.
+function about.versions_fetch_reached_network(data)
+  if type(data) ~= "table" or type(data.components) ~= "table" then
+    return false
+  end
+  for _, c in ipairs(data.components) do
+    if type(c.latest) == "string" and c.latest ~= "" then return true end
+  end
+  return false
+end
+
 -- Start every release lookup concurrently for the tiny menubar boot status.
 -- The returned handles are advanced only by poll_update_probe(), so neither an
 -- RPC handler nor any Steam thread waits on network I/O.
@@ -660,14 +674,37 @@ function about.register(registry, opts)
   local no_plugin = opts.no_plugin and true or false
   local channel_path = opts.channels_path or about.channels_path()
   local update_probe, update_result, update_checked_at
+  -- GetAboutVersions runs on EVERY settings-window open (the tab preloads it),
+  -- and get_versions makes synchronous release-API calls that block the single
+  -- injector thread while they run. Uncached, each open re-fetched and every
+  -- open/close relay queued behind that network I/O, so repeated open/close got
+  -- progressively laggier. Releases change rarely, so a short TTL cache keeps
+  -- the loop free on subsequent opens. SetAboutChannel clears it (the channel
+  -- changes what get_versions returns).
+  local versions_cache, versions_cache_at
+  local VERSIONS_TTL = 300
   registry.GetAboutVersions = function()
-    return json.encode(about.get_versions({
+    local now = os.time()
+    if versions_cache and versions_cache_at
+        and now - versions_cache_at < VERSIONS_TTL then
+      return versions_cache
+    end
+    local data = about.get_versions({
       include_plugin = not no_plugin,
       versions_path = opts.versions_path,
       channels_path = channel_path,
       read_file = opts.read_file,
       http = opts.http,
-    }))
+    })
+    local encoded = json.encode(data)
+    -- Only cache a fetch that actually reached the release API (some component
+    -- resolved a latest tag). An offline/failed probe leaves every latest blank;
+    -- caching that would keep the tab stale for the whole TTL even after the
+    -- network recovers, so let the next open retry instead.
+    if about.versions_fetch_reached_network(data) then
+      versions_cache, versions_cache_at = encoded, now
+    end
+    return encoded
   end
   registry.GetAboutUpdateStatus = function()
     local now = os.time()
@@ -702,6 +739,10 @@ function about.register(registry, opts)
       deps.read_file = opts.read_file
     end
     local ok, err = about.set_channel(channel_path, req.channel, deps)
+    -- The channel drives which tag/state get_versions reports, so a saved change
+    -- must drop the cached snapshot; the frontend's follow-up refresh then reads
+    -- fresh values for the new channel.
+    if ok then versions_cache, versions_cache_at = nil, nil end
     return json.encode({ success = ok and true or false, error = err })
   end
   registry.UpdateAll = function()
