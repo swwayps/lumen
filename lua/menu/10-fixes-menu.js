@@ -42,6 +42,11 @@
   // original left margin so removing the entry restores Steam's spacing.
   var _fxCluster = null, _fxClusterOrigMl = null;
 
+  // The sibling the entry was inserted immediately BEFORE (the icon cluster, or
+  // the gear wrapper on the fallback path). The keep-present tick verifies the
+  // entry still hugs it; see fixesEntryAnchored for why this matters.
+  var _fxAnchor = null;
+
   // The set of LuaTools-added appids ({appid: true}); null until first fetched.
   // The entry is only shown for games in this set (fetched from LumenAddedApps).
   var fxAddedApps = null;
@@ -542,6 +547,7 @@
         && rowChild !== gearWrap) {
       btn.style.alignSelf = "center";
       row.insertBefore(btn, rowChild);
+      _fxAnchor = rowChild;
       try {
         // Match the entry->cluster gap to the native gap BETWEEN the icon
         // buttons, so the three controls share one rhythm. The row already
@@ -576,6 +582,7 @@
     if (bar && clusterWrap && bar.contains(clusterWrap)) {
       btn.style.alignSelf = "center";
       bar.insertBefore(btn, clusterWrap);
+      _fxAnchor = clusterWrap;
       try {
         // Match the entry->gear gap to the native gap between the icon buttons
         // by setting the cluster's left margin (the only lever that moves it).
@@ -596,6 +603,7 @@
     // Fallback: original in-row placement left of the gear (may shrink icons).
     if (!gearWrap || !gearWrap.parentElement) return false;
     gearWrap.parentElement.insertBefore(btn, gearWrap);
+    _fxAnchor = gearWrap;
     attachFixesButtonFocus(btn);
     return true;
   }
@@ -609,8 +617,22 @@
       try { _fxCluster.style.marginLeft = _fxClusterOrigMl || ""; } catch (e) {}
       _fxCluster = null; _fxClusterOrigMl = null;
     }
+    _fxAnchor = null;
   }
   try { window.__lumenRemoveFixesButton = removeFixesButton; } catch (e) {}
+
+  // True while the entry still sits immediately LEFT of the sibling it was
+  // anchored against. Steam mounts a not-installed game's Install / "space
+  // required" controls asynchronously (a disk-space query) AFTER we've inserted
+  // the entry before the icon cluster; React then threads those late siblings in
+  // before the cluster but after our foreign node, stranding the entry at the
+  // FAR LEFT of the action bar. Keeping only a present+visible check never
+  // caught that, so also require the anchor invariant and re-anchor when it
+  // breaks. O(1): one nextElementSibling read (null anchor = fallback, skip).
+  function fixesEntryAnchored(btn) {
+    if (!_fxAnchor) return true;
+    return btn.nextElementSibling === _fxAnchor;
+  }
 
   // Light keep-present tick (re-anchors if the entry ends up in a hidden copy).
   // Steady state is a single getElementById; the (small) gear scan only runs
@@ -628,8 +650,9 @@
         // Only for games added via LuaTools (present in the fetched added-set).
         if (!fixesAppAllowed(currentFixesAppId(), fxAddedApps)) { removeFixesButton(); return; }
         var existing = document.getElementById(FX_BTN_ID);
-        if (existing && fixesVisible(existing)) return;   // present & visible -> keep
-        if (existing) removeFixesButton();                // stale (its bar went hidden)
+        // Present, visible AND still hugging its anchor -> keep (O(1)).
+        if (existing && fixesVisible(existing) && fixesEntryAnchored(existing)) return;
+        if (existing) removeFixesButton();                // hidden bar, or React re-flowed the row and stranded it
         var gear = findGearAnchor();
         if (gear) { ensureFixesButton(gear); }
       } catch (e) {}
