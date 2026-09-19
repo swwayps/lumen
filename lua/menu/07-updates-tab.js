@@ -754,11 +754,9 @@
       call("CommitGameImport", { json: JSON.stringify({ session: session }) })
         .then(parseRpc)
         .then(function () {
-          showConfirm({
-            title: GU.restartTitle, body: GU.importDone,
-            declineText: GU.restartLater, confirmText: GU.restartNow,
-            onConfirm: function () { call("RestartSteam", {}).catch(function (e) { log("RestartSteam", e); }); },
-          });
+          // Hot reload: slsteam-moon picks up the new .lua/manifest live, so no
+          // Steam restart is needed. Just acknowledge and refresh the list.
+          showConfirm({ title: GU.importedTitle, body: GU.importDone });
           reloadGameUpdates(body);
         })
         .catch(function (e) {
@@ -1186,11 +1184,8 @@
           });
       }).then(function () {
         cancelGameDraft(source.appid, source.session);
-        showConfirm({
-          title: GU.restartTitle, body: GU.addGameDone,
-          declineText: GU.restartLater, confirmText: GU.restartNow,
-          onConfirm: function () { call("RestartSteam", {}).catch(function (e) { log("RestartSteam", e); }); },
-        });
+        // Hot reload: the added game appears without a Steam restart.
+        showConfirm({ title: GU.addedTitle, body: GU.addGameDone });
         reloadGameUpdates(body);
       }).catch(function (e) {
         commit.disabled = false; commit.textContent = GU.addGame;

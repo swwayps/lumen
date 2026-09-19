@@ -357,11 +357,9 @@
   // the ManifestPins config on the fly), downstream of Steam's in-session
   // appinfo refresh, so no restart is needed. Just write the pin (and move the
   // selection); installing from the library then comes down at the pinned
-  // build. NOTE: this assumes the game was already added in a previous session
-  // (it's in this list, so it has a stplug .lua and was provisioned at the last
-  // boot). A game added THIS session still needs a restart before its first
-  // install (separate add-without-restart limitation) — that path keeps its own
-  // restart prompt in runImport.
+  // build. Adding/importing a game hot-reloads the same way now (slsteam-moon
+  // picks up a new stplug-in .lua and manifest live), so no add/import/pin path
+  // prompts for a Steam restart anymore. The name is kept for its two callers.
   function showPinRestartPrompt(applyPin) {
     Promise.resolve(applyPin ? applyPin() : null)
       .catch(function (err) { log("apply-pin", err); });
