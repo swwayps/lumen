@@ -1771,6 +1771,59 @@ do
   os.execute("rm -rf '" .. root .. "'")
 end
 
+-- recommended_build_ready: the auto-fix build gate. A build-agnostic fix (a
+-- keys-only .lua with no setManifestid) leaves no pin, so it must be ready on
+-- whatever build is installed instead of waiting forever on a pin that will
+-- never exist (the UNO case). A build-specific fix still waits for its build.
+do
+  local function mkdir(p) os.execute("mkdir -p '" .. p .. "'") end
+  local root = os.tmpname(); os.remove(root); mkdir(root)
+  local stplug = root .. "/stplug-in"; mkdir(stplug)
+  mkdir(root .. "/steamapps")
+  local cfg = root .. "/config.yaml"
+  local cf = assert(io.open(cfg, "wb"))
+  cf:write("AdditionalApps:\n  - 470220\nLogLevel: 2\n"); cf:close()
+  local ctx = {
+    config_path = cfg, stplug_dir = stplug, imports_path = root .. "/imports.txt",
+    manifests_dir = root .. "/manifests", steam_root = root,
+    offline_path = root .. "/offline",
+  }
+  mkdir(ctx.manifests_dir)
+  local function read_cfg()
+    local f = assert(io.open(cfg, "rb")); local b = f:read("*a"); f:close(); return b
+  end
+
+  local keysonly = table.concat({
+    "-- keys only, no build pin",
+    'addappid(470220, 1, "' .. string.rep("a", 64) .. '")',
+    'addappid(470222, 1, "' .. string.rep("b", 64) .. '")',
+  }, "\n") .. "\n"
+  local ok_k, res_k = mp.install_luatools_manifest(ctx, 470220, keysonly)
+  check(ok_k == true and res_k and res_k.pinned == 0,
+    "build-agnostic: a keys-only manifest installs with no build pin")
+  check(mp.parse_pins(read_cfg())[470220] == nil,
+    "build-agnostic: no ManifestPins entry is written")
+  check(mp.recommended_build_ready(ctx, 470220) == true,
+    "build-agnostic: ready on any installed build (no pin to match)")
+
+  local pinned = table.concat({
+    "-- build pinned",
+    'addappid(700, 1, "' .. string.rep("c", 64) .. '")',
+    'addappid(701, 1, "' .. string.rep("d", 64) .. '")',
+    'setManifestid(701, "5551234")',
+  }, "\n") .. "\n"
+  check(select(1, mp.install_luatools_manifest(ctx, 700, pinned)) == true,
+    "build-specific: pinned manifest installs")
+  check(mp.recommended_build_ready(ctx, 700) == false,
+    "build-specific: not ready until the pinned build is installed")
+  local acf = assert(io.open(root .. "/steamapps/appmanifest_700.acf", "wb"))
+  acf:write('"AppState"\n{\n"InstalledDepots"\n{\n"701"\n{\n"manifest" "5551234"\n}\n}\n}\n')
+  acf:close()
+  check(mp.recommended_build_ready(ctx, 700) == true,
+    "build-specific: ready once the installed depot matches the pin")
+  os.execute("rm -rf '" .. root .. "'")
+end
+
 if fails == 0 then print("\ntest_manifestpins: ALL PASS") else
   print("\ntest_manifestpins: " .. fails .. " FAILED"); os.exit(1)
 end

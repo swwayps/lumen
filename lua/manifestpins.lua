@@ -1091,6 +1091,23 @@ local function is_providers_offline()
   return false
 end
 
+-- The global "Auto-update apps" switch (slsteam-moon config.yaml AutoUpdateApps,
+-- surfaced in the slsteam-moon settings tab). When off, unpinned managed apps
+-- freeze on their installed build, so the Game Updates tab greys the per-game
+-- "Latest" option. Reuses the tested slsconfig reader; any failure (missing
+-- module in a host harness, unreadable file) defaults to ON so the UI never
+-- greys "Latest" spuriously.
+local function is_auto_update_enabled(config_path)
+  local ok, slsconfig = pcall(require, "slsconfig")
+  if not ok then return true end
+  local path = config_path or slsconfig.default_path()
+  local okr, values = pcall(slsconfig.read, path)
+  if not okr or type(values) ~= "table" or values.AutoUpdateApps == nil then
+    return true
+  end
+  return values.AutoUpdateApps and true or false
+end
+
 local function is_game_offline(appid)
   local h = home()
   if h == "" then return false end
@@ -2447,7 +2464,9 @@ function mp.get_game_updates(ctx)
   local ok, games = pcall(mp.build_games, ctx)
   if not ok then return err(games) end
   local offline = is_providers_offline()
-  return json.encode({ success = true, games = games, providers_offline = offline })
+  local auto_update = is_auto_update_enabled(ctx.config_path)
+  return json.encode({ success = true, games = games,
+    providers_offline = offline, auto_update = auto_update })
 end
 
 -- SetGamePin{appid, gid|date}: pin every depot of the app to its newest
@@ -2682,6 +2701,26 @@ function mp.app_at_pinned_gids(ctx, appid)
     end
   end
   return checked > 0
+end
+
+-- Whether the recommended automatic fix may apply on the currently installed
+-- build. A build-SPECIFIC fix (its .lua carries setManifestid pins) may run only
+-- once the installed depots match those exact gids -> app_at_pinned_gids. A
+-- build-AGNOSTIC fix (a keys-only .lua with no setManifestid, so no pin was
+-- written) applies on whatever build is installed, so it is ready as soon as the
+-- game is installed instead of waiting forever on a pin that will never exist.
+function mp.recommended_build_ready(ctx, appid)
+  ctx = ctx or mp.default_ctx()
+  appid = positive_id(appid)
+  if not appid then return false end
+  local cfg = read_file(ctx.config_path)
+  if not cfg then return false end
+  local app_pins = mp.parse_pins(cfg)[appid]
+  if type(app_pins) ~= "table" or type(app_pins.depots) ~= "table"
+      or next(app_pins.depots) == nil then
+    return true
+  end
+  return mp.app_at_pinned_gids(ctx, appid)
 end
 
 -- Atomically install an official LuaTools manifest and synchronize every
