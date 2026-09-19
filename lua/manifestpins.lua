@@ -280,7 +280,13 @@ local function lua_header_appid(text)
   for raw in (tostring(text or "") .. "\n"):gmatch("([^\n]*)\n") do
     local _, next_close, comment = strip_lua_non_code(raw:gsub("\r$", ""), long_close)
     long_close = next_close
-    local id = comment and comment:match("^%s*(%d+)%s*%-%s*")
+    -- The header appid line is "-- <appid> - <name>" (e.g. "3321460 - Crimson
+    -- Desert"): the appid, whitespace, a hyphen, then the game name. Require the
+    -- whitespace BEFORE the hyphen so a LuaTools date header ("2026-06-12 ...",
+    -- ISO hyphens with no surrounding spaces) can't have its YEAR read as the
+    -- appid — that false match conflicted with the real appid and failed every
+    -- add/import of a normal LuaTools manifest.
+    local id = comment and comment:match("^%s*(%d+)%s+%-%s*")
     if id then return positive_id(id) end
   end
   return nil
