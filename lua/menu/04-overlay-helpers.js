@@ -123,6 +123,29 @@
     }
   }
 
+  // A focused text field must keep the "activate" input (the space bar and
+  // Enter, which Steam's controller maps to gamepad button 1). Treating that as
+  // "click the control" swallowed the space bar, so the Add-game and Fixes
+  // search boxes could never take a two-word query like "crimson desert".
+  // Directional input is left alone so the D-pad can still move off the field.
+  function isTextEntryElement(element) {
+    if (!element) return false;
+    try {
+      if (element.isContentEditable === true) return true;
+      var tag = element.tagName;
+      if (tag === "TEXTAREA") return true;
+      if (tag !== "INPUT") return false;
+      var type = element.type
+        || (typeof element.getAttribute === "function"
+          ? element.getAttribute("type") : "")
+        || "text";
+      type = String(type).toLowerCase();
+      return type === "text" || type === "search" || type === "email"
+        || type === "url" || type === "tel" || type === "password"
+        || type === "number";
+    } catch (_) { return false; }
+  }
+
   // Keep exactly one visible selection inside a modal, mirroring the node that
   // Steam considers focused.
   function paintModalFocus(navigation, element) {
@@ -390,6 +413,9 @@
         var button = Number(detail.button);
         if (button === 1) {
           if (detail.is_repeat) return;
+          // Let a focused text field type the space bar / submit on Enter (or
+          // open the on-screen keyboard on a real gamepad) instead of clicking.
+          if (isTextEntryElement(element)) return;
           consumeModalInput(event); element.click(); return;
         }
         if (button === 2) {
@@ -411,6 +437,8 @@
       }
       function onButtonUp(event) {
         var button = Number((event.detail || {}).button);
+        // Mirror onButtonDown: leave the activate button alone on a text field.
+        if (button === 1 && isTextEntryElement(element)) return;
         if (button === 1 || button === 2
             || (button >= LUMEN_GAMEPAD_DIRECTION.UP
               && button <= LUMEN_GAMEPAD_DIRECTION.RIGHT)) {
@@ -569,10 +597,14 @@
       if (!items.length) return;
       var active = document.activeElement;
       var index = items.indexOf(active);
-      var backward = key === "ArrowLeft" || key === "ArrowUp"
-        || (key === "Tab" && event.shiftKey === true);
-      var forward = key === "ArrowRight" || key === "ArrowDown"
-        || (key === "Tab" && event.shiftKey !== true);
+      // A focused text field keeps the arrows (caret) plus space/Enter (typing
+      // and submit); only Tab still steps between the modal's controls so the
+      // keyboard user can leave the field.
+      var editable = isTextEntryElement(active);
+      var backward = (key === "Tab" && event.shiftKey === true)
+        || (!editable && (key === "ArrowLeft" || key === "ArrowUp"));
+      var forward = (key === "Tab" && event.shiftKey !== true)
+        || (!editable && (key === "ArrowRight" || key === "ArrowDown"));
 
       if (backward || forward) {
         consume(event);
@@ -585,7 +617,7 @@
         return;
       }
 
-      if (key === "Enter" || key === " " || key === "Spacebar") {
+      if (!editable && (key === "Enter" || key === " " || key === "Spacebar")) {
         consume(event);
         if (index < 0) {
           focus(preferred(items));

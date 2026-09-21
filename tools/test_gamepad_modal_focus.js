@@ -318,3 +318,40 @@ if (!replacement.classList.contains("active-focus")) {
 }
 lateRetry();
 console.log("ok   asynchronously rendered overlay content takes gamepad selection");
+
+// A focused search box has to keep the space bar. Steam's controller maps the
+// space bar (and Enter) to gamepad button 1, and turning that into a click
+// swallowed the space, so the Add-game and Fixes search fields could only take
+// a single word — "crimson", never "crimson desert". The activate button must
+// pass through untouched when a text field is focused, while a normal button in
+// the same modal still activates on gamepad A.
+const searchOverlay = new Element("search-overlay", 0);
+searchOverlay.tagName = "DIV";
+const searchInput = new Element("search-input", 0);
+searchInput.tagName = "INPUT";
+searchInput.type = "search";
+const searchGo = new Element("search-go", 100);
+page.appendChild(searchOverlay);
+searchOverlay.appendChild(searchInput);
+searchOverlay.appendChild(searchGo);
+context.m_rgGamepadNavigationTrees.add(pageTree);
+const searchCleanup = sandbox.trapModalFocus(searchOverlay, () => {}, {
+  selector: "field", preferFirst: true,
+});
+if (typeof searchCleanup !== "function") {
+  throw new Error("search overlay did not register native gamepad navigation");
+}
+const space = searchInput.dispatch("vgp_onbuttondown", { button: 1, is_repeat: false });
+if (space.prevented || searchInput.clicks !== 0) {
+  throw new Error("gamepad A on a text field was consumed instead of typing a space");
+}
+const spaceUp = searchInput.dispatch("vgp_onbuttonup", { button: 1, is_repeat: false });
+if (spaceUp.prevented) {
+  throw new Error("the activate button-up was consumed on a text field");
+}
+const goHit = searchGo.dispatch("vgp_onbuttondown", { button: 1, is_repeat: false });
+if (!goHit.prevented || searchGo.clicks !== 1) {
+  throw new Error("gamepad A no longer activates a normal button next to the field");
+}
+searchCleanup();
+console.log("ok   a focused search box keeps the space bar (gamepad A still types)");
