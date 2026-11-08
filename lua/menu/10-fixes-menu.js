@@ -197,10 +197,12 @@
   // game folder. "none" = no fix evidence (a game-shipped DirectX DLL never
   // counts); "broken" = its loader list is there but the proxy DLL is gone;
   // "needsOptions" = it needs an override or launcher the options still lack;
-  // "applied" = the options already carry it, or it needs none at all.
+  // "applied" = the options already carry it, or it needs none at all;
+  // "unknown" = there is a fix, but its launch options could not be checked.
   function fixesLocalFixState(detected, launch) {
     if (!detected || detected.found !== true) return "none";
     if (detected.broken === true) return "broken";
+    if (!(launch && launch.success)) return "unknown";
     var needs = !!(launch && launch.success && launch.apply && launch.launchOptions
       && (launch.overrides || launch.launcher));
     return needs && launch.previousLaunchOptions !== launch.launchOptions ? "needsOptions" : "applied";
@@ -223,6 +225,15 @@
     if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
     if (n >= 1024) return Math.round(n / 1024) + " KB";
     return n + " B";
+  }
+
+  // PURE: a display string with its "{key}" placeholders filled from values.
+  // The values go in verbatim: String.replace with a string would expand "$&"
+  // or "$'" in an archive name.
+  function fixesFill(template, values) {
+    return String(template).replace(/\{(\w+)\}/g, function (m, key) {
+      return Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : m;
+    });
   }
 
   function fixesDefaultCategory(official, groups) {
@@ -282,6 +293,7 @@
     window.__lumenFixesFormatBytes = fixesFormatBytes;
     window.__lumenFixesLocalFixState = fixesLocalFixState;
     window.__lumenFixesRelayOk = fixesRelayOk;
+    window.__lumenFixesFill = fixesFill;
   } catch (e) {}
 
   // ── styles (Lumen tokens: #23262d surface, #1a9fff accent, Motiva Sans) ─────
@@ -1313,6 +1325,7 @@
     if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
     if (!ctx.runsUnderProton) { fxAlert(S.nativeWarn); return; }
     var done = fxBusy(win, S.freetpSearching);
+    var downloading = false;
     var pickerOr = function (failText) {
       return call("LumenListFixArchives", { contentScriptQuery: "" }).then(fxParse).then(function (list) {
         var archives = list && list.success && list.archives;
@@ -1336,9 +1349,9 @@
         if (state !== "none") {
           return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLocalDone); };
         }
-        return call("LumenDownloadFreeTPFix", {
-          appid: appid, gameName: gameName || "", contentScriptQuery: "",
-        }).then(fxParse).then(function (dl) {
+        downloading = true;
+        return fxDownloadFreeTP(appid, gameName, win).then(function (dl) {
+          if (dl && dl.pending) return function () {};
           if (!(dl && dl.success && dl.path)) {
             return pickerOr(FX_FREETP_NOT_FOUND[dl && dl.errorCode] ? S.freetpNone : S.freetpDownloadErr);
           }
@@ -1352,7 +1365,26 @@
     }).then(function (show) {
       done();
       if (win.isConnected) show();
+      // The menu was closed: a fix it will never install is not left behind.
+      else if (downloading) {
+        call("LumenDiscardFreeTPDownload", { appid: appid, contentScriptQuery: "" })
+          .catch(function () {});
+      }
     }).catch(function () { done(); fxShowFailure(win, S.applyErr); });
+  }
+
+  // LumenDownloadFreeTPFix answers { pending: true } while the fix file is
+  // still downloading in the background, and each call advances it. Polling
+  // stops once the menu is closed, answering that pending state.
+  function fxDownloadFreeTP(appid, gameName, win) {
+    return call("LumenDownloadFreeTPFix", {
+      appid: appid, gameName: gameName || "", contentScriptQuery: "",
+    }).then(fxParse).then(function (dl) {
+      if (!(dl && dl.pending) || !win.isConnected) return dl;
+      return new Promise(function (resolve) { setTimeout(resolve, 500); }).then(function () {
+        return fxDownloadFreeTP(appid, gameName, win);
+      });
+    });
   }
 
   // The state (fixesLocalFixState) of a fix already in the game folder, gated
@@ -1417,7 +1449,7 @@
 
   function fxInstallArchive(win, appid, ctx, archive) {
     var S = fxStrings();
-    var done = fxBusy(win, S.freetpInstalling.replace("{archive}", archive.name));
+    var done = fxBusy(win, fixesFill(S.freetpInstalling, { archive: archive.name }));
     call("LumenInstallFixArchive", {
       appid: appid, archivePath: archive.path, installPath: ctx.installPath || "",
       contentScriptQuery: "",
@@ -1441,7 +1473,7 @@
     var msg = win.querySelector("#lumen-fx-pmsg");
     if (msg) msg.textContent = busyText;
     fxApplyOverrides(appid, ctx, win).then(function (ok) {
-      fxFinish(win, ok ? doneText : S.failed.replace("{error}", S.launchApplyFailed));
+      fxFinish(win, ok ? doneText : fixesFill(S.failed, { error: S.launchApplyFailed }));
     });
   }
 
@@ -1454,7 +1486,7 @@
     body.innerHTML =
       '<div class="lumen-fx-status"><div class="lumen-fx-msg" id="lumen-fx-pmsg"></div>' +
       '<div class="lumen-fx-pbar"><i></i></div></div>';
-    body.querySelector("#lumen-fx-pmsg").textContent = S.applying.replace("{fix}", fixType);
+    body.querySelector("#lumen-fx-pmsg").textContent = fixesFill(S.applying, { fix: fixType });
     var f = win.querySelector(".lumen-fx-foot");
     if (f) f.remove();
   }
@@ -1465,7 +1497,7 @@
   function fxFailProgress(win, text) {
     var S = fxStrings();
     var msg = win.querySelector("#lumen-fx-pmsg");
-    if (msg) msg.textContent = S.failed.replace("{error}", text || S.unknownError);
+    if (msg) msg.textContent = fixesFill(S.failed, { error: text || S.unknownError });
     var bar = win.querySelector(".lumen-fx-pbar > i");
     if (bar) bar.style.transform = "scaleX(0)";
     fxFooterClose(win);
@@ -1507,15 +1539,15 @@
           }).then(function (completed) {
             if (officialFixId && !(completed && completed.success)) {
               if (msg && !win.querySelector(".lumen-fx-lo")) {
-                msg.textContent = S.failed.replace("{error}",
-                  (completed && completed.error) || S.launchApplyFailed);
+                msg.textContent = fixesFill(S.failed,
+                  { error: (completed && completed.error) || S.launchApplyFailed });
               }
             } else if (msg) {
-              msg.textContent = S.appliedOk.replace("{fix}", fixType);
+              msg.textContent = fixesFill(S.appliedOk, { fix: fixType });
             }
             fxFooterClose(win);
           }).catch(function () {
-            if (msg) msg.textContent = S.failed.replace("{error}", S.launchApplyFailed);
+            if (msg) msg.textContent = fixesFill(S.failed, { error: S.launchApplyFailed });
             fxFooterClose(win);
           });
         } else if (st.status === "failed") {
@@ -1528,10 +1560,10 @@
             });
             return;
           }
-          if (msg) msg.textContent = S.failed.replace("{error}", st.error || S.unknownError);
+          if (msg) msg.textContent = fixesFill(S.failed, { error: st.error || S.unknownError });
           fxFooterClose(win);
         } else if (st.status === "cancelled") {
-          if (msg) msg.textContent = S.failed.replace("{error}", st.error || S.cancel);
+          if (msg) msg.textContent = fixesFill(S.failed, { error: st.error || S.cancel });
           fxFooterClose(win);
         } else {
           setTimeout(poll, 600);
@@ -1630,7 +1662,12 @@
           var leftover = !!optionsNote;
           call("LumenRevertFixInstall", { appid: appid, contentScriptQuery: "" })
             .then(fxParse).then(function (r) {
-              if (!(r && r.reverted)) { after([optionsNote], leftover); return; }
+              // A recorded install that could not be reverted is left over.
+              if (!(r && r.success !== false)) {
+                after([optionsNote, S.unfixRevertFailed], true);
+                return;
+              }
+              if (!r.reverted) { after([optionsNote], leftover); return; }
               if (!r.needsVerify) {
                 after([optionsNote, S.unfixRemovedNote.replace("{removed}", r.removed || 0)], leftover);
                 return;
@@ -1651,7 +1688,7 @@
                 function () { after([optionsNote, manual], true); },
                 S.verifyLabel);
             })
-            .catch(function () { after([optionsNote], leftover); });
+            .catch(function () { after([optionsNote, S.unfixRevertFailed], true); });
         };
         var clearOptions = function (attempt) {
           call("__lumenSetLaunchOptions", { appid: Number(appid), options: p.launchOptions || "" })

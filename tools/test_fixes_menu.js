@@ -284,6 +284,9 @@ if (typeof localFixState !== "function") {
   eq("local: a fix that needs no override -> applied, not broken", localFixState({ found: true },
     { success: true, apply: false }), "applied");
   eq("local: loader list without its proxy DLL -> broken", localFixState({ found: true, broken: true }, opts), "broken");
+  eq("local: launch options that could not be read are not 'applied'",
+    localFixState({ found: true }, { success: false }), "unknown");
+  eq("local: no launch-options answer at all is not 'applied'", localFixState({ found: true }, null), "unknown");
   eq("local: no fix evidence -> none", localFixState({ found: false }, opts), "none");
   eq("local: nullish detection -> none", localFixState(null, opts), "none");
 }
@@ -298,6 +301,19 @@ if (typeof relayOk !== "function") {
   eq("relay: ok:false object means the write did NOT land", relayOk({ ok: false }), false);
   eq("relay: garbage string -> false", relayOk("<html>"), false);
   eq("relay: nullish -> false", relayOk(null), false);
+}
+
+// ── placeholder fill (values are inserted verbatim) ─────────────────────────
+const fill = win.__lumenFixesFill;
+if (typeof fill !== "function") {
+  console.error("FAIL placeholder fill helper is not exposed");
+  failures++;
+} else {
+  eq("fill: '$' sequences in a value stay literal",
+    fill("Installing {archive}…", { archive: "fix $& $' $1 v2.zip" }), "Installing fix $& $' $1 v2.zip…");
+  eq("fill: every placeholder is filled, numbers included",
+    fill("{added} added, {replaced} replaced", { added: 3, replaced: 0 }), "3 added, 0 replaced");
+  eq("fill: unknown placeholders stay", fill("{a} {b}", { a: "x" }), "x {b}");
 }
 
 const unfixBody = (FIXES_SOURCE.match(/function fxUnfix\([\s\S]*?\n  }/) || [""])[0];

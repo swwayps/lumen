@@ -57,6 +57,32 @@ local GETFILE_PAGE_HTML = [==[
 <p><a href="//freetp.org/getfile-20797" target="_blank">Скачать CRACK v1.1.29 by Pioneer.torrent</a> <br>[0.8 Gb]</p>
 ]==]
 
+-- Left 4 Dead 2's attachments (verbatim shapes): repack, game update, fix.
+local L4D2_PAGE_HTML = [==[
+<p><strong>1.1) Скачать игру Left 4 Dead 2 торрент</strong>&nbsp;(последняя версия)&nbsp;</p>
+<!--QuoteBegin--><div class="quote"><!--QuoteEBegin--><p><a href="//freetp.org/getfile-13735" target="_blank" rel="noopener">Скачать Left_4_Dead_2_Repack_by_Pioneer_v2243 v03.12.2024.torrent</a><br>Размер: 7,82 Гб, всё необходимое уже встроено.</p><!--QuoteEnd--></div><!--QuoteEEnd-->
+<p><strong>1.2) Скачать патч для Left 4 Dead 2 (обновление)</strong></p>
+<!--QuoteBegin--><div class="quote"><!--QuoteEBegin--><p><a href="//freetp.org/getfile-13734" target="_blank" rel="noopener">Скачать Left_4_Dead_2_Update-v2220-2243.exe</a><br>(все в одном с версии 2220 до 2243)</p><!--QuoteEnd--></div><!--QuoteEEnd-->
+<p><strong>1.3) Скачать онлайн фикс Left 4 Dead 2&nbsp;</strong></p>
+<!--QuoteBegin--><div class="quote"><!--QuoteEBegin--><p><a href="//freetp.org/getfile-7732" target="_blank" rel="noopener">Скачать Left_4_Dead_2_Multiplayer Fix Online-v3</a><br>Устанавливать в папку с игрой.</p><!--QuoteEnd--></div><!--QuoteEEnd-->
+]==]
+
+-- A results page with more pages after it: the pager's "next" link (verbatim
+-- shape, page 1 of "Raft", whose article is on page 2).
+local function search_page(entries_html, next_page)
+  local nav = next_page and ('<span class="page_next" title="Следующая страница">'
+    .. '<a name="nextlink" id="nextlink" onclick="if (!window.__cfRLUnblockHandlers) return false; '
+    .. 'javascript:list_submit(' .. next_page .. '); return(false)" href="#">Вперед</a></span>')
+    or '<span class="page_next" title="Следующая страница"><span>Вперед</span></span>'
+  return '<div class="search-results">' .. entries_html .. '</div><div class="navigation">' .. nav .. '</div>'
+end
+local RAFT_P1 = search_page(
+  [[<h2><a href="https://freetp.org/po-seti/5456-super-raft-boat-together-igra-po-seti-besplatno-onlayn.html">Super Raft Boat Together играть по сети и интернету Онлайн</a></h2>]], 2)
+local RAFT_P2 = search_page(
+  [[<h2><a href="https://freetp.org/po-seti/2827-raft-igra-po-seti-besplatno-onlayn-v1103.html">Raft играть по сети и интернету Онлайн / ЛАН</a></h2>]], 3)
+local REPO_P1 = search_page(
+  [[<h2><a href="https://freetp.org/po-seti/6564-repo-igra-po-seti-i-internetu-onlayn.html">R.E.P.O. играть по сети и интернету Онлайн</a></h2>]], nil)
+
 -- ── normalize / urlencode / entities ────────────────────────────────────────
 check("normalize: cyrillic filler drops out",
   ft.normalize("CRACK играть по сети и интернету Онлайн") == "crack")
@@ -127,6 +153,75 @@ check("resolve: article fetch failing is page_failed, not a missing fix",
 
 check("resolve: empty name -> no_name", ft.resolve("", search_then_page("")).errorCode == "no_name")
 
+-- ── resolve: later result pages and punctuation-free names ──────────────────
+check("next page: read from the pager's next link, nil on the last page",
+  ft.next_search_page(RAFT_P1) == 2 and ft.next_search_page(REPO_P1) == nil
+    and ft.next_search_page(nil) == nil)
+check("plain query: punctuation deleted, words kept",
+  ft.plain_query("R.E.P.O.") == "REPO"
+    and ft.plain_query("FlatOut: Ultimate Carnage") == "FlatOut Ultimate Carnage")
+
+-- A fake DLE site: search pages by query and page number (search_start).
+local function dle_site(pages_by_query, opts)
+  opts = opts or {}
+  local log = {}
+  local get = function(url, o)
+    log[#log + 1] = { url = url, opts = o }
+    local story = url:match("[?&]story=([^&]*)")
+    if story then
+      local page = tonumber(url:match("[?&]search_start=(%d+)")) or 1
+      if opts.fail_page == page then return { status = 503, body = "" } end
+      local q = story:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+      local pages = pages_by_query[q] or {}
+      local body = pages[page] or (opts.endless and search_page("", page + 1))
+        or search_page("", nil)
+      return { status = 200, body = body }
+    end
+    return { status = 200, body = GETFILE_PAGE_HTML }
+  end
+  return get, log
+end
+
+local raft_get, raft_log = dle_site({ Raft = { RAFT_P1, RAFT_P2 } })
+local r_raft = ft.resolve("Raft", raft_get)
+check("resolve: an article on the second results page is found",
+  r_raft.errorCode == nil and #r_raft.files == 2
+    and raft_log[2].url:find("search_start=2", 1, true) ~= nil
+    and raft_log[3].url == "https://freetp.org/po-seti/2827-raft-igra-po-seti-besplatno-onlayn-v1103.html")
+
+local repo_get, repo_log = dle_site({ REPO = { REPO_P1 } })
+local r_repo = ft.resolve("R.E.P.O.", repo_get)
+check("resolve: a punctuated name with no results is searched again without punctuation",
+  r_repo.errorCode == nil and #r_repo.files == 2
+    and repo_log[1].url:find("story=R.E.P.O.", 1, true) ~= nil
+    and repo_log[2].url:find("story=REPO", 1, true) ~= nil)
+
+local endless_get, endless_log = dle_site({}, { endless = true })
+local r_endless = ft.resolve("Raft", endless_get)
+check("resolve: an endless pager stops at MAX_SEARCH_REQUESTS -> no_page",
+  r_endless.errorCode == "no_page" and #endless_log == ft.MAX_SEARCH_REQUESTS)
+
+local now = 1000
+local slow_get, slow_log = dle_site({}, { endless = true })
+local r_slow = ft.resolve("Raft", function(url, o)
+  now = now + 6
+  return slow_get(url, o)
+end, function() return now end)
+check("resolve: search requests stop once SEARCH_BUDGET has passed, timeouts clamped to what is left",
+  r_slow.errorCode == "no_page"
+    and #slow_log == math.ceil(ft.SEARCH_BUDGET / 6) and #slow_log < ft.MAX_SEARCH_REQUESTS
+    and slow_log[#slow_log].opts.timeout <= ft.SEARCH_BUDGET - 6 * (#slow_log - 1))
+
+local flaky_get = dle_site({ Raft = { RAFT_P1, RAFT_P2 } }, { fail_page = 2 })
+check("resolve: a results page that fails to load is search_failed, not a missing fix",
+  ft.resolve("Raft", flaky_get).errorCode == "search_failed")
+
+local every_get_capped = true
+for _, c in ipairs(raft_log) do
+  if type(c.opts) ~= "table" or not c.opts.timeout or not c.opts.max_bytes then every_get_capped = false end
+end
+check("resolve: every search and article request has a timeout and max_bytes", every_get_capped)
+
 -- ── on-site getfile attachments (the auto-download chain) ────────────────────
 local files = ft.parse_article_files(GETFILE_PAGE_HTML)
 check("files: both getfile attachments parsed", #files == 2
@@ -155,10 +250,39 @@ local htf_files = {
 local htf_pick = ft.pick_fix_file(htf_files)
 check("pick: a label without a file name is the fallback, decided by signature",
   htf_pick ~= nil and htf_pick.id == "20149" and htf_pick.ext == nil and htf_pick.magic == nil)
-check("pick: a labelled installable still beats the unlabelled fallback",
-  ft.pick_fix_file({ htf_files[2], { id = "5", label = "Скачать fix.zip" } }).id == "5")
+-- Left 4 Dead 2 (2026-11-08): the repack torrent, a game update setup with a
+-- file name, and the fix whose label has none, in page order.
+local l4d2_files = ft.parse_article_files(L4D2_PAGE_HTML)
+local l4d2_pick = ft.pick_fix_file(l4d2_files)
+check("pick: the fix beats a game update setup that has a file extension",
+  #l4d2_files == 3 and l4d2_pick ~= nil and l4d2_pick.id == "7732" and l4d2_pick.ext == nil)
+check("pick: an article with only a repack and a game update has no fix",
+  ft.pick_fix_file({ l4d2_files[1], l4d2_files[2] }) == nil)
+check("pick: a hotfix is a game update, not the fix",
+  ft.pick_fix_file({ { id = "1", label = "Скачать Game_Hotfix_v1.2.exe" },
+    { id = "2", label = "Скачать Game Online.exe" } }).id == "2")
+check("pick: a fix label that also mentions a patch is still the fix",
+  ft.pick_fix_file({ { id = "1", label = "Скачать Game_Patch_v1.2.exe" },
+    { id = "2", label = "Скачать Game Multiplayer Fix + patch v1.2.zip" } }).id == "2")
+check("pick: a camel-cased OnlineFix label counts as a fix",
+  ft.pick_fix_file({ { id = "1", label = "Скачать Game.exe" },
+    { id = "2", label = "Скачать Game OnlineFix" } }).id == "2")
+check("pick: a plain fix ranks above a fix bundled with a game update",
+  ft.pick_fix_file({ { id = "1", label = "Скачать Game_Update_v2_Fix.exe" },
+    { id = "2", label = "Скачать Game Multiplayer Fix Online.exe" } }).id == "2")
 
--- ── download_fix (injected get: search -> article -> file) ──────────────────
+-- ── download job (injected get: search -> article -> file) ──────────────────
+-- The file fetch is a background transfer (start/poll); here the injected get
+-- answers it, complete on the first poll.
+local function as_job(deps)
+  deps.start = deps.start or function(url, opts) return { url = url, opts = opts } end
+  deps.poll = deps.poll or function(h) return true, deps.get(h.url, h.opts) end
+  return deps
+end
+local function download_fix(appid, name, deps)
+  deps = as_job(deps)
+  return ft.poll_download(ft.start_download(appid, name, deps), deps)
+end
 local function fake_chain(pages)
   local calls = {}
   local get = function(url, opts)
@@ -171,7 +295,7 @@ local function fake_chain(pages)
 end
 local written = {}
 local get_ok, calls = fake_chain({ article = GETFILE_PAGE_HTML })
-local dl = ft.download_fix(4312190, "CRACK", {
+local dl = download_fix(4312190, "CRACK", {
   get = get_ok,
   mkdir = function() return true end,
   dl_dir = "/tmp/ftdl",
@@ -187,8 +311,11 @@ check("download: the attachment page is sent as Referer",
   #calls == 3 and calls[3].url == "https://freetp.org/index.php?do=download&id=20665"
     and type(calls[3].opts) == "table"
     and calls[3].opts.headers.Referer == "https://freetp.org/getfile-20665")
+check("download: the file fetch gets minutes, not the blocking request cap, and a size cap",
+  calls[3].opts.timeout == ft.DOWNLOAD_TIMEOUT and ft.DOWNLOAD_TIMEOUT > 30
+    and calls[3].opts.max_bytes == ft.MAX_FIX_BYTES)
 
-local dl_noexe = ft.download_fix(4312190, "CRACK", {
+local dl_noexe = download_fix(4312190, "CRACK", {
   get = (fake_chain({ article = DISCORD_ONLY_PAGE_HTML })),
   dl_dir = "/tmp/ftdl",
   mkdir = function() return true end,
@@ -197,7 +324,7 @@ local dl_noexe = ft.download_fix(4312190, "CRACK", {
 check("download: article without an on-site fix -> no_fix_file",
   dl_noexe.success == false and dl_noexe.errorCode == "no_fix_file")
 
-local dl_html = ft.download_fix(4312190, "CRACK", {
+local dl_html = download_fix(4312190, "CRACK", {
   get = (fake_chain({ article = GETFILE_PAGE_HTML,
     download = { status = 200, body = "<html>not a file</html>" } })),
   dl_dir = "/tmp/ftdl",
@@ -218,21 +345,21 @@ local function htf_get(body)
   end
 end
 local htf_paths = {}
-local dl_htf = ft.download_fix(4001890, "How to Fish", {
+local dl_htf = download_fix(4001890, "How to Fish", {
   get = htf_get("MZ" .. string.rep("X", 50)), dl_dir = "/tmp/ftdl",
   mkdir = function() return true end,
   write_file = function(p) htf_paths[#htf_paths + 1] = p; return true end,
 })
 check("download: unlabelled fix typed by its signature (exe)",
   dl_htf.success == true and htf_paths[1] == "/tmp/ftdl/4001890-freetp-fix.exe")
-local dl_htf_txt = ft.download_fix(4001890, "How to Fish", {
+local dl_htf_txt = download_fix(4001890, "How to Fish", {
   get = htf_get("just a readme"), dl_dir = "/tmp/ftdl",
   mkdir = function() return true end, write_file = function() return true end,
 })
 check("download: unlabelled non-installable body refused",
   dl_htf_txt.success == false and dl_htf_txt.errorCode == "wrong_content")
 
-local dl_down = ft.download_fix(4312190, "CRACK", {
+local dl_down = download_fix(4312190, "CRACK", {
   get = (fake_chain({ article = GETFILE_PAGE_HTML,
     download = { status = 404, body = "" } })),
   dl_dir = "/tmp/ftdl",
@@ -242,7 +369,7 @@ local dl_down = ft.download_fix(4312190, "CRACK", {
 check("download: a failed fetch -> download_failed",
   dl_down.success == false and dl_down.errorCode == "download_failed")
 
-local dl_page_down = ft.download_fix(4312190, "CRACK", {
+local dl_page_down = download_fix(4312190, "CRACK", {
   get = function(url)
     if url:find("do=search", 1, true) then return { status = 200, body = SEARCH_HTML } end
     return { status = 503, body = "" }
@@ -253,9 +380,10 @@ check("download: an unreadable article reports page_failed, not no_fix_file",
 -- ── register (RPC shape, table form, injected effects) ─────────────────────
 local json = require("json")
 local reg = {}
-ft.register(reg, { get = search_then_page(CRACK_PAGE_HTML) })
-check("register: exposes LumenDownloadFreeTPFix",
-  type(reg.LumenDownloadFreeTPFix) == "function")
+ft.register(reg, as_job({ get = search_then_page(CRACK_PAGE_HTML) }))
+check("register: exposes LumenDownloadFreeTPFix and LumenDiscardFreeTPDownload",
+  type(reg.LumenDownloadFreeTPFix) == "function"
+    and type(reg.LumenDiscardFreeTPDownload) == "function")
 -- The bridge passes {appid, contentScriptQuery, gameName} alphabetically as
 -- positional args; the table form is tolerated too.
 -- The injected server answers the file request with the article HTML, so the
@@ -267,6 +395,50 @@ check("register: table form", dec_tbl.success == false and dec_tbl.errorCode == 
 local dec_odd = json.decode(reg.LumenDownloadFreeTPFix({ appid = "bad", gameName = {} }))
 check("register: odd input answers invalid_appid instead of crashing",
   dec_odd.success == false and dec_odd.errorCode == "invalid_appid")
+
+-- The file transfer outlives one RPC: each call advances it until it is done.
+do
+  local polls, starts, stored, removed = 0, 0, {}, {}
+  local clock_now = 0
+  local preg = {}
+  local deps = {
+    get = (fake_chain({ article = GETFILE_PAGE_HTML })),
+    start = function(url, opts) starts = starts + 1; return { url = url, opts = opts } end,
+    poll = function(h)
+      polls = polls + 1
+      if polls < 3 then return false end
+      return true, { status = 200, body = "MZ" .. string.rep("X", 10) }
+    end,
+    clock = function() return clock_now end,
+    dl_dir = "/tmp/ftdl", mkdir = function() return true end,
+    write_file = function(p) stored[#stored + 1] = p; return true end,
+    remove_file = function(p) removed[#removed + 1] = p end,
+  }
+  ft.register(preg, deps)
+  local first = json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  local second = json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  local third = json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  check("register: the download answers pending until the transfer is done, then the file",
+    first.pending == true and second.pending == true and third.pending == nil
+      and third.success == true and third.path == "/tmp/ftdl/4312190-freetp-fix.exe"
+      and starts == 1 and #stored == 1)
+
+  polls = 0
+  json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  clock_now = 100
+  json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  check("register: a download nobody polled for a while starts over", starts == 3)
+
+  local disc = json.decode(preg.LumenDiscardFreeTPDownload(4312190, ""))
+  local found = false
+  for _, p in ipairs(removed) do
+    if p == "/tmp/ftdl/4312190-freetp-fix.exe" then found = true end
+  end
+  check("register: discard deletes the stored download (positional form)", disc.success == true and found)
+  polls = 0
+  json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  check("register: discard drops the running job too", starts == 4)
+end
 
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 if fail > 0 then os.exit(1) end
