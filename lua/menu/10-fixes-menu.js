@@ -8,10 +8,11 @@
 // main client shell ("Steam" window target), where this bundle runs.
 //
 // Look: a compact dark window on the Lumen surface (#23262d) topped by the
-// game's own library_hero banner (as Steam's own detail pages do), then a 2x2
-// grid of flat fix tiles (icon + label + description). Steam-flat execution —
-// muted icons, 1px borders, a single #1a9fff accent on hover, no drop-glow,
-// no blur, no transform bounce. Alerts/confirms reuse the Lumen modal styles.
+// game's own library_hero banner (as Steam's own detail pages do), then a
+// grid of fix tiles (icon + label + description). Steam-like execution —
+// muted icons, 1px borders, a single #1a9fff accent on hover with a 1px lift
+// and a soft shadow, no blur. A finished flow shows a green check or a red
+// mark in the outcome colour. Alerts/confirms reuse the Lumen modal styles.
 //
 // Robustness (validated live on the Zorin VM):
 //   * appid  — read from the focused game's hero/logo asset URL
@@ -316,7 +317,8 @@
       "font-family:'Motiva Sans',Arial,Helvetica,sans-serif;}",
       ".lumen-fx-win{display:flex;flex-direction:column;width:580px;max-width:94vw;max-height:90vh;",
       "background:#23262d;border:1px solid rgba(0,0,0,.5);border-radius:4px;overflow:hidden;",
-      "box-shadow:0 14px 44px rgba(0,0,0,.55);}",
+      "box-shadow:0 14px 44px rgba(0,0,0,.55);animation:lumen-fx-in .2s cubic-bezier(.22,1,.36,1);}",
+      "@keyframes lumen-fx-in{from{opacity:0;transform:translateY(8px) scale(.98);}}",
       // banner (game library_hero) with a fade into the surface
       ".lumen-fx-banner{position:relative;flex:0 0 auto;height:126px;background:#1a1d23;",
       "background-size:cover;background-position:center 28%;}",
@@ -342,11 +344,12 @@
       "grid-template-rows:repeat(4,minmax(82px,1fr));gap:10px;align-items:stretch;}",
       ".lumen-fx-tile{position:relative;display:flex;flex-direction:column;gap:8px;padding:15px 14px;",
       "border-radius:4px;cursor:pointer;background:rgba(255,255,255,.04);",
-      "border:1px solid rgba(255,255,255,.08);transition:background .12s,border-color .12s;}",
+      "border:1px solid rgba(255,255,255,.08);transition:background .12s,border-color .12s,transform .12s,box-shadow .12s;}",
       ".lumen-fx-tile .ic{width:22px;height:22px;color:#9aa3ab;transition:color .12s;}",
       ".lumen-fx-tile .tl{font-size:14px;font-weight:700;color:#fff;}",
       ".lumen-fx-tile .ds{font-size:11.5px;line-height:1.36;color:#8f98a0;}",
-      ".lumen-fx-tile.featured{grid-column:1;grid-row:1/5;min-height:266px;padding:22px 20px;justify-content:flex-start;}",
+      ".lumen-fx-tile.featured{grid-column:1;grid-row:1/5;min-height:266px;padding:22px 20px;justify-content:flex-start;",
+      "background-image:linear-gradient(155deg,rgba(26,159,255,.13),transparent 62%);}",
       ".lumen-fx-tile.featured .ic{width:44px;height:44px;margin-bottom:4px;}",
       ".lumen-lt-logo-mono,.lumen-lt-logo-brand{transition:opacity .16s ease-out;}",
       ".lumen-lt-logo-brand{opacity:0;}",
@@ -359,7 +362,9 @@
       // Gamepad focus mirrors hover exactly: the pointer and the D-pad should
       // describe the same state, including the danger tile's red icon and the
       // featured tile's logo cross-fade.
-      ".lumen-fx-tile:hover,.lumen-fx-tile.active-focus{background:rgba(255,255,255,.07);border-color:#1a9fff;}",
+      // background-color, not background: the shorthand would drop the featured gradient.
+      ".lumen-fx-tile:hover,.lumen-fx-tile.active-focus{background-color:rgba(255,255,255,.07);border-color:#1a9fff;",
+      "transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,0,0,.3),0 0 0 1px rgba(26,159,255,.22);}",
       ".lumen-fx-tile:hover .ic,.lumen-fx-tile.active-focus .ic{color:#fff;}",
       ".lumen-fx-tile.featured:not(.off):hover .lumen-lt-logo-mono,",
       ".lumen-fx-tile.featured:not(.off).active-focus .lumen-lt-logo-mono{opacity:0;}",
@@ -368,12 +373,12 @@
       ".lumen-fx-tile.danger:hover,.lumen-fx-tile.danger.active-focus{border-color:#ec5c5c;}",
       ".lumen-fx-tile.danger:hover .ic,.lumen-fx-tile.danger.active-focus .ic{color:#ec5c5c;}",
       ".lumen-fx-tile.off{opacity:.42;cursor:default;}",
-      ".lumen-fx-tile.off:hover,.lumen-fx-tile.off.active-focus{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08);}",
+      ".lumen-fx-tile.off:hover,.lumen-fx-tile.off.active-focus{background-color:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08);transform:none;box-shadow:none;}",
       ".lumen-fx-tile.off:hover .ic,.lumen-fx-tile.off.active-focus .ic{color:#9aa3ab;}",
       // "needs auth" is carried by the badge alone: the tile keeps its own icon
       // and the normal blue hover, so nothing about it looks broken or disabled.
       ".lumen-fx-tile.auth .lumen-fx-badge{color:#f3ca62;background:rgba(224,179,65,.13);}",
-      ".lumen-fx-tile.applied{border-color:rgba(121,199,84,.42);}",
+      ".lumen-fx-tile.applied{border-color:rgba(121,199,84,.42);background-color:rgba(121,199,84,.05);}",
       ".lumen-fx-tile.applied .lumen-fx-badge{color:#9bdc7c;background:rgba(92,156,62,.18);}",
       ".lumen-fx-badge .bic{width:9px;height:9px;flex:0 0 auto;}",
       ".lumen-fx-badge{position:absolute;top:11px;right:11px;display:inline-flex;align-items:center;",
@@ -409,8 +414,20 @@
       ".lumen-fx-status{padding:18px 2px 6px;}",
       ".lumen-fx-msg{font-size:14px;color:#dcdedf;line-height:1.5;margin-bottom:14px;}",
       ".lumen-fx-pbar{height:6px;border-radius:3px;background:#1a1d23;border:1px solid #3d4450;overflow:hidden;}",
-      ".lumen-fx-pbar > i{display:block;height:100%;width:100%;background:#1a9fff;transform:scaleX(0);",
+      ".lumen-fx-pbar > i{display:block;height:100%;width:100%;background:linear-gradient(90deg,#1a9fff,#66c0f4);transform:scaleX(0);",
       "transform-origin:left center;transition:transform .25s cubic-bezier(.22,1,.36,1);}",
+      // finished flow (fxFinish): centred mark + full bar in the outcome colour
+      ".lumen-fx-status.ok,.lumen-fx-status.fail{display:flex;flex-direction:column;align-items:center;text-align:center;}",
+      ".lumen-fx-status.ok .lumen-fx-pbar,.lumen-fx-status.fail .lumen-fx-pbar{align-self:stretch;}",
+      ".lumen-fx-done{width:54px;height:54px;box-sizing:border-box;border-radius:50%;display:flex;align-items:center;",
+      "justify-content:center;margin-bottom:14px;font:800 26px 'Motiva Sans',Arial;",
+      "animation:lumen-fx-pop .2s cubic-bezier(.22,1,.36,1) both;}",
+      ".lumen-fx-done svg{width:24px;height:24px;}",
+      ".lumen-fx-status.ok .lumen-fx-done{color:#9bdc7c;background:rgba(92,156,62,.18);border:1px solid rgba(121,199,84,.5);}",
+      ".lumen-fx-status.fail .lumen-fx-done{color:#ec5c5c;background:rgba(236,92,92,.12);border:1px solid rgba(236,92,92,.45);}",
+      ".lumen-fx-status.ok .lumen-fx-pbar > i{background:#79c754;}",
+      ".lumen-fx-status.fail .lumen-fx-pbar > i{background:#ec5c5c;}",
+      "@keyframes lumen-fx-pop{from{opacity:0;transform:scale(.6);}}",
       ".lumen-fx-spin{display:inline-block;width:26px;height:26px;box-sizing:border-box;",
       "border:3px solid rgba(255,255,255,.16);border-top-color:#1a9fff;border-radius:50%;",
       "animation:lumen-rot .7s linear infinite;}",
@@ -1213,7 +1230,7 @@
   // A flow that fails before showing progress still ends in the finished view.
   function fxShowFailure(win, text) {
     fxShowProgress(win, fxStrings().freetpFixLabel);
-    fxFinish(win, text);
+    fxFinish(win, false, text);
   }
 
   // Replace the footer with a single Close button (end of a flow).
@@ -1479,7 +1496,7 @@
     var msg = win.querySelector("#lumen-fx-pmsg");
     if (msg) msg.textContent = busyText;
     fxApplyOverrides(appid, ctx, win).then(function (ok) {
-      fxFinish(win, ok ? doneText : fixesFill(S.failed, { error: S.launchApplyFailed }));
+      fxFinish(win, ok, ok ? doneText : fixesFill(S.failed, { error: S.launchApplyFailed }));
     });
   }
 
@@ -1502,17 +1519,24 @@
   // frozen "Applying…" screen — matching how fxPoll reports later failures.
   function fxFailProgress(win, text) {
     var S = fxStrings();
-    var msg = win.querySelector("#lumen-fx-pmsg");
-    if (msg) msg.textContent = fixesFill(S.failed, { error: text || S.unknownError });
-    var bar = win.querySelector(".lumen-fx-pbar > i");
-    if (bar) bar.style.transform = "scaleX(0)";
-    fxFooterClose(win);
+    fxFinish(win, false, fixesFill(S.failed, { error: text || S.unknownError }));
   }
 
-  // End of a flow: the final message and the Close footer.
-  function fxFinish(win, text) {
+  // End of an apply flow: a success/failure mark that reads at a glance (icon
+  // plus a full green/red bar), the final message, and the Close footer.
+  function fxFinish(win, ok, text) {
     var msg = win.querySelector("#lumen-fx-pmsg");
+    var st = msg && msg.parentNode;
     if (msg) msg.textContent = text;
+    if (st && !st.querySelector(".lumen-fx-done")) {
+      st.classList.add(ok ? "ok" : "fail");
+      var mark = document.createElement("div");
+      mark.className = "lumen-fx-done";
+      mark.innerHTML = ok ? FX_ICONS.check : "<b>!</b>";
+      st.insertBefore(mark, msg);
+      var bar = st.querySelector(".lumen-fx-pbar > i");
+      if (bar) bar.style.transform = "scaleX(1)";
+    }
     fxFooterClose(win);
   }
 
@@ -1544,17 +1568,13 @@
             }).then(fxParse);
           }).then(function (completed) {
             if (officialFixId && !(completed && completed.success)) {
-              if (msg && !win.querySelector(".lumen-fx-lo")) {
-                msg.textContent = fixesFill(S.failed,
-                  { error: (completed && completed.error) || S.launchApplyFailed });
-              }
-            } else if (msg) {
-              msg.textContent = fixesFill(S.appliedOk, { fix: fixType });
+              fxFinish(win, false, fixesFill(S.failed,
+                { error: (completed && completed.error) || S.launchApplyFailed }));
+            } else {
+              fxFinish(win, true, fixesFill(S.appliedOk, { fix: fixType }));
             }
-            fxFooterClose(win);
           }).catch(function () {
-            if (msg) msg.textContent = fixesFill(S.failed, { error: S.launchApplyFailed });
-            fxFooterClose(win);
+            fxFinish(win, false, fixesFill(S.failed, { error: S.launchApplyFailed }));
           });
         } else if (st.status === "failed") {
           if (fixesAuthExpired(st)) {
@@ -1566,11 +1586,9 @@
             });
             return;
           }
-          if (msg) msg.textContent = fixesFill(S.failed, { error: st.error || S.unknownError });
-          fxFooterClose(win);
+          fxFinish(win, false, fixesFill(S.failed, { error: st.error || S.unknownError }));
         } else if (st.status === "cancelled") {
-          if (msg) msg.textContent = fixesFill(S.failed, { error: st.error || S.cancel });
-          fxFooterClose(win);
+          fxFinish(win, false, fixesFill(S.failed, { error: st.error || S.cancel }));
         } else {
           setTimeout(poll, 600);
         }
