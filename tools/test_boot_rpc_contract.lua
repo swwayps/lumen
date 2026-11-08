@@ -36,7 +36,8 @@ package.loaded["slsconfig"] = {
   has_cloudredirect = function() return false end,
 }
 for _, name in ipairs({
-    "slsmenu", "manifestpins", "about", "fixesmenu", "slscheck", "steamrestart",
+    "slsmenu", "manifestpins", "about", "fixesmenu", "freetp", "fixinstall",
+    "slscheck", "steamrestart",
   }) do
   package.loaded[name] = noop_registry
 end

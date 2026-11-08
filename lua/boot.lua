@@ -205,6 +205,12 @@ require("about").register(registry, { no_plugin = not have_plugin })
 -- LuaTools fix RPCs on a game's library page.
 require("fixesmenu").register(registry)
 
+-- The Fixes Menu's FreeTP Fix tile: freetp.lua finds and downloads the game's
+-- fix from freetp.org; fixinstall.lua installs a fix archive with a manifest
+-- (so Unfix can revert it) and detects a fix already in the game folder.
+require("freetp").register(registry)
+require("fixinstall").register(registry)
+
 -- The "slsteam-moon not loaded" warning (menu/13-sls-check.js): detect whether
 -- SLSsteam.so is actually injected into the running Steam client, and if not,
 -- offer an auto-fix that re-installs the latest slsteam-moon, repairs the
