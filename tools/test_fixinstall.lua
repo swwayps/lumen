@@ -79,6 +79,11 @@ do
   check("safe: windows drive refused", bad_win == nil)
   check("safe: a backslash entry is refused (7-Zip on Linux writes it as one file name)",
     fi.safe_entries({ { path = "fix.ini" }, { path = "sub\\fix.dll" } }) == nil)
+  check("dll list: base names of the shipped DLLs, one per line, case-insensitively unique",
+    fi.fix_dll_list({ { path = "winmm.dll" }, { path = "winmm.txt" },
+      { path = "Plugins/x86_64/steam_api64.dll" }, { path = "sub/WINMM.DLL" } })
+      == "winmm.dll\nsteam_api64.dll\n")
+  check("dll list: a fix without DLLs lists nothing", fi.fix_dll_list({ { path = "fix.ini" } }) == "")
 end
 
 check("under_home: own downloads ok", fi.under_home("/home/me/Downloads/a.zip", "/home/me") == true)
@@ -336,21 +341,30 @@ else
     bin = bin,
   }
   local r = fi.install(4312190, zip, game, deps)
-  check("e2e: install succeeds", r.success == true and r.added == 2 and r.replaced == 1)
+  check("e2e: install succeeds", r.success == true and r.added == 3 and r.replaced == 1)
   check("e2e: files landed",
     read_file(game .. "/added_fix.dll") == "FIX-NEW"
       and read_file(game .. "/deep/nested.txt") == "FIX-NESTED"
       and read_file(game .. "/sub/replace_me.dll") == "FIX-REPLACED")
   check("e2e: untouched game file intact", read_file(game .. "/untouched.txt") == "GAME")
+  local dll_lines = {}
+  for line in (read_file(game .. "/.slssteam_fix_dlls") or ""):gmatch("([^\n]*)\n") do
+    dll_lines[#dll_lines + 1] = line
+  end
+  table.sort(dll_lines)
+  check("e2e: the fix's DLLs are listed in .slssteam_fix_dlls for the launch options",
+    table.concat(dll_lines, ",") == "added_fix.dll,replace_me.dll")
   local man = json.decode(read_file(store .. "/4312190/manifest.json") or "{}")
-  check("e2e: manifest recorded", #man.added == 2 and #man.replaced == 1
-    and man.replaced[1] == "sub/replace_me.dll")
+  check("e2e: manifest recorded, the DLL list among the added files", #man.added == 3
+    and man.added[3] == ".slssteam_fix_dlls"
+    and #man.replaced == 1 and man.replaced[1] == "sub/replace_me.dll")
   local rv = fi.revert(4312190, { store_root = function() return store end })
   check("e2e: revert removes added files and asks Steam for the replaced one",
-    rv.reverted == true and rv.removed == 2 and rv.replacedCount == 1
+    rv.reverted == true and rv.removed == 3 and rv.replacedCount == 1
       and rv.needsVerify == true
       and read_file(game .. "/added_fix.dll") == nil
       and read_file(game .. "/deep/nested.txt") == nil
+      and read_file(game .. "/.slssteam_fix_dlls") == nil
       and read_file(game .. "/untouched.txt") == "GAME")
   check("e2e: a folder only the fix brought is removed, game folders stay",
     os.execute("test -d " .. q(game .. "/deep")) ~= true
@@ -487,6 +501,25 @@ else
   check("e2e: an encrypted archive fails instead of waiting for a password; it stays recorded, so Un-fix can clean it up",
     wr.success == false and wr.errorCode == "extract_failed"
       and manifest().added[1] == "half_fix.dll")
+  fi.revert(4312190, deps)
+
+  -- A DLL list already in the game folder is a LuaTools fix's: it stays as
+  -- it is, unrecorded, so Unfix leaves it too.
+  write_file(game .. "/.slssteam_fix_dlls", "luatools_fix.dll\n")
+  local over_lt = fi.install(4312190, other, game, deps)
+  check("e2e: a DLL list already in the game folder is kept and not recorded",
+    over_lt.success == true and read_file(game .. "/.slssteam_fix_dlls") == "luatools_fix.dll\n"
+      and table.concat(manifest().added, ",") == "other_fix.dll")
+  fi.revert(4312190, deps)
+  check("e2e: ...and the revert leaves it",
+    read_file(game .. "/.slssteam_fix_dlls") == "luatools_fix.dll\n"
+      and read_file(game .. "/other_fix.dll") == nil)
+  os.remove(game .. "/.slssteam_fix_dlls")
+
+  local no_dll = archive("no_dll.zip", { ["SteamFix.ini"] = "INI" })
+  check("e2e: a fix without DLLs gets an empty list (no override needed; the game's own DLLs are not scanned)",
+    fi.install(4312190, no_dll, game, deps).success == true
+      and read_file(game .. "/.slssteam_fix_dlls") == "")
   fi.revert(4312190, deps)
 
   write_file(tmp .. "/outside.txt", "KEEP")

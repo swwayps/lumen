@@ -132,6 +132,23 @@ function fixinstall.safe_entries(entries)
   return out
 end
 
+-- The game-folder file LuaTools' fix_overlays reads a fix's DLLs from.
+local FIX_DLL_LIST = ".slssteam_fix_dlls"
+
+-- fix_dll_list(entries) -> that file's text: the base name of each .dll the
+-- archive ships, one per line, deduplicated ignoring case. PURE.
+function fixinstall.fix_dll_list(entries)
+  local lines, seen = {}, {}
+  for _, e in ipairs(entries) do
+    local name = e.path:match("[^/]+$")
+    if name:lower():match("%.dll$") and not seen[name:lower()] then
+      seen[name:lower()] = true
+      lines[#lines + 1] = name .. "\n"
+    end
+  end
+  return table.concat(lines)
+end
+
 -- parse_inno_listing(text) -> { { path, size } } from `innoextract -l`
 -- output. Only the {app} payload matters: lines like
 --   - "app/SteamFix.ini" (284 B)
@@ -540,6 +557,14 @@ local function install_archive(appid, archive_path, install_path_hint, deps)
   for _, e in ipairs(entries) do
     if not replaced_set[e.path] then added[#added + 1] = e.path end
   end
+  -- The fix's DLL list for the launch options, as LuaTools' downloader writes
+  -- it: without one, its fix_overlays derives overrides from every DLL in the
+  -- game folder (the game's own D3D12/D3D12Core.dll included). It is written
+  -- even when empty, which reads as "no override needed". One already there
+  -- belongs to a LuaTools fix and is left alone.
+  local dll_list = install_dir .. "/" .. FIX_DLL_LIST
+  local write_dll_list = not exists(dll_list)
+  if write_dll_list then added[#added + 1] = FIX_DLL_LIST end
   -- Even when this archive picks another game root: revert only counts them.
   if prev and type(prev.replaced) == "table" then
     for _, p in ipairs(prev.replaced) do
@@ -581,6 +606,13 @@ local function install_archive(appid, archive_path, install_path_hint, deps)
       .. shq(archive_path) .. " </dev/null >/dev/null 2>&1") ~= true then
     res.errorCode = "extract_failed"
     return res
+  end
+  if write_dll_list then
+    local f = io.open(dll_list, "wb")
+    if f then
+      f:write(fixinstall.fix_dll_list(entries))
+      f:close()
+    end
   end
 
   res.success = true
