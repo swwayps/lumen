@@ -1589,15 +1589,14 @@
     }).then(function (res) {
       var p = fxParse(res);
       if (!(p && p.success)) return false;
-      if (!(p.apply && p.launchOptions)) return true;
-      var opts = String(p.launchOptions);
+      // "" is a real answer: a stale override removed from options that held
+      // nothing else.
+      if (!p.apply || typeof p.launchOptions !== "string") return true;
+      var opts = p.launchOptions;
+      var hint = function () { if (opts) fxLaunchHint(win, opts); return false; };
       return call("__lumenSetLaunchOptions", { appid: Number(appid), options: opts })
-        .then(function (r) {
-          var ok = fixesRelayOk(r);
-          if (!ok) fxLaunchHint(win, opts);
-          return ok;
-        })
-        .catch(function () { fxLaunchHint(win, opts); return false; });
+        .then(function (r) { return fixesRelayOk(r) || hint(); })
+        .catch(hint);
     }).catch(function () { return false; });
   }
 

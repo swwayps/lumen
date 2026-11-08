@@ -3,8 +3,8 @@
 // the backend RPCs answered by the test: Escape on a confirmation runs its
 // decline path, picker rows are gamepad-reachable buttons, Unfix never says
 // "Restored" over a failed revert, the busy note tells searching from
-// downloading, and a menu closed mid-download neither installs nor keeps the
-// downloaded fix.
+// downloading, an install whose fix needs no override clears a stale one, and
+// a menu closed mid-download neither installs nor keeps the downloaded fix.
 // Run: node tools/test_fixes_menu_flows.js
 "use strict";
 const fs = require("fs");
@@ -417,6 +417,34 @@ async function confirmUnfix() {
       && calls("LumenInstallFixArchive")[0].args.archivePath.endsWith("322330-freetp-fix.exe"), true);
   eq("download: the busy note says Searching until the file transfer starts, then Downloading",
     busyAtPoll.join(" / "), [S.freetpSearching, S.freetpDownloading, S.freetpDownloading].join(" / "));
+
+  // ── Launch options after an install ──────────────────────────────────────
+  // GetFixLaunchOptions answers apply:true with "" when the fix needs no
+  // override and the options held only a stale one: "" must be written.
+  const installed = (launch, relay) => openMenu({
+    LumenDownloadFreeTPFix: () => ({ success: true,
+      path: "/home/u/.local/share/Lumen/freetp_dl/322330-freetp-fix.exe", size: 10 }),
+    LumenInstallFixArchive: () => ({ success: true, added: 2, replaced: 0 }),
+    GetFixLaunchOptions: () => launch,
+    __lumenSetLaunchOptions: () => relay,
+  }).then(async () => { tile(S.freetpLabel).click(); await settle(60); });
+  const pmsg = () => (document.getElementById("lumen-fx-pmsg") || {}).textContent || "";
+  const installDone = S.freetpInstallDone.replace("{added}", 2).replace("{replaced}", 0);
+
+  await installed({ success: true, apply: true, previousLaunchOptions: 'WINEDLLOVERRIDES="d3d12core=n,b" %command%',
+    launchOptions: "" }, { ok: true });
+  eq("launch options: apply with \"\" clears the stale options, then reports the install",
+    calls("__lumenSetLaunchOptions").length === 1
+      && calls("__lumenSetLaunchOptions")[0].args.options === "" && pmsg() === installDone, true);
+
+  await installed({ success: true, apply: false, launchOptions: "%command%" }, { ok: true });
+  eq("launch options: apply:false writes nothing",
+    calls("__lumenSetLaunchOptions").length === 0 && pmsg() === installDone, true);
+
+  await installed({ success: true, apply: true, launchOptions: "" }, { ok: false });
+  eq("launch options: a failed \"\" write reports the failure, with no empty line to paste",
+    calls("__lumenSetLaunchOptions").length === 1 && !document.querySelector(".lumen-fx-lo")
+      && pmsg().indexOf(S.launchApplyFailed) !== -1, true);
 
   // ── FreeTP: closing the menu mid-download ────────────────────────────────
   let finishDownload = null;
