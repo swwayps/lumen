@@ -1667,9 +1667,12 @@
           var leftover = !!optionsNote;
           call("LumenRevertFixInstall", { appid: appid, contentScriptQuery: "" })
             .then(fxParse).then(function (r) {
-              // A recorded install that could not be reverted is left over.
+              // A recorded install that could not be reverted is left over. A
+              // record that cannot be read fails the same way every time, so
+              // pressing Unfix again would not help.
               if (!(r && r.success !== false)) {
-                after([optionsNote, S.unfixRevertFailed], true);
+                var unreadable = r && (r.errorCode === "record_invalid" || r.errorCode === "record_unreadable");
+                after([optionsNote, unreadable ? S.unfixRecordUnreadable : S.unfixRevertFailed], true);
                 return;
               }
               if (!r.reverted) { after([optionsNote], leftover); return; }

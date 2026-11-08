@@ -348,14 +348,19 @@ async function confirmUnfix() {
     (lastModalText() || "").indexOf(S.unfixDone) === -1
       && (lastModalText() || "").indexOf(S.unfixRevertFailed) !== -1, true);
 
-  // fixinstall.revert's answer for a record it cannot read or use.
-  await openMenu(Object.assign({}, unfixOk, {
-    LumenRevertFixInstall: () => ({ success: false, errorCode: "record_invalid", reverted: false,
-      removed: 0, replacedCount: 0, needsVerify: false }) }));
-  await confirmUnfix();
-  eq("unfix: an unusable install record does not say Restored, and says the files remain",
-    (lastModalText() || "").indexOf(S.unfixDone) === -1
-      && (lastModalText() || "").indexOf(S.unfixRevertFailed) !== -1, true);
+  // fixinstall.revert's answers for a record it cannot read or use: the same
+  // every time, so the note points to Steam's verify and manual removal
+  // instead of asking for another Unfix.
+  for (const code of ["record_invalid", "record_unreadable"]) {
+    await openMenu(Object.assign({}, unfixOk, {
+      LumenRevertFixInstall: () => ({ success: false, errorCode: code, reverted: false,
+        removed: 0, replacedCount: 0, needsVerify: false }) }));
+    await confirmUnfix();
+    const text = lastModalText() || "";
+    eq("unfix: " + code + " says the record could not be read, not to press Unfix again",
+      text.indexOf(S.unfixDone) === -1 && text.indexOf(S.unfixRecordUnreadable) !== -1
+        && text.indexOf(S.unfixRevertFailed) === -1, true);
+  }
 
   // ── Escape on the verify confirmation takes the decline path ─────────────
   await openMenu(Object.assign({}, unfixOk, {
