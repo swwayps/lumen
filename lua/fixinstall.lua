@@ -228,6 +228,7 @@ local function read_manifest(root)
   if not f then return nil, errno ~= 2 and "record_unreadable" or nil end
   local raw = f:read("*a")
   f:close()
+  if not raw then return nil, "record_unreadable" end
   local ok, m = pcall(json.decode, raw)
   if not (ok and type(m) == "table") then return nil, "record_invalid" end
   return m

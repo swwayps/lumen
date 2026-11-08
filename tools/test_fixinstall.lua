@@ -503,6 +503,17 @@ else
     manifest().installPath == nested and manifest().replaced[1] == "G.exe"
       and fi.revert(4312190, nested_deps).needsVerify == true)
 
+  -- The DLL list belongs beside the fix: LuaTools reads it from the game root.
+  local rooted = fi.install(4312190, archive("rooted_fix.zip",
+    { ["G.exe"] = "FIX-EXE", ["SteamFix64.dll"] = "FIX" }), nested, nested_deps)
+  check("e2e: on a nested depot the DLL list is written to the game root, not the install dir",
+    rooted.success == true and manifest().installPath == nested .. "/G"
+      and read_file(nested .. "/G/.slssteam_fix_dlls") == "SteamFix64.dll\n"
+      and read_file(nested .. "/.slssteam_fix_dlls") == nil)
+  fi.revert(4312190, nested_deps)
+  check("e2e: ...and the revert removes it there",
+    read_file(nested .. "/G/.slssteam_fix_dlls") == nil)
+
   local wrong = archive("wrong.zip", { ["half_fix.dll"] = "HALF" }, "-tzip -p" .. q("some-password"))
   local wr = fi.install(4312190, wrong, game, deps)
   check("e2e: an encrypted archive fails instead of waiting for a password; it stays recorded, so Un-fix can clean it up",
@@ -552,6 +563,25 @@ else
   os.execute("chmod 600 " .. q(man_path))
   check("e2e: ...and once readable again it reverts",
     fi.revert(4312190, deps).reverted == true and read_file(game .. "/other_fix.dll") == nil)
+
+  -- Any open or read error but "no such file" fails the revert, not only EACCES.
+  fi.install(4312190, other, game, deps)
+  local live_record = read_file(man_path)
+  os.remove(man_path)
+  os.execute("ln -s manifest.json " .. q(man_path))
+  local rv_loop = fi.revert(4312190, deps)
+  check("e2e: a record that cannot be opened (symlink loop) fails the revert (record_unreadable); the files stay",
+    rv_loop.success == false and rv_loop.errorCode == "record_unreadable"
+      and read_file(game .. "/other_fix.dll") == "OTHER")
+  os.remove(man_path)
+  os.execute("mkdir -p -- " .. q(man_path))
+  local rv_dir = fi.revert(4312190, deps)
+  check("e2e: a record that is a directory fails the revert (record_unreadable); the files stay",
+    rv_dir.success == false and rv_dir.errorCode == "record_unreadable"
+      and read_file(game .. "/other_fix.dll") == "OTHER")
+  os.execute("rm -rf -- " .. q(man_path))
+  write_file(man_path, live_record)
+  fi.revert(4312190, deps)
 
   write_file(tmp .. "/outside.txt", "KEEP")
   os.execute("mkdir -p -- " .. q(store .. "/4312190"))
