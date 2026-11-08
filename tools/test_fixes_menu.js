@@ -60,6 +60,10 @@ const officialIconKey = win.__lumenFixesOfficialIconKey;
 const luaToolsIcon = win.__lumenFixesLuaToolsIcon;
 const appliedStates = win.__lumenFixesAppliedStates;
 const fallbackReceiptKind = win.__lumenFixesFallbackReceiptKind;
+const pickFreeTP = win.__lumenFixesPickFreeTP;
+const formatBytes = win.__lumenFixesFormatBytes;
+const localFixState = win.__lumenFixesLocalFixState;
+const relayOk = win.__lumenFixesRelayOk;
 const catalogueFilter = win.__lumenLuaToolsFilterFixGames;
 const normalizeCatalogueTag = win.__lumenLuaToolsNormalizeFixTag;
 const displayFixTitle = win.__lumenLuaToolsFixDisplayTitle;
@@ -223,9 +227,82 @@ eq("fallback apply uses a locale-independent receipt kind",
   typeof fallbackReceiptKind === "function" ? fallbackReceiptKind() : null,
   "online_fix_fallback");
 
+// ── FreeTP Fix tile: candidate pick ─────────────────────────────────────────
+if (typeof pickFreeTP !== "function") {
+  console.error("FAIL FreeTP pick helper is not exposed");
+  failures++;
+} else {
+  const payload = {
+    luaToolsFixes: {
+      fixes: [
+        { id: "o", category: "online_fix", createdAt: "2026-07-01T00:00:00Z" },
+        { id: "f-old", category: "freetp", createdAt: "2026-06-01T00:00:00Z" },
+        { id: "f-new", category: "freetp", createdAt: "2026-07-02T00:00:00Z", applied: true },
+        { id: "f-bad", category: "freetp", createdAt: "not a date" },
+      ],
+    },
+  };
+  eq("freetp: picks the newest FreeTP fix, ignoring other categories",
+    pickFreeTP(payload).id, "f-new");
+  eq("freetp: keeps the applied flag for the already-installed check",
+    pickFreeTP(payload).applied, true);
+  eq("freetp: equal/absent timestamps keep the official API order",
+    pickFreeTP({ luaToolsFixes: { fixes: [
+      { id: "first", category: "freetp" },
+      { id: "second", category: "freetp", createdAt: "not a date" },
+    ] } }).id, "first");
+  eq("freetp: no FreeTP fix -> null", pickFreeTP({
+    luaToolsFixes: { fixes: [{ id: "o", category: "online_fix" }] },
+  }), null);
+  eq("freetp: catalogue unavailable -> null", pickFreeTP({}), null);
+  eq("freetp: nullish payload -> null", pickFreeTP(null), null);
+}
+
+// ── archive picker row formatting ───────────────────────────────────────────
+if (typeof formatBytes !== "function") {
+  console.error("FAIL byte formatter is not exposed");
+  failures++;
+} else {
+  eq("bytes: GB", formatBytes(1.5 * 1073741824), "1.5 GB");
+  eq("bytes: MB", formatBytes(10 * 1048576), "10.0 MB");
+  eq("bytes: KB", formatBytes(2048), "2 KB");
+  eq("bytes: small stays in bytes", formatBytes(500), "500 B");
+  eq("bytes: nullish -> 0 B", formatBytes(null), "0 B");
+}
+
+// ── local-fix state (a fix already in the game folder) ──────────────────────
+if (typeof localFixState !== "function") {
+  console.error("FAIL local-fix state helper is not exposed");
+  failures++;
+} else {
+  const lo = 'WINEDLLOVERRIDES="winmm=n,b" %command%';
+  const opts = { success: true, apply: true, launchOptions: lo, previousLaunchOptions: "", overrides: lo };
+  eq("local: real fix whose override is not set yet -> needsOptions", localFixState({ found: true }, opts), "needsOptions");
+  eq("local: override already in the options -> applied", localFixState({ found: true },
+    Object.assign({}, opts, { previousLaunchOptions: lo })), "applied");
+  // An OnlineFix+steam_api fix needs no override (apply:false).
+  eq("local: a fix that needs no override -> applied, not broken", localFixState({ found: true },
+    { success: true, apply: false }), "applied");
+  eq("local: loader list without its proxy DLL -> broken", localFixState({ found: true, broken: true }, opts), "broken");
+  eq("local: no fix evidence -> none", localFixState({ found: false }, opts), "none");
+  eq("local: nullish detection -> none", localFixState(null, opts), "none");
+}
+
+// ── Steam relay result check (the {ok:false} silent-failure fix) ────────────
+if (typeof relayOk !== "function") {
+  console.error("FAIL relay-ok helper is not exposed");
+  failures++;
+} else {
+  eq("relay: ok string parses", relayOk('{"ok":true}'), true);
+  eq("relay: ok object", relayOk({ ok: true }), true);
+  eq("relay: ok:false object means the write did NOT land", relayOk({ ok: false }), false);
+  eq("relay: garbage string -> false", relayOk("<html>"), false);
+  eq("relay: nullish -> false", relayOk(null), false);
+}
+
 const unfixBody = (FIXES_SOURCE.match(/function fxUnfix\([\s\S]*?\n  }/) || [""])[0];
-eq("Unfix never starts a full Steam validation",
-  unfixBody.includes("__lumenValidateApp"), false);
+const askAt = unfixBody.indexOf("fxConfirm("), verifyAt = unfixBody.indexOf("__lumenValidateApp");
+eq("Unfix asks before starting Steam's file verification", askAt !== -1 && askAt < verifyAt, true);
 
 // ── Lumen Settings authenticated Fixes catalogue ────────────────────────────
 if (typeof catalogueFilter !== "function") {

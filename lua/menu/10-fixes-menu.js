@@ -37,6 +37,9 @@
   var FX_OVERLAY_ID = "lumen-fixes-overlay";
   var FX_STYLE_ID = "lumen-fixes-styles";
   var FX_FALLBACK_RECEIPT_KIND = "online_fix_fallback";
+  // LumenDownloadFreeTPFix error codes that mean freetp.org has no fix for the
+  // game; every other code is a site or download failure.
+  var FX_FREETP_NOT_FOUND = { invalid_appid: true, no_name: true, no_page: true, no_fix_file: true };
 
   // The icon cluster we tightened (see ensureFixesButton): keep a handle + its
   // original left margin so removing the entry restores Steam's spacing.
@@ -74,6 +77,7 @@
     check: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M470 105a24 24 0 010 34L207 402a24 24 0 01-34 0L42 271a24 24 0 010-34l23-23a24 24 0 0134 0l91 91 223-223a24 24 0 0134 0z"/></svg>',
     discord: '<svg viewBox="0 0 640 512" width="100%" height="100%" fill="currentColor"><path d="M524 69A487 487 0 00404 32a339 339 0 00-17 34 455 455 0 00-135 0 339 339 0 00-17-34A487 487 0 00116 69C42 179 22 286 32 392a495 495 0 00150 75 361 361 0 0032-52 315 315 0 01-50-24l12-10a354 354 0 00304 0l12 10a318 318 0 01-51 24 358 358 0 0032 52 493 493 0 00151-75c12-123-20-229-100-323zM214 327c-29 0-53-27-53-59s23-59 53-59 54 27 53 59c0 32-24 59-53 59zm212 0c-29 0-53-27-53-59s23-59 53-59 54 27 53 59c0 32-24 59-53 59z"/></svg>',
     globe: '<svg viewBox="0 0 496 512" width="100%" height="100%" fill="currentColor"><path d="M248 8a248 248 0 100 496 248 248 0 000-496zm164 158h-65a312 312 0 00-28-78 193 193 0 0193 78zM248 56c19 0 45 35 56 96H192c11-61 37-96 56-96zM72 248a190 190 0 014-40h74a445 445 0 000 80H76a190 190 0 01-4-40zm32 98h65a312 312 0 0028 78 193 193 0 01-93-78zm65-180h-65a193 193 0 0193-78 312 312 0 00-28 78zm79 290c-19 0-45-35-56-96h112c-11 61-37 96-56 96zm66-144H183a401 401 0 010-80h130a401 401 0 010 80zm9 132a312 312 0 0028-78h65a193 193 0 01-93 78zm37-126a445 445 0 000-80h74a193 193 0 010 80z"/></svg>',
+    search: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.7 457.4c12.3 12.3 12.3 32.3 0 44.6-12.3 12.3-32.3 12.3-44.6 0L331.4 375.7C297.3 400.9 254.9 416 208 416 93.1 416 0 322.9 0 208S93.1 0 208 0s208 93.1 208 208zM208 336a128 128 0 100-256 128 128 0 000 256z"/></svg>',
     layers: '<svg viewBox="0 0 576 512" width="100%" height="100%" fill="currentColor"><path d="M288 0L11 124a12 12 0 000 22l277 124 277-124a12 12 0 000-22zm224 220l-53-24-171 76L117 196l-53 24a12 12 0 000 22l224 100 224-100a12 12 0 000-22zm0 124l-53-24-171 76L117 320l-53 24a12 12 0 000 22l224 100 224-100a12 12 0 000-22z"/></svg>',
     trash: '<svg viewBox="0 0 448 512" width="100%" height="100%" fill="currentColor"><path d="M135 21l-13 27H32a16 16 0 000 32h384a16 16 0 000-32h-90l-13-27A32 32 0 00284 0H164a32 32 0 00-29 21zM416 128H32l21 339a48 48 0 0048 45h246a48 48 0 0048-45z"/></svg>',
   };
@@ -178,6 +182,49 @@
     return newest;
   }
 
+  // PURE: the newest FreeTP-category fix out of a CheckForFixes payload
+  // ({ luaToolsFixes: { fixes: [...] } }), or null when the game has none.
+  function fixesPickFreeTP(result) {
+    var groups = fixesGroupCategories(result && result.luaToolsFixes && result.luaToolsFixes.fixes);
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].key === "freetp") return fixesNewestRelease(groups[i].fixes);
+    }
+    return null;
+  }
+
+  // PURE: what the fix evidence (LumenDetectLocalFix) and the backend's
+  // override derivation (GetFixLaunchOptions) say about a fix already in the
+  // game folder. "none" = no fix evidence (a game-shipped DirectX DLL never
+  // counts); "broken" = its loader list is there but the proxy DLL is gone;
+  // "needsOptions" = it needs an override or launcher the options still lack;
+  // "applied" = the options already carry it, or it needs none at all.
+  function fixesLocalFixState(detected, launch) {
+    if (!detected || detected.found !== true) return "none";
+    if (detected.broken === true) return "broken";
+    var needs = !!(launch && launch.success && launch.apply && launch.launchOptions
+      && (launch.overrides || launch.launcher));
+    return needs && launch.previousLaunchOptions !== launch.launchOptions ? "needsOptions" : "applied";
+  }
+
+  // PURE: whether a __lumen* relay call answered ok. The relay RESOLVES with
+  // {ok:false} when Steam's client bridge is unavailable (e.g. Steam is still
+  // starting after a restart) — that is not a promise rejection, so every
+  // caller must check, or the write silently does nothing.
+  function fixesRelayOk(r) {
+    try {
+      return !!(typeof r === "string" ? JSON.parse(r) : r).ok;
+    } catch (e) { return false; }
+  }
+
+  // PURE: human-readable byte size for the archive picker rows.
+  function fixesFormatBytes(n) {
+    n = Number(n) || 0;
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GB";
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+    if (n >= 1024) return Math.round(n / 1024) + " KB";
+    return n + " B";
+  }
+
   function fixesDefaultCategory(official, groups) {
     official = official || {};
     groups = groups || fixesGroupCategories(official.fixes);
@@ -231,6 +278,10 @@
     window.__lumenFixesLuaToolsIcon = fixesLuaToolsIcon;
     window.__lumenFixesAppliedStates = fixesAppliedStates;
     window.__lumenFixesFallbackReceiptKind = fixesFallbackReceiptKind;
+    window.__lumenFixesPickFreeTP = fixesPickFreeTP;
+    window.__lumenFixesFormatBytes = fixesFormatBytes;
+    window.__lumenFixesLocalFixState = fixesLocalFixState;
+    window.__lumenFixesRelayOk = fixesRelayOk;
   } catch (e) {}
 
   // ── styles (Lumen tokens: #23262d surface, #1a9fff accent, Motiva Sans) ─────
@@ -276,14 +327,14 @@
       ".lumen-fx-body.centred{display:flex;flex-direction:column;justify-content:center;}",
       ".lumen-fx-sub{color:#8f98a0;font-size:12px;line-height:1.4;margin:0 2px 14px;}",
       ".lumen-fx-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(150px,1fr);",
-      "grid-template-rows:repeat(3,minmax(82px,1fr));gap:10px;align-items:stretch;}",
+      "grid-template-rows:repeat(4,minmax(82px,1fr));gap:10px;align-items:stretch;}",
       ".lumen-fx-tile{position:relative;display:flex;flex-direction:column;gap:8px;padding:15px 14px;",
       "border-radius:4px;cursor:pointer;background:rgba(255,255,255,.04);",
       "border:1px solid rgba(255,255,255,.08);transition:background .12s,border-color .12s;}",
       ".lumen-fx-tile .ic{width:22px;height:22px;color:#9aa3ab;transition:color .12s;}",
       ".lumen-fx-tile .tl{font-size:14px;font-weight:700;color:#fff;}",
       ".lumen-fx-tile .ds{font-size:11.5px;line-height:1.36;color:#8f98a0;}",
-      ".lumen-fx-tile.featured{grid-column:1;grid-row:1/4;min-height:266px;padding:22px 20px;justify-content:flex-start;}",
+      ".lumen-fx-tile.featured{grid-column:1;grid-row:1/5;min-height:266px;padding:22px 20px;justify-content:flex-start;}",
       ".lumen-fx-tile.featured .ic{width:44px;height:44px;margin-bottom:4px;}",
       ".lumen-lt-logo-mono,.lumen-lt-logo-brand{transition:opacity .16s ease-out;}",
       ".lumen-lt-logo-brand{opacity:0;}",
@@ -333,6 +384,13 @@
       "@media(max-width:620px){.lumen-fx-grid{grid-template-columns:minmax(0,1.6fr) minmax(130px,1fr)}.lumen-fx-tile.featured .ds{max-width:100%;}}",
       ".lumen-fx-note{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:12px;",
       "line-height:1.45;color:#e0b341;}",
+      // archive picker rows (FreeTP "install what you downloaded" flow)
+      ".lumen-fx-arch{display:flex;justify-content:space-between;align-items:baseline;gap:12px;",
+      "color:#dcdedf;text-decoration:none;padding:9px 12px;margin:0 0 6px;border-radius:4px;",
+      "border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);transition:.12s;",
+      "-webkit-app-region:no-drag;}",
+      ".lumen-fx-arch:hover,.lumen-fx-arch.active-focus{border-color:#1a9fff;background:rgba(255,255,255,.07);color:#fff;}",
+      ".lumen-fx-arch .lumen-fx-arch-meta{color:#8f98a0;font-size:11px;white-space:nowrap;}",
       // centred loading / status / progress
       ".lumen-fx-center{display:flex;flex-direction:column;align-items:center;gap:14px;",
       "padding:30px 0;color:#b8bcbf;font-size:14px;}",
@@ -736,7 +794,7 @@
     });
   }
 
-  function fxConfirm(msg, onYes) {
+  function fxConfirm(msg, onYes, onNo, yesLabel) {
     var S = fxStrings();
     var shell = fxModalShell(S.unfixLabel, msg);
     var trap = null;
@@ -744,18 +802,19 @@
       if (trap) { try { trap(); } catch (e) {} trap = null; }
       if (shell.back.parentNode) shell.back.remove();
     };
-    fxModalButton(shell.row, S.cancel, false, close);
-    fxModalButton(shell.row, S.unfixLabel, true, function () {
+    var decline = function () { close(); if (onNo) onNo(); };
+    fxModalButton(shell.row, S.cancel, false, decline);
+    fxModalButton(shell.row, yesLabel || S.unfixLabel, true, function () {
       close();
       onYes();
     });
     shell.back.addEventListener("click", function (e) {
-      if (e.target === shell.back) close();
+      if (e.target === shell.back) decline();
     });
     (document.body || document.documentElement).appendChild(shell.back);
     // Default the selection to Cancel: the destructive action should never be
     // one accidental A press away.
-    trap = trapModalFocus(shell.back, close, {
+    trap = trapModalFocus(shell.back, decline, {
       selector: LUMEN_OVERLAY_ACTION_SELECTOR,
       preferFirst: true,
     });
@@ -1032,6 +1091,29 @@
     }
     drawOfficialTile();
 
+    // FreeTP Fix (fxApplyFreeTP). Unlike the other tiles it stays clickable
+    // when the game isn't installed, so a click can explain why.
+    var freetpCandidate = fixesPickFreeTP(fixes);
+    var freetpTileFor = function (state) {
+      return fxTile(S.freetpLabel, isNative ? S.nativeWarnShort : S.freetpDesc,
+        { iconKey: "search", warn: isNative, applied: state === "applied",
+          badge: { applied: S.appliedBadge, needsOptions: S.freetpDetectedBadge }[state] || null },
+        function () { fxApplyFreeTP(appid, ctx, win, gameName); });
+    };
+    var freetpTile = freetpTileFor(freetpCandidate && freetpCandidate.applied === true ? "applied" : "none");
+    grid.appendChild(freetpTile);
+
+    if (installed) {
+      // Badge only: opening the menu never writes launch options (Unfix or
+      // the user may have removed them on purpose); a click re-applies.
+      fxProbeLocalFix(appid, ctx).then(function (state) {
+        if (state !== "applied" && state !== "needsOptions") return;
+        var next = freetpTileFor(state);
+        if (freetpTile.parentNode) freetpTile.parentNode.replaceChild(next, freetpTile);
+        freetpTile = next;
+      }).catch(function () {});
+    }
+
     // The unauthenticated mirror remains available as a clearly secondary
     // fallback. It never replaces or outranks the official category selection.
     var fallbackOnline = fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
@@ -1113,6 +1195,12 @@
     return function () { try { b.remove(); } catch (e) {} };
   }
 
+  // A flow that fails before showing progress still ends in the finished view.
+  function fxShowFailure(win, text) {
+    fxShowProgress(win, fxStrings().freetpFixLabel);
+    fxFinish(win, text);
+  }
+
   // Replace the footer with a single Close button (end of a flow).
   function fxFooterClose(win) {
     var f = win.querySelector(".lumen-fx-foot");
@@ -1157,10 +1245,6 @@
       else { fxAlert((p && p.error) ? String(p.error) : S.applyErr); }
     }).catch(function () { fxAlert(S.applyErr); });
   }
-
-  // Online Fix — resolve the .rar by game name on the mirror, then apply.
-  // (Availability is now resolved up-front in fxRenderMenu; kept applying via
-  // fxApply with the resolved URL.)
 
   // Crack / Online apply: start the background download, then poll status.
   function fxApply(appid, url, fixType, ctx, win, receiptKind) {
@@ -1214,6 +1298,153 @@
     }).catch(function () { fxFailProgress(win, S.applyErr); });
   }
 
+  // FreeTP Fix — one click; the first route that works wins:
+  //   1. lua.tools' newest freetp-category fix, re-fetched so a fix released
+  //      after the menu opened is found: only its launch options when the
+  //      receipt says applied; a new apply needs a linked lua.tools account;
+  //   2. a fix already in the game folder: its launch options, or "broken";
+  //   3. the fix downloaded from freetp.org, installed recorded (fixinstall);
+  //   4. an archive picked from the Downloads folder;
+  //   5. otherwise the outcome, in place. It never opens a web page.
+  // Each route resolves to the view it ends in, so the busy overlay closes
+  // once and nothing runs after the menu was closed.
+  function fxApplyFreeTP(appid, ctx, win, gameName) {
+    var S = fxStrings();
+    if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
+    if (!ctx.runsUnderProton) { fxAlert(S.nativeWarn); return; }
+    var done = fxBusy(win, S.freetpSearching);
+    var pickerOr = function (failText) {
+      return call("LumenListFixArchives", { contentScriptQuery: "" }).then(fxParse).then(function (list) {
+        var archives = list && list.success && list.archives;
+        if (archives && archives.length) {
+          return function () { fxShowArchivePicker(win, appid, ctx, archives, failText); };
+        }
+        return function () { fxShowFailure(win, failText); };
+      });
+    };
+    call("CheckForFixes", { appid: appid, contentScriptQuery: "" }).then(fxParse).then(function (result) {
+      var official = (result && result.luaToolsFixes) || {};
+      var candidate = fixesPickFreeTP(result);
+      if (candidate && candidate.applied === true) {
+        return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLaunchDone); };
+      }
+      if (candidate && official.authConfigured === true) {
+        return function () { fxApplyLuaTools(appid, candidate.id, candidate.title || S.freetpFixLabel, ctx, win); };
+      }
+      return fxProbeLocalFix(appid, ctx).then(function (state) {
+        if (state === "broken") return function () { fxShowFailure(win, S.freetpBrokenFix); };
+        if (state !== "none") {
+          return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLocalDone); };
+        }
+        return call("LumenDownloadFreeTPFix", {
+          appid: appid, gameName: gameName || "", contentScriptQuery: "",
+        }).then(fxParse).then(function (dl) {
+          if (!(dl && dl.success && dl.path)) {
+            return pickerOr(FX_FREETP_NOT_FOUND[dl && dl.errorCode] ? S.freetpNone : S.freetpDownloadErr);
+          }
+          return function () {
+            fxInstallArchive(win, appid, ctx, {
+              name: S.freetpFixLabel + " (" + fixesFormatBytes(dl.size) + ")", path: dl.path,
+            });
+          };
+        }, function () { return pickerOr(S.freetpDownloadErr); });
+      });
+    }).then(function (show) {
+      done();
+      if (win.isConnected) show();
+    }).catch(function () { done(); fxShowFailure(win, S.applyErr); });
+  }
+
+  // The state (fixesLocalFixState) of a fix already in the game folder, gated
+  // on real fix evidence: the override derivation alone also fires on
+  // game-shipped DirectX redist DLLs (D3D12Core.dll).
+  function fxProbeLocalFix(appid, ctx) {
+    return call("LumenDetectLocalFix", {
+      appid: appid, installPath: ctx.installPath || "", contentScriptQuery: "",
+    }).then(fxParse).then(function (detected) {
+      if (!(detected && detected.success && detected.found)) return "none";
+      return call("GetFixLaunchOptions", {
+        appid: appid, compatToolName: "", currentLaunchOptions: "",
+        installPath: ctx.installPath, contentScriptQuery: "",
+      }).then(fxParse).then(function (launch) {
+        return fixesLocalFixState(detected, launch);
+      });
+    });
+  }
+
+  // The archive picker: a fix archive the user downloaded (from FreeTP or any
+  // source), installed through fixinstall so Unfix can revert it. why is what
+  // the freetp.org route reported before falling back to this list.
+  function fxShowArchivePicker(win, appid, ctx, archives, why) {
+    var S = fxStrings();
+    var body = win.querySelector(".lumen-fx-body");
+    if (!body) return;
+    fxKeepBodyHeight(body, true);
+    body.innerHTML = "";
+    var wrap = document.createElement("div");
+    wrap.className = "lumen-fx-status";
+    var title = document.createElement("div");
+    title.className = "lumen-fx-msg";
+    title.style.fontWeight = "600";
+    title.textContent = S.freetpPickTitle;
+    var hint = document.createElement("div");
+    hint.className = "lumen-fx-sub";
+    hint.textContent = why + " " + S.freetpPickHint;
+    wrap.appendChild(title);
+    wrap.appendChild(hint);
+    archives.forEach(function (a) {
+      var row = document.createElement("a");
+      row.href = "#";
+      row.className = "lumen-fx-arch";
+      // Gamepad focus only reaches LUMEN_OVERLAY_ACTION_SELECTOR matches.
+      row.setAttribute("role", "button");
+      var nm = document.createElement("span");
+      nm.textContent = a.name;
+      var meta = document.createElement("span");
+      meta.className = "lumen-fx-arch-meta";
+      meta.textContent = fixesFormatBytes(a.size) + " · " +
+        new Date((a.mtime || 0) * 1000).toLocaleDateString();
+      row.appendChild(nm);
+      row.appendChild(meta);
+      row.addEventListener("click", function (e) {
+        e.preventDefault();
+        fxInstallArchive(win, appid, ctx, a);
+      });
+      wrap.appendChild(row);
+    });
+    body.appendChild(wrap);
+  }
+
+  function fxInstallArchive(win, appid, ctx, archive) {
+    var S = fxStrings();
+    var done = fxBusy(win, S.freetpInstalling.replace("{archive}", archive.name));
+    call("LumenInstallFixArchive", {
+      appid: appid, archivePath: archive.path, installPath: ctx.installPath || "",
+      contentScriptQuery: "",
+    }).then(fxParse).then(function (p) {
+      done();
+      if (!(p && p.success)) {
+        fxShowFailure(win, { no_extractor: S.installNeeds7z,
+          no_extractor_inno: S.installNeedsInno }[p && p.errorCode] || S.freetpInstallErr);
+        return;
+      }
+      fxApplyLaunchOnly(appid, ctx, win, S.freetpInstallBusy,
+        S.freetpInstallDone.replace("{added}", p.added || 0).replace("{replaced}", p.replaced || 0));
+    }).catch(function () { done(); fxShowFailure(win, S.freetpInstallErr); });
+  }
+
+  // Set the launch options for the fix now in the game folder (overrides
+  // derived from the install dir), then finish with doneText or the failure.
+  function fxApplyLaunchOnly(appid, ctx, win, busyText, doneText) {
+    var S = fxStrings();
+    fxShowProgress(win, S.freetpFixLabel);
+    var msg = win.querySelector("#lumen-fx-pmsg");
+    if (msg) msg.textContent = busyText;
+    fxApplyOverrides(appid, ctx, win).then(function (ok) {
+      fxFinish(win, ok ? doneText : S.failed.replace("{error}", S.launchApplyFailed));
+    });
+  }
+
   function fxShowProgress(win, fixType) {
     var S = fxStrings();
     var body = win.querySelector(".lumen-fx-body");
@@ -1237,6 +1468,13 @@
     if (msg) msg.textContent = S.failed.replace("{error}", text || S.unknownError);
     var bar = win.querySelector(".lumen-fx-pbar > i");
     if (bar) bar.style.transform = "scaleX(0)";
+    fxFooterClose(win);
+  }
+
+  // End of a flow: the final message and the Close footer.
+  function fxFinish(win, text) {
+    var msg = win.querySelector("#lumen-fx-pmsg");
+    if (msg) msg.textContent = text;
     fxFooterClose(win);
   }
 
@@ -1317,8 +1555,7 @@
       var opts = String(p.launchOptions);
       return call("__lumenSetLaunchOptions", { appid: Number(appid), options: opts })
         .then(function (r) {
-          var ok = false;
-          try { ok = (typeof r === "string" ? JSON.parse(r) : r).ok; } catch (e) {}
+          var ok = fixesRelayOk(r);
           if (!ok) fxLaunchHint(win, opts);
           return ok;
         })
@@ -1367,7 +1604,10 @@
   }
 
   // Unfix — restore only files recorded by fix applications, drop the SpaceFix
-  // mapping, and clear fix-added launch options. No full Steam validation.
+  // mapping, clear fix-added launch options, and revert a fix archive install
+  // Lumen recorded (fixinstall). That install keeps no backups, so when it
+  // overwrote game files Unfix asks before starting Steam's verify; nothing
+  // else here starts a validation.
   function fxUnfix(appid, ctx, win) {
     var S = fxStrings();
     var done = fxBusy(win, S.unfixDesc);
@@ -1379,17 +1619,52 @@
           fxAlert((p && p.error) ? String(p.error) : S.unfixErr);
           return;
         }
-        var after = function () {
+        // The closing alert opens with "Restored…" only when nothing was left
+        // undone; otherwise its notes say what remains.
+        var after = function (notes, leftover) {
           done();
           fxClose();
-          fxAlert(S.unfixDone);
+          fxAlert((leftover ? [] : [S.unfixDone]).concat(notes.filter(Boolean)).join(" "));
         };
-        if (p.clearLaunchOptions) {
+        var withRevert = function (optionsNote) {
+          var leftover = !!optionsNote;
+          call("LumenRevertFixInstall", { appid: appid, contentScriptQuery: "" })
+            .then(fxParse).then(function (r) {
+              if (!(r && r.reverted)) { after([optionsNote], leftover); return; }
+              if (!r.needsVerify) {
+                after([optionsNote, S.unfixRemovedNote.replace("{removed}", r.removed || 0)], leftover);
+                return;
+              }
+              // Steam's verify re-downloads changed files: never a surprise.
+              var manual = S.unfixVerifyManual.replace("{replaced}", r.replacedCount || 0);
+              done();
+              fxConfirm(
+                S.unfixReplacedNote.replace("{removed}", r.removed || 0)
+                  .replace("{replaced}", r.replacedCount || 0) + " " + S.unfixVerifyAsk,
+                function () {
+                  call("__lumenValidateApp", { appid: Number(appid) })
+                    .then(fixesRelayOk, function () { return false; })
+                    .then(function (ok) {
+                      after([optionsNote, ok ? S.unfixVerifyStarted : manual], leftover || !ok);
+                    });
+                },
+                function () { after([optionsNote, manual], true); },
+                S.verifyLabel);
+            })
+            .catch(function () { after([optionsNote], leftover); });
+        };
+        var clearOptions = function (attempt) {
           call("__lumenSetLaunchOptions", { appid: Number(appid), options: p.launchOptions || "" })
-            .then(after).catch(after);
-        } else {
-          after();
-        }
+            .then(fixesRelayOk, function () { return false; })
+            .then(function (ok) {
+              // {ok:false} or a rejection: Steam's client bridge is not ready
+              // (Steam may be mid-restart). Retry once, then report it.
+              if (ok) withRevert("");
+              else if (attempt < 2) setTimeout(function () { clearOptions(attempt + 1); }, 1500);
+              else withRevert(S.unfixOptionsFailed);
+            });
+        };
+        if (p.clearLaunchOptions) clearOptions(1); else withRevert("");
       })
       .catch(function () { done(); fxAlert(S.unfixErr); });
   }
