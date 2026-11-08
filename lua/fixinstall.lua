@@ -221,13 +221,16 @@ local function shipped_7zz()
   return backend ~= "" and backend .. "/bin/7zz" or ""
 end
 
+-- read_manifest(root) -> the record, or nil + errorCode when one exists but
+-- cannot be read or decoded (nil alone: there is none).
 local function read_manifest(root)
-  local f = io.open(root .. "/manifest.json", "rb")
-  if not f then return nil end
+  local f, _, errno = io.open(root .. "/manifest.json", "rb")
+  if not f then return nil, errno ~= 2 and "record_unreadable" or nil end
   local raw = f:read("*a")
   f:close()
   local ok, m = pcall(json.decode, raw)
-  return ok and type(m) == "table" and m or nil
+  if not (ok and type(m) == "table") then return nil, "record_invalid" end
+  return m
 end
 
 -- first_bin(candidates) -> the first candidate that exists: absolute paths
@@ -641,7 +644,9 @@ end
 -- revert(appid, deps) -> { success, reverted, removed, replacedCount,
 -- needsVerify }. Removes the files the fix added; game files it overwrote
 -- come back only through Steam's verify (needsVerify). With no recorded
--- install it reports reverted=false and touches nothing.
+-- install it reports reverted=false and touches nothing; a record it cannot
+-- read or use (bad JSON, a path outside the game folder) fails with an
+-- errorCode, as its files may still be in place.
 function fixinstall.revert(appid, deps)
   deps = deps or {}
   local res = { success = true, reverted = false, removed = 0,
@@ -649,9 +654,19 @@ function fixinstall.revert(appid, deps)
   appid = tonumber(appid)
   if not appid then return res end
   local root = (deps.store_root or store_root)() .. "/" .. appid
-  local m = read_manifest(root)
+  local m, why = read_manifest(root)
+  if why then
+    res.success = false
+    res.errorCode = why
+    return res
+  end
+  if not m then return res end
   local removed = remove_added(m)
-  if not removed then return res end
+  if not removed then
+    res.success = false
+    res.errorCode = "record_invalid"
+    return res
+  end
   res.removed = removed
   res.replacedCount = #(type(m.replaced) == "table" and m.replaced or {})
   res.needsVerify = res.replacedCount > 0
@@ -660,7 +675,9 @@ function fixinstall.revert(appid, deps)
   return res
 end
 
-function fixinstall.register(registry)
+-- register(registry, deps): `deps` reaches install and revert — inject it
+-- from tests; production leaves it nil.
+function fixinstall.register(registry, deps)
   -- Bridge contract: JS object keys arrive alphabetically positional; the
   -- table form is tolerated too.
   registry.LumenDetectLocalFix = function(appid, contentScriptQuery, installPath)
@@ -691,7 +708,7 @@ function fixinstall.register(registry)
       installPath = appid.installPath
       appid = appid.appid
     end
-    local ok, res = pcall(fixinstall.install, appid, archivePath, installPath)
+    local ok, res = pcall(fixinstall.install, appid, archivePath, installPath, deps)
     if not ok then
       return json.encode({ success = false, errorCode = "crash", error = tostring(res) })
     end
@@ -699,7 +716,7 @@ function fixinstall.register(registry)
   end
   registry.LumenRevertFixInstall = function(appid, contentScriptQuery)
     if type(appid) == "table" then appid = appid.appid end
-    local ok, res = pcall(fixinstall.revert, appid)
+    local ok, res = pcall(fixinstall.revert, appid, deps)
     if not ok then
       return json.encode({ success = false, error = tostring(res) })
     end

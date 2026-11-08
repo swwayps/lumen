@@ -271,8 +271,10 @@ end
 
 -- ── register (RPC shape, injected deps) ──────────────────────────────────────
 do
+  local reg_tmp = "/tmp/lumen_fixinstall_register"
+  os.execute("rm -rf -- " .. q(reg_tmp) .. " && mkdir -p -- " .. q(reg_tmp .. "/store/124"))
   local reg = {}
-  fi.register(reg)
+  fi.register(reg, { home = reg_tmp, store_root = function() return reg_tmp .. "/store" end })
   check("register: four RPCs", type(reg.LumenListFixArchives) == "function"
     and type(reg.LumenInstallFixArchive) == "function"
     and type(reg.LumenRevertFixInstall) == "function"
@@ -282,6 +284,11 @@ do
     dec_det.success == true and dec_det.found == false)
   local dec = json.decode(reg.LumenRevertFixInstall({ appid = 123 }))
   check("register: revert with no record no-ops", dec.success == true and dec.reverted == false)
+  write_file(reg_tmp .. "/store/124/manifest.json", "{not json")
+  local dec_bad = json.decode(reg.LumenRevertFixInstall(124, ""))
+  check("register: a record that cannot be read fails the revert (positional form)",
+    dec_bad.success == false and dec_bad.errorCode == "record_invalid" and dec_bad.reverted == false)
+  os.execute("rm -rf -- " .. q(reg_tmp))
   -- The bridge sorts {appid, archivePath, contentScriptQuery, installPath}:
   -- the 4th positional value is the install-path hint, and a hint that is
   -- not the game's own folder must be refused.
@@ -289,7 +296,7 @@ do
   package.loaded.steam_utils = { get_game_install_path_response = function()
     return { success = true, installPath = "/games/real" } end }
   local dec_inst = json.decode(reg.LumenInstallFixArchive(
-    123, (os.getenv("HOME") or "") .. "/fix.zip", "", "/games/other"))
+    123, reg_tmp .. "/fix.zip", "", "/games/other"))
   package.loaded.steam_utils = saved_su
   check("register: positional install refuses a foreign install path",
     dec_inst.success == false and dec_inst.errorCode == "invalid_destination")
@@ -522,12 +529,38 @@ else
       and read_file(game .. "/.slssteam_fix_dlls") == "")
   fi.revert(4312190, deps)
 
+  -- A record that exists but cannot be used fails the revert: the files it
+  -- names may still be in the game folder.
+  local man_path = store .. "/4312190/manifest.json"
+  fi.install(4312190, other, game, deps)
+  local good_record = read_file(man_path)
+  write_file(man_path, '{"added": [')
+  local rv_json = fi.revert(4312190, deps)
+  check("e2e: revert with an undecodable record fails (record_invalid); the files stay",
+    rv_json.success == false and rv_json.errorCode == "record_invalid" and rv_json.reverted == false
+      and read_file(game .. "/other_fix.dll") == "OTHER")
+  write_file(man_path, good_record)
+  os.execute("chmod 000 " .. q(man_path))
+  if read_file(man_path) == nil then
+    local rv_perm = fi.revert(4312190, deps)
+    check("e2e: revert with an unreadable record fails (record_unreadable); the files stay",
+      rv_perm.success == false and rv_perm.errorCode == "record_unreadable"
+        and read_file(game .. "/other_fix.dll") == "OTHER")
+  else
+    io.write("(unreadable-record case skipped: running with read access to mode 000 files)\n")
+  end
+  os.execute("chmod 600 " .. q(man_path))
+  check("e2e: ...and once readable again it reverts",
+    fi.revert(4312190, deps).reverted == true and read_file(game .. "/other_fix.dll") == nil)
+
   write_file(tmp .. "/outside.txt", "KEEP")
   os.execute("mkdir -p -- " .. q(store .. "/4312190"))
   write_file(store .. "/4312190/manifest.json", json.encode({
     installPath = game, added = { "../outside.txt" }, replaced = {} }))
-  check("e2e: a tampered record never deletes outside the game folder",
-    fi.revert(4312190, deps).reverted == false and read_file(tmp .. "/outside.txt") == "KEEP")
+  local rv_tampered = fi.revert(4312190, deps)
+  check("e2e: a tampered record never deletes outside the game folder, and fails the revert",
+    rv_tampered.success == false and rv_tampered.errorCode == "record_invalid"
+      and rv_tampered.reverted == false and read_file(tmp .. "/outside.txt") == "KEEP")
 
   os.execute("rm -rf -- " .. q(tmp))
 end

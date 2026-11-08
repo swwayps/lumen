@@ -348,6 +348,15 @@ async function confirmUnfix() {
     (lastModalText() || "").indexOf(S.unfixDone) === -1
       && (lastModalText() || "").indexOf(S.unfixRevertFailed) !== -1, true);
 
+  // fixinstall.revert's answer for a record it cannot read or use.
+  await openMenu(Object.assign({}, unfixOk, {
+    LumenRevertFixInstall: () => ({ success: false, errorCode: "record_invalid", reverted: false,
+      removed: 0, replacedCount: 0, needsVerify: false }) }));
+  await confirmUnfix();
+  eq("unfix: an unusable install record does not say Restored, and says the files remain",
+    (lastModalText() || "").indexOf(S.unfixDone) === -1
+      && (lastModalText() || "").indexOf(S.unfixRevertFailed) !== -1, true);
+
   // ── Escape on the verify confirmation takes the decline path ─────────────
   await openMenu(Object.assign({}, unfixOk, {
     LumenRevertFixInstall: () => ({ success: true, reverted: true, removed: 2,
