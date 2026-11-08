@@ -77,6 +77,8 @@ do
   check("safe: parent escape refused", bad_up == nil)
   local bad_win = fi.safe_entries({ { path = "C:/evil.txt" } })
   check("safe: windows drive refused", bad_win == nil)
+  check("safe: a backslash entry is refused (7-Zip on Linux writes it as one file name)",
+    fi.safe_entries({ { path = "fix.ini" }, { path = "sub\\fix.dll" } }) == nil)
 end
 
 check("under_home: own downloads ok", fi.under_home("/home/me/Downloads/a.zip", "/home/me") == true)
@@ -167,6 +169,28 @@ do
         and #setups == fi.MAX_SETUPS_PROBED)
   else
     check("list: without innoextract no setup is listed", #setups == 0 and #probed == 0)
+  end
+
+  -- Setups too big to list must not use up the probe budget either.
+  local big, probed_big = {}, {}
+  for i = 1, fi.MAX_SETUPS_PROBED do
+    big[#big + 1] = string.format("%d|%d|%s/repack%02d.exe", fi.MAX_ARCHIVE_BYTES + 1, 2000 + i, tmpd, i)
+  end
+  big[#big + 1] = string.format("1782579|1000|%s/fix-setup.exe", tmpd)
+  local small = fi.list_archives("/home/user", {
+    downloads_dir = tmpd,
+    read_line = function() return nil end,
+    read_pipe = function(cmd)
+      if cmd:find("^find ") then return table.concat(big, "\n") .. "\n" end
+      probed_big[#probed_big + 1] = cmd
+      return ' - "app/fix.dll" (1 KiB)\n'
+    end,
+  })
+  if fi.find_inno() then
+    check("list: setups too big to list are never probed, so an older fix setup still is",
+      #probed_big == 1 and #small == 1 and small[1].name == "fix-setup.exe")
+  else
+    check("list: without innoextract no setup is listed", #small == 0 and #probed_big == 0)
   end
   os.execute("rm -rf -- " .. q(tmpd))
 end
@@ -359,6 +383,45 @@ else
     return out
   end
 
+  -- 7-Zip on Linux extracts "sub\fix.dll" as one file of that name in the
+  -- game root, which a "sub/fix.dll" record would leave behind on Un-fix.
+  local bs_zip = archive("bs.zip", { ["sub\\fix.dll"] = "FIX" }, "-tzip")
+  local bs = fi.install(4312190, bs_zip, game, deps)
+  check("e2e: an archive with a backslash entry is refused; nothing lands or is recorded",
+    bs.success == false and bs.errorCode == "unsafe_archive"
+      and read_file(game .. "/sub\\fix.dll") == nil
+      and read_file(store .. "/4312190/manifest.json") == nil)
+
+  -- A file Lumen downloaded itself is not left behind when its install fails.
+  local own_dl = fi.download_dir(tmp)
+  os.execute("mkdir -p -- " .. q(own_dl) .. " && cp -- " .. q(bs_zip) .. " "
+    .. q(own_dl .. "/4312190-freetp-fix.zip"))
+  local own_fail = fi.install(4312190, own_dl .. "/4312190-freetp-fix.zip", game, deps)
+  check("e2e: a Lumen download whose install fails is deleted",
+    own_fail.success == false and read_file(own_dl .. "/4312190-freetp-fix.zip") == nil)
+
+  -- Every 7-Zip command gets stdin from /dev/null, whatever stdin this
+  -- process has: the commands are captured, then run for real.
+  local cmds = {}
+  local spy = {}
+  for k, v in pairs(deps) do spy[k] = v end
+  spy.read_pipe = function(c)
+    cmds[#cmds + 1] = c
+    local p = io.popen(c, "r")
+    local out = p and p:read("*a") or ""
+    if p then p:close() end
+    return out
+  end
+  spy.execute = function(c) cmds[#cmds + 1] = c; return os.execute(c) end
+  local spied = fi.install(4312190, zip, game, spy)
+  local stdin_closed = #cmds == 2
+  for _, c in ipairs(cmds) do
+    if not (c:find(q(bin), 1, true) == 1 and c:find("</dev/null", 1, true)) then stdin_closed = false end
+  end
+  check("e2e: the 7-Zip list and extract commands read stdin from /dev/null",
+    spied.success == true and stdin_closed)
+  fi.revert(4312190, deps)
+
   -- A second install reverts the first, but the game file the first one
   -- overwrote still holds fix content, so Unfix must still offer verify.
   fi.install(4312190, zip, game, deps)
@@ -369,6 +432,40 @@ else
       and read_file(game .. "/added_fix.dll") == nil)
   check("e2e: ...so its revert still asks for verify",
     fi.revert(4312190, deps).needsVerify == true)
+
+  -- The next record is written in full or not at all: when it cannot be
+  -- written, the previous one (and its overwritten files) stays.
+  local function with_open(open)
+    local d = {}
+    for k, v in pairs(deps) do d[k] = v end
+    d.open_file = open
+    return d
+  end
+  -- The failing files still write to disk: only the reported result is
+  -- faked, as a full disk truncates the file and then reports the error.
+  local failing_writes = {
+    { "the folder is not writable", function() return nil, "Permission denied" end },
+    { "the disk fills up while writing", function(p, mode)
+      local f = io.open(p, mode)
+      return { write = function(self, data) f:write(data:sub(1, 8)); return nil, "No space left on device" end,
+        close = function() return f:close() end }
+    end },
+    { "the final flush fails", function(p, mode)
+      local f = io.open(p, mode)
+      return { write = function(self, data) f:write(data); return self end,
+        close = function() f:close(); return nil, "No space left on device" end }
+    end },
+  }
+  for _, case in ipairs(failing_writes) do
+    fi.install(4312190, zip, game, deps)
+    local nf = fi.install(4312190, other, game, with_open(case[2]))
+    check("e2e: record write fails (" .. case[1] .. ") -> record_failed, nothing extracted, previous record kept",
+      nf.success == false and nf.errorCode == "record_failed"
+        and read_file(game .. "/other_fix.dll") == nil
+        and (manifest().replaced or {})[1] == "sub/replace_me.dll"
+        and read_file(store .. "/4312190/manifest.json.tmp") == nil
+        and fi.revert(4312190, deps).needsVerify == true)
+  end
 
   -- On a nested depot the second archive can pick another game root; the
   -- first one's overwritten exe must stay recorded.

@@ -110,13 +110,15 @@ end
 
 -- safe_entries(entries) -> normalized list, or nil + reason when the archive
 -- carries an absolute path or a ".." segment (zip-slip: the extractor would
--- write outside the game folder). PURE.
+-- write outside the game folder), or a backslash: 7-Zip on Linux extracts
+-- "sub\fix.dll" as ONE file of that name in the game root, which neither the
+-- game loads nor a "sub/fix.dll" record would let Un-fix remove. PURE.
 function fixinstall.safe_entries(entries)
   local out = {}
   for _, e in ipairs(type(entries) == "table" and entries or {}) do
     local p = tostring(type(e) == "table" and e.path or "")
     if p ~= "" and not p:find("[\0\r\n]") then
-      p = p:gsub("\\", "/")
+      if p:find("\\", 1, true) then return nil, "backslash_path" end
       if p:sub(1, 1) == "/" or p:match("^%a:") then
         return nil, "absolute_path"
       end
@@ -285,14 +287,17 @@ function fixinstall.list_archives(home, deps)
   end
   -- Classify exes: keep only Inno Setup installers innoextract can actually
   -- read — a random downloaded program must never appear in the fix picker.
-  -- Newest first, so the setup just downloaded is always among those probed.
+  -- Newest first, so the setup just downloaded is always among those probed;
+  -- setups too big to list are skipped before probing, so they never use up
+  -- the probe budget.
   table.sort(entries, function(a, b) return a.mtime > b.mtime end)
   local inno_bin = fixinstall.find_inno()
   local kept, probed = {}, 0
   for _, e in ipairs(entries) do
     if not fixinstall.is_inno_name(e.name) then
       kept[#kept + 1] = e
-    elseif inno_bin and probed < fixinstall.MAX_SETUPS_PROBED then
+    elseif inno_bin and probed < fixinstall.MAX_SETUPS_PROBED
+        and e.size <= fixinstall.MAX_ARCHIVE_BYTES then
       probed = probed + 1
       local ltext = read_pipe(shq(inno_bin) .. " -l -- " .. shq(e.path) .. " 2>/dev/null")
       if #fixinstall.parse_inno_listing(ltext) > 0 then kept[#kept + 1] = e end
@@ -401,12 +406,49 @@ local function trusted_install_dir(appid, hint, resolve)
   return info.installPath
 end
 
--- install(appid, archive_path, install_path_hint, deps)
---   -> { success, added, replaced } or { success=false, errorCode }
--- The install dir is always re-derived from Steam's own manifests; the
--- frontend's hint must agree with it or the call is refused.
-function fixinstall.install(appid, archive_path, install_path_hint, deps)
-  deps = deps or {}
+-- remove_added(m) -> how many of record m's added files were removed from its
+-- game folder, or nil for no record or one naming a path outside that folder.
+local function remove_added(m)
+  local install_dir = m and tostring(m.installPath or "") or ""
+  if install_dir == "" then return nil end
+  local added = {}
+  for _, p in ipairs(type(m.added) == "table" and m.added or {}) do
+    added[#added + 1] = { path = tostring(p) }
+  end
+  -- A tampered record must never delete outside the game folder.
+  added = fixinstall.safe_entries(added)
+  if not added then return nil end
+
+  for _, e in ipairs(added) do
+    local p = e.path
+    os.execute("rm -f -- " .. shq(install_dir .. "/" .. p))
+    -- Folders the fix brought along go too, but only once empty.
+    local parent = p:match("^(.*)/[^/]+$")
+    if parent then
+      os.execute("cd " .. shq(install_dir) .. " && rmdir -p --ignore-fail-on-non-empty -- "
+        .. shq(parent) .. " 2>/dev/null")
+    end
+  end
+  return #added
+end
+
+-- write_manifest(root, data, open) -> true once data is root/manifest.json in
+-- full. It goes to a temporary file renamed over the record, so a failed
+-- write (unwritable folder, full disk) leaves the previous record whole.
+local function write_manifest(root, data, open)
+  local tmp = root .. "/manifest.json.tmp"
+  local f = open(tmp, "wb")
+  if not f then return false end
+  local written = f:write(data)
+  local closed = f:close()
+  if not (written and closed and os.rename(tmp, root .. "/manifest.json")) then
+    os.remove(tmp)
+    return false
+  end
+  return true
+end
+
+local function install_archive(appid, archive_path, install_path_hint, deps)
   local res = { success = false }
   appid = tonumber(appid)
   if not appid or appid <= 0 or appid ~= math.floor(appid) then
@@ -444,15 +486,18 @@ function fixinstall.install(appid, archive_path, install_path_hint, deps)
     return res
   end
 
+  -- The extractor commands run through deps.read_pipe / deps.execute
+  -- (injectable for tests).
+  local read_pipe, execute = deps.read_pipe or popen_read, deps.execute or os.execute
   -- 7-Zip waits on stdin for the password of an encrypted archive, which
   -- would stall the single-threaded RPC loop; with no stdin it fails at once.
   local function list_7z(b)
-    return fixinstall.safe_entries(fixinstall.parse_7z_listing(popen_read(shq(b)
+    return fixinstall.safe_entries(fixinstall.parse_7z_listing(read_pipe(shq(b)
       .. " l -ba -slt -- " .. shq(archive_path) .. " </dev/null 2>/dev/null")))
   end
   local entries
   if is_inno then
-    local itext = popen_read(shq(inno_bin) .. " -l -- " .. shq(archive_path) .. " 2>/dev/null")
+    local itext = read_pipe(shq(inno_bin) .. " -l -- " .. shq(archive_path) .. " 2>/dev/null")
     entries = fixinstall.safe_entries(fixinstall.parse_inno_listing(itext))
   else
     entries = list_7z(bin)
@@ -472,15 +517,17 @@ function fixinstall.install(appid, archive_path, install_path_hint, deps)
     return res
   end
 
-  -- A previous install of ours is reverted first so records stay truthful;
+  -- A previous install of ours is removed first so records stay truthful;
   -- the game files IT overwrote still hold fix content, so they stay listed.
+  -- Its record stays until the new one replaces it.
   local root = (deps.store_root or store_root)() .. "/" .. appid
   local prev = read_manifest(root)
-  fixinstall.revert(appid, deps)
+  remove_added(prev)
   install_dir = fixinstall.game_root(install_dir, entries,
     function(p) return require("fs").list(p) end)
   local stage = root .. "/stage"
   os.execute("mkdir -p -- " .. shq(root))
+  os.execute("rm -rf -- " .. shq(stage))
 
   -- Which game files will be overwritten: decided BEFORE any file lands.
   local added, replaced, replaced_set = {}, {}, {}
@@ -504,24 +551,21 @@ function fixinstall.install(appid, archive_path, install_path_hint, deps)
   end
 
   -- Recorded BEFORE extraction: a half-finished extract stays revertible.
-  local mf = io.open(root .. "/manifest.json", "wb")
-  if not mf then
-    res.errorCode = "record_failed"
-    return res
-  end
-  mf:write(json.encode({
+  if not write_manifest(root, json.encode({
     installedAt = os.time(),
     archive = archive_path:match("([^/]+)$") or archive_path,
     installPath = install_dir,
     added = added,
     replaced = replaced,
-  }))
-  mf:close()
+  }), deps.open_file or io.open) then
+    res.errorCode = "record_failed"
+    return res
+  end
 
   if is_inno then
     -- innoextract recreates app/ (the {app} payload) and tmp/ (wizard
     -- resources) under the stage; only app/* moves into the game folder.
-    if os.execute(shq(inno_bin) .. " -d " .. shq(stage) .. " -- "
+    if execute(shq(inno_bin) .. " -d " .. shq(stage) .. " -- "
         .. shq(archive_path) .. " >/dev/null 2>&1") ~= true then
       res.errorCode = "extract_failed"
       return res
@@ -533,20 +577,32 @@ function fixinstall.install(appid, archive_path, install_path_hint, deps)
       os.execute("mv -f -- " .. shq(stage .. "/app/" .. e.path) .. " " .. shq(dst))
     end
     os.execute("rm -rf -- " .. shq(stage))
-  elseif os.execute(shq(bin) .. " x -y -o" .. shq(install_dir) .. " -- "
+  elseif execute(shq(bin) .. " x -y -o" .. shq(install_dir) .. " -- "
       .. shq(archive_path) .. " </dev/null >/dev/null 2>&1") ~= true then
     res.errorCode = "extract_failed"
     return res
   end
 
-  -- The download served its purpose; Un-fix works from the manifest.
-  if archive_path:find(fixinstall.download_dir(home) .. "/", 1, true) == 1 then
-    os.execute("rm -f -- " .. shq(archive_path))
-  end
-
   res.success = true
   res.added = #added
   res.replaced = #replaced
+  return res
+end
+
+-- install(appid, archive_path, install_path_hint, deps)
+--   -> { success, added, replaced } or { success=false, errorCode }
+-- The install dir is always re-derived from Steam's own manifests; the
+-- frontend's hint must agree with it or the call is refused. A file Lumen
+-- downloaded itself (download_dir) is deleted afterwards, installed or not:
+-- Un-fix works from the manifest, and a failed one is downloaded again.
+function fixinstall.install(appid, archive_path, install_path_hint, deps)
+  deps = deps or {}
+  local res = install_archive(appid, archive_path, install_path_hint, deps)
+  local path, home = tostring(archive_path or ""), deps.home or os.getenv("HOME") or ""
+  if fixinstall.under_home(path, home)
+      and path:find(fixinstall.download_dir(home) .. "/", 1, true) == 1 then
+    os.execute("rm -f -- " .. shq(path))
+  end
   return res
 end
 
@@ -562,27 +618,9 @@ function fixinstall.revert(appid, deps)
   if not appid then return res end
   local root = (deps.store_root or store_root)() .. "/" .. appid
   local m = read_manifest(root)
-  local install_dir = m and tostring(m.installPath or "") or ""
-  if install_dir == "" then return res end
-  local added = {}
-  for _, p in ipairs(type(m.added) == "table" and m.added or {}) do
-    added[#added + 1] = { path = tostring(p) }
-  end
-  -- A tampered record must never delete outside the game folder.
-  added = fixinstall.safe_entries(added)
-  if not added then return res end
-
-  for _, e in ipairs(added) do
-    local p = e.path
-    os.execute("rm -f -- " .. shq(install_dir .. "/" .. p))
-    -- Folders the fix brought along go too, but only once empty.
-    local parent = p:match("^(.*)/[^/]+$")
-    if parent then
-      os.execute("cd " .. shq(install_dir) .. " && rmdir -p --ignore-fail-on-non-empty -- "
-        .. shq(parent) .. " 2>/dev/null")
-    end
-    res.removed = res.removed + 1
-  end
+  local removed = remove_added(m)
+  if not removed then return res end
+  res.removed = removed
   res.replacedCount = #(type(m.replaced) == "table" and m.replaced or {})
   res.needsVerify = res.replacedCount > 0
   os.execute("rm -rf -- " .. shq(root))
