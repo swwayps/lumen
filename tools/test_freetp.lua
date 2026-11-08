@@ -373,14 +373,56 @@ local dl_page_down = download_fix(4312190, "CRACK", {
   get = function(url)
     if url:find("do=search", 1, true) then return { status = 200, body = SEARCH_HTML } end
     return { status = 503, body = "" }
-  end })
+  end,
+  dl_dir = "/tmp/ftdl", mkdir = function() return true end,
+  write_file = function() return true end, remove_file = function() end,
+})
 check("download: an unreadable article reports page_failed, not no_fix_file",
   dl_page_down.success == false and dl_page_down.errorCode == "page_failed")
+
+-- A failed download leaves no file of the game in the download dir: neither
+-- the one an earlier download stored nor one written only in part.
+do
+  local dir = "/tmp/lumen_freetp_test_dl"
+  os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "'")
+  local function dir_listing()
+    local p = io.popen("ls -A '" .. dir .. "'")
+    local out = p:read("*a")
+    p:close()
+    return out
+  end
+  local stored = download_fix(4312190, "CRACK", {
+    get = (fake_chain({ article = GETFILE_PAGE_HTML })), dl_dir = dir })
+  local f = io.open(dir .. "/4312190-freetp-fix.exe", "rb")
+  local body = f and f:read("*a")
+  if f then f:close() end
+  check("download: the file is stored whole in the download dir",
+    stored.success == true and body == "MZ" .. string.rep("X", 100))
+  local wrong = download_fix(4312190, "CRACK", {
+    get = (fake_chain({ article = GETFILE_PAGE_HTML,
+      download = { status = 200, body = "<html>not a file</html>" } })),
+    dl_dir = dir })
+  check("download: a wrong_content download leaves no file of the game behind",
+    wrong.errorCode == "wrong_content" and dir_listing() == "")
+  local partial = download_fix(4312190, "CRACK", {
+    get = (fake_chain({ article = GETFILE_PAGE_HTML })), dl_dir = dir,
+    write_file = function(p, data)
+      local out = io.open(p, "wb")
+      out:write(data:sub(1, 10))
+      out:close()
+      return false
+    end })
+  check("download: a file that could not be written in full is deleted",
+    partial.errorCode == "write_failed" and dir_listing() == "")
+  os.execute("rm -rf '" .. dir .. "'")
+end
 
 -- ── register (RPC shape, table form, injected effects) ─────────────────────
 local json = require("json")
 local reg = {}
-ft.register(reg, as_job({ get = search_then_page(CRACK_PAGE_HTML) }))
+ft.register(reg, as_job({ get = search_then_page(CRACK_PAGE_HTML),
+  dl_dir = "/tmp/ftdl", mkdir = function() return true end,
+  write_file = function() return true end, remove_file = function() end }))
 check("register: exposes LumenDownloadFreeTPFix and LumenDiscardFreeTPDownload",
   type(reg.LumenDownloadFreeTPFix) == "function"
     and type(reg.LumenDiscardFreeTPDownload) == "function")
@@ -399,16 +441,20 @@ check("register: odd input answers invalid_appid instead of crashing",
 -- The file transfer outlives one RPC: each call advances it until it is done.
 do
   local polls, starts, stored, removed = 0, 0, {}, {}
-  local clock_now = 0
+  local arrived = false
+  -- The fake timer only moves while the job sleeps between polls.
+  local clock_now, timer_now, slept = 0, 0, 0
   local preg = {}
   local deps = {
     get = (fake_chain({ article = GETFILE_PAGE_HTML })),
     start = function(url, opts) starts = starts + 1; return { url = url, opts = opts } end,
     poll = function(h)
       polls = polls + 1
-      if polls < 3 then return false end
+      if not arrived then return false end
       return true, { status = 200, body = "MZ" .. string.rep("X", 10) }
     end,
+    now = function() return timer_now end,
+    sleep = function(s) slept = slept + s; timer_now = timer_now + s end,
     clock = function() return clock_now end,
     dl_dir = "/tmp/ftdl", mkdir = function() return true end,
     write_file = function(p) stored[#stored + 1] = p; return true end,
@@ -416,14 +462,19 @@ do
   }
   ft.register(preg, deps)
   local first = json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  local first_polls, first_slept = polls, slept
   local second = json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
+  arrived = true
   local third = json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
   check("register: the download answers pending until the transfer is done, then the file",
     first.pending == true and second.pending == true and third.pending == nil
       and third.success == true and third.path == "/tmp/ftdl/4312190-freetp-fix.exe"
       and starts == 1 and #stored == 1)
+  check("register: one call keeps polling the transfer, for no longer than POLL_BUDGET",
+    first_polls > 1 and first_slept > 0 and first_slept <= ft.POLL_BUDGET
+      and polls - first_polls > first_polls)
 
-  polls = 0
+  arrived = false
   json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
   clock_now = 100
   json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
@@ -435,7 +486,6 @@ do
     if p == "/tmp/ftdl/4312190-freetp-fix.exe" then found = true end
   end
   check("register: discard deletes the stored download (positional form)", disc.success == true and found)
-  polls = 0
   json.decode(preg.LumenDownloadFreeTPFix(4312190, "", "CRACK"))
   check("register: discard drops the running job too", starts == 4)
 end

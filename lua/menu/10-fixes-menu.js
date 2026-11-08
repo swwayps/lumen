@@ -1196,6 +1196,7 @@
   }
 
   // Transient busy overlay inside the window (keeps the tiles intact underneath).
+  // Returns the function that closes it; its .say(text) changes the message.
   function fxBusy(win, msg) {
     var b = document.createElement("div");
     b.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;" +
@@ -1204,7 +1205,9 @@
     b.innerHTML = '<div class="lumen-fx-spin"></div><div></div>';
     b.lastChild.textContent = msg;
     win.appendChild(b);
-    return function () { try { b.remove(); } catch (e) {} };
+    var done = function () { try { b.remove(); } catch (e) {} };
+    done.say = function (text) { b.lastChild.textContent = text; };
+    return done;
   }
 
   // A flow that fails before showing progress still ends in the finished view.
@@ -1350,7 +1353,8 @@
           return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLocalDone); };
         }
         downloading = true;
-        return fxDownloadFreeTP(appid, gameName, win).then(function (dl) {
+        var onPending = function () { done.say(S.freetpDownloading); };
+        return fxDownloadFreeTP(appid, gameName, win, onPending).then(function (dl) {
           if (dl && dl.pending) return function () {};
           if (!(dl && dl.success && dl.path)) {
             return pickerOr(FX_FREETP_NOT_FOUND[dl && dl.errorCode] ? S.freetpNone : S.freetpDownloadErr);
@@ -1374,15 +1378,17 @@
   }
 
   // LumenDownloadFreeTPFix answers { pending: true } while the fix file is
-  // still downloading in the background, and each call advances it. Polling
+  // still downloading in the background (the search is over by then; each
+  // pending answer calls onPending), and each call advances it. Polling
   // stops once the menu is closed, answering that pending state.
-  function fxDownloadFreeTP(appid, gameName, win) {
+  function fxDownloadFreeTP(appid, gameName, win, onPending) {
     return call("LumenDownloadFreeTPFix", {
       appid: appid, gameName: gameName || "", contentScriptQuery: "",
     }).then(fxParse).then(function (dl) {
       if (!(dl && dl.pending) || !win.isConnected) return dl;
+      onPending();
       return new Promise(function (resolve) { setTimeout(resolve, 500); }).then(function () {
-        return fxDownloadFreeTP(appid, gameName, win);
+        return fxDownloadFreeTP(appid, gameName, win, onPending);
       });
     });
   }

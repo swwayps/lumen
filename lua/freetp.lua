@@ -32,6 +32,11 @@ freetp.PAGE_MAX_BYTES = 2 * 1024 * 1024
 -- connection gets minutes instead of the blocking request cap.
 freetp.DOWNLOAD_TIMEOUT = 300
 freetp.MAX_FIX_BYTES = 64 * 1024 * 1024
+-- A transfer only moves while it is polled, so one poll per menu RPC would cap
+-- the speed at what one poll reads. Each RPC instead polls every
+-- POLL_INTERVAL for up to POLL_BUDGET seconds of the single-threaded loop.
+freetp.POLL_BUDGET = 0.25
+freetp.POLL_INTERVAL = 0.005
 local BASE_PATTERN = freetp.BASE_URL:gsub("%p", "%%%0")
 
 -- Percent-encode a search query value (unreserved characters stay literal).
@@ -318,9 +323,8 @@ local function store_download(job, dl, deps)
   local write_file = deps.write_file or function(path, data)
     local f = io.open(path, "wb")
     if not f then return false end
-    f:write(data)
-    f:close()
-    return true
+    local written = f:write(data)
+    return f:close() and written ~= nil
   end
   local mkdir = deps.mkdir or function(path)
     os.execute("mkdir -p -- " .. shell_quote(path) .. " 2>/dev/null")
@@ -358,16 +362,37 @@ local function store_download(job, dl, deps)
   return res
 end
 
+-- deps.now / deps.sleep (seconds, fractional), else luasocket's; nil without
+-- either, and poll_download then polls once per call.
+local function timer_fns(deps)
+  if deps.now and deps.sleep then return deps.now, deps.sleep end
+  local ok, socket = pcall(require, "socket")
+  if ok and type(socket) == "table" and socket.gettime and socket.sleep then
+    return socket.gettime, socket.sleep
+  end
+  return nil
+end
+
 -- poll_download(job, deps) -> the job's result once it has one,
 -- { success, path, size } or { success = false, errorCode }; nil while the
--- file is still downloading.
+-- file is still downloading. A failed download leaves no file of this appid
+-- behind.
 function freetp.poll_download(job, deps)
   deps = deps or {}
   if job.result then return job.result end
-  local ok, done, dl = pcall(http_fn(deps, "poll"), job.handle)
-  if ok and done ~= true then return nil end
+  local poll = http_fn(deps, "poll")
+  local now, sleep = timer_fns(deps)
+  local deadline = now and now() + freetp.POLL_BUDGET
+  local ok, done, dl
+  while true do
+    ok, done, dl = pcall(poll, job.handle)
+    if not ok or done == true then break end
+    if not deadline or now() + freetp.POLL_INTERVAL > deadline then return nil end
+    sleep(freetp.POLL_INTERVAL)
+  end
   job.handle = nil
   job.result = store_download(job, ok and dl or nil, deps)
+  if not job.result.success then freetp.discard_download(job.appid, deps) end
   return job.result
 end
 

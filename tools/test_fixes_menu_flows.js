@@ -2,8 +2,9 @@
 // real menu bundle (menu/*.js, the boot.lua order) on a small fake DOM, with
 // the backend RPCs answered by the test: Escape on a confirmation runs its
 // decline path, picker rows are gamepad-reachable buttons, Unfix never says
-// "Restored" over a failed revert, and a menu closed mid-download neither
-// installs nor keeps the downloaded fix.
+// "Restored" over a failed revert, the busy note tells searching from
+// downloading, and a menu closed mid-download neither installs nor keeps the
+// downloaded fix.
 // Run: node tools/test_fixes_menu_flows.js
 "use strict";
 const fs = require("fs");
@@ -389,9 +390,15 @@ async function confirmUnfix() {
 
   // ── FreeTP: the download runs in the background and is polled ────────────
   let polls = 0;
+  const busyAtPoll = [];
+  const busyText = () => document.querySelectorAll(".lumen-fx-spin")
+    .map((s) => s.parentNode.lastChild.textContent).join("|");
   await openMenu({
-    LumenDownloadFreeTPFix: () => (++polls < 3 ? { success: true, pending: true }
-      : { success: true, path: "/home/u/.local/share/Lumen/freetp_dl/322330-freetp-fix.exe", size: 10 }),
+    LumenDownloadFreeTPFix: () => {
+      busyAtPoll.push(busyText());
+      return ++polls < 3 ? { success: true, pending: true }
+        : { success: true, path: "/home/u/.local/share/Lumen/freetp_dl/322330-freetp-fix.exe", size: 10 };
+    },
     LumenInstallFixArchive: () => ({ success: true, added: 2, replaced: 0 }),
   });
   tile(S.freetpLabel).click();
@@ -399,6 +406,8 @@ async function confirmUnfix() {
   eq("download: polled until the file is there, then installed",
     calls("LumenDownloadFreeTPFix").length === 3 && calls("LumenInstallFixArchive").length === 1
       && calls("LumenInstallFixArchive")[0].args.archivePath.endsWith("322330-freetp-fix.exe"), true);
+  eq("download: the busy note says Searching until the file transfer starts, then Downloading",
+    busyAtPoll.join(" / "), [S.freetpSearching, S.freetpDownloading, S.freetpDownloading].join(" / "));
 
   // ── FreeTP: closing the menu mid-download ────────────────────────────────
   let finishDownload = null;
