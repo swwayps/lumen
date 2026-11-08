@@ -490,5 +490,53 @@ do
   check("register: discard drops the running job too", starts == 4)
 end
 
+-- A transfer that ends in an error fails the download and discards the file.
+do
+  local function failed_poll(name, poll)
+    local removed = {}
+    local deps = {
+      get = (fake_chain({ article = GETFILE_PAGE_HTML })),
+      start = function(url, opts) return { url = url, opts = opts } end,
+      poll = poll,
+      now = function() return 0 end, sleep = function() end,
+      dl_dir = "/tmp/ftdl", mkdir = function() return true end,
+      write_file = function() error("nothing is written for a failed transfer") end,
+      remove_file = function(p) removed[#removed + 1] = p end,
+    }
+    local res = ft.poll_download(ft.start_download(4312190, "CRACK", deps), deps)
+    local discarded = false
+    for _, p in ipairs(removed) do
+      if p == "/tmp/ftdl/4312190-freetp-fix.exe" then discarded = true end
+    end
+    check("download: " .. name .. " -> download_failed, and the file is discarded",
+      res ~= nil and res.success == false and res.errorCode == "download_failed" and discarded)
+  end
+  failed_poll("a poll that throws", function() error("transfer crashed") end)
+  failed_poll("a poll answering true, nil, err", function() return true, nil, "connection reset" end)
+  failed_poll("a poll answering nil, err", function() return nil, "connection reset" end)
+end
+
+-- A wall clock that steps back cannot stretch one call past its poll budget.
+do
+  local polls, t = 0, 1000
+  local deps = {
+    get = (fake_chain({ article = GETFILE_PAGE_HTML })),
+    start = function(url, opts) return { url = url, opts = opts } end,
+    -- An unbounded loop ends in an error here instead of hanging the suite.
+    poll = function()
+      polls = polls + 1
+      if polls > 10000 then error("runaway poll loop") end
+      return false
+    end,
+    now = function() t = t - 1; return t end,
+    sleep = function() end,
+    dl_dir = "/tmp/ftdl", mkdir = function() return true end,
+    write_file = function() return true end, remove_file = function() end,
+  }
+  local res = ft.poll_download(ft.start_download(4312190, "CRACK", deps), deps)
+  check("download: a clock stepping back still ends the call after a bounded number of polls",
+    res == nil and polls == math.ceil(ft.POLL_BUDGET / ft.POLL_INTERVAL) + 1)
+end
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 if fail > 0 then os.exit(1) end

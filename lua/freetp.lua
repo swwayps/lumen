@@ -383,11 +383,16 @@ function freetp.poll_download(job, deps)
   local poll = http_fn(deps, "poll")
   local now, sleep = timer_fns(deps)
   local deadline = now and now() + freetp.POLL_BUDGET
+  -- The wall clock can step back; the poll count bounds the loop regardless.
+  local max_polls = math.ceil(freetp.POLL_BUDGET / freetp.POLL_INTERVAL) + 1
   local ok, done, dl
-  while true do
+  for polls = 1, max_polls do
     ok, done, dl = pcall(poll, job.handle)
-    if not ok or done == true then break end
-    if not deadline or now() + freetp.POLL_INTERVAL > deadline then return nil end
+    -- Only false means "still running"; anything else ends the transfer.
+    if not ok or done ~= false then break end
+    if polls == max_polls or not deadline or now() + freetp.POLL_INTERVAL > deadline then
+      return nil
+    end
     sleep(freetp.POLL_INTERVAL)
   end
   job.handle = nil
