@@ -3,8 +3,10 @@
 // the backend RPCs answered by the test: Escape on a confirmation runs its
 // decline path, picker rows are gamepad-reachable buttons, Unfix never says
 // "Restored" over a failed revert, the busy note tells searching from
-// downloading, an install whose fix needs no override clears a stale one, and
-// a menu closed mid-download neither installs nor keeps the downloaded fix.
+// downloading, an install whose fix needs no override clears a stale one,
+// every apply flow ends in one finished view (ok or failed, one mark, no
+// progress bar), and a menu closed mid-download neither installs nor keeps
+// the downloaded fix.
 // Run: node tools/test_fixes_menu_flows.js
 "use strict";
 const fs = require("fs");
@@ -300,6 +302,27 @@ function tile(label) {
   return document.querySelectorAll(".lumen-fx-tile")
     .find((t) => (t.querySelector(".tl") || {}).textContent === label) || null;
 }
+// The finished view of an apply flow (fxFinish) read off the progress block:
+// its outcome, texts, how many marks it carries, and whether the progress
+// bar, the copy row and the Close footer are there.
+function finished() {
+  const msg = document.getElementById("lumen-fx-pmsg");
+  const st = msg && msg.parentNode;
+  if (!st) return null;
+  const text = (sel) => (st.querySelector(sel) || {}).textContent || "";
+  return {
+    outcome: st.classList.contains("ok") ? "ok" : (st.classList.contains("fail") ? "fail" : null),
+    title: text(".lumen-fx-rtitle"), text: msg.textContent, note: text(".lumen-fx-rnote"),
+    marks: st.querySelectorAll(".lumen-fx-mark").length,
+    bar: !!st.querySelector(".lumen-fx-pbar"),
+    copyRow: !!st.querySelector(".lumen-fx-lo"),
+    close: !!document.querySelector(".lumen-fx-foot .lumen-fx-btn"),
+  };
+}
+// Ended with this outcome: one mark, no progress bar, a Close footer.
+function ended(f, outcome) {
+  return !!f && f.outcome === outcome && f.marks === 1 && !f.bar && f.close;
+}
 function modals() { return document.querySelectorAll(".lumen-modal-back"); }
 function lastModalText() {
   const m = modals();
@@ -401,6 +424,8 @@ async function confirmUnfix() {
     busy.indexOf(S.freetpInstalling.split("{archive}").join(archiveName)) !== -1, true);
   if (finishInstall) finishInstall({ success: false, errorCode: "bad_archive" });
   await settle();
+  eq("finish: an archive that would not install ends failed in place",
+    ended(finished(), "fail") && finished().text === S.freetpInstallErr, true);
 
   // ── FreeTP: the download runs in the background and is polled ────────────
   let polls = 0;
@@ -433,23 +458,127 @@ async function confirmUnfix() {
     GetFixLaunchOptions: () => launch,
     __lumenSetLaunchOptions: () => relay,
   }).then(async () => { tile(S.freetpLabel).click(); await settle(60); });
-  const pmsg = () => (document.getElementById("lumen-fx-pmsg") || {}).textContent || "";
-  const installDone = S.freetpInstallDone.replace("{added}", 2).replace("{replaced}", 0);
+  const installedOk = (f) => ended(f, "ok") && f.title === S.freetpInstallTitle
+    && f.text === window.__lumenFixesFill(S.freetpInstallDetail, { added: 2, replaced: 0 });
 
   await installed({ success: true, apply: true, previousLaunchOptions: 'WINEDLLOVERRIDES="d3d12core=n,b" %command%',
     launchOptions: "" }, { ok: true });
   eq("launch options: apply with \"\" clears the stale options, then reports the install",
     calls("__lumenSetLaunchOptions").length === 1
-      && calls("__lumenSetLaunchOptions")[0].args.options === "" && pmsg() === installDone, true);
+      && calls("__lumenSetLaunchOptions")[0].args.options === "" && installedOk(finished()), true);
+  eq("finish: a recorded install with nothing replaced notes only that Unfix removes it",
+    finished().note, S.freetpInstallNote);
 
   await installed({ success: true, apply: false, launchOptions: "%command%" }, { ok: true });
   eq("launch options: apply:false writes nothing",
-    calls("__lumenSetLaunchOptions").length === 0 && pmsg() === installDone, true);
+    calls("__lumenSetLaunchOptions").length === 0 && installedOk(finished()), true);
 
   await installed({ success: true, apply: true, launchOptions: "" }, { ok: false });
   eq("launch options: a failed \"\" write reports the failure, with no empty line to paste",
-    calls("__lumenSetLaunchOptions").length === 1 && !document.querySelector(".lumen-fx-lo")
-      && pmsg().indexOf(S.launchApplyFailed) !== -1, true);
+    calls("__lumenSetLaunchOptions").length === 1 && ended(finished(), "fail")
+      && !finished().copyRow && finished().text.indexOf(S.launchApplyFailed) !== -1, true);
+
+  // A line the relay could not write stays to paste: the step left becomes
+  // the outcome, with the copy row inside the finished block.
+  const line = 'WINEDLLOVERRIDES="winmm=n,b" %command%';
+  await installed({ success: true, apply: true, launchOptions: line }, { ok: false });
+  const hinted = finished();
+  eq("finish: an unwritten launch line ends failed, titled as the step left, with the line to copy",
+    ended(hinted, "fail") && hinted.copyRow && hinted.title === S.launchHintTitle
+      && document.querySelector(".lumen-fx-lo input").value === line, true);
+
+  await openMenu({
+    LumenDownloadFreeTPFix: () => ({ success: true,
+      path: "/home/u/.local/share/Lumen/freetp_dl/322330-freetp-fix.exe", size: 10 }),
+    LumenInstallFixArchive: () => ({ success: true, added: 4, replaced: 1 }),
+  });
+  tile(S.freetpLabel).click();
+  await settle(60);
+  eq("finish: an install that replaced game files says how they come back",
+    ended(finished(), "ok") && finished().note === S.freetpInstallNoteReplaced, true);
+
+  // ── FreeTP: the other routes end in the same finished view ───────────────
+  await openMenu({
+    LumenDownloadFreeTPFix: () => ({ success: false, errorCode: "no_page" }),
+    LumenListFixArchives: () => ({ success: true, archives: [] }),
+  });
+  tile(S.freetpLabel).click();
+  await settle(60);
+  eq("finish: no fix and no archive ends failed in place, saying so",
+    ended(finished(), "fail") && finished().title === S.finishFailTitle
+      && finished().text === S.freetpNone && !finished().note, true);
+
+  const freetpFix = (extra) => ({ success: true, luaToolsFixes: Object.assign({ authConfigured: true,
+    fixes: [{ id: "f1", category: "freetp", title: "FreeTP Online", createdAt: "2026-01-01" }] }, extra) });
+  await openMenu({
+    CheckForFixes: () => freetpFix({ fixes: [{ id: "f1", category: "freetp", title: "FreeTP Online",
+      createdAt: "2026-01-01", applied: true }] }),
+  });
+  tile(S.freetpLabel).click();
+  await settle(60);
+  eq("finish: a fix lua.tools already applied ends ok once its launch options are set",
+    ended(finished(), "ok") && finished().title === S.launchSetTitle && !finished().note, true);
+
+  // ── LuaTools fix (fxPoll): running, done, failed, cancelled ──────────────
+  const luaTools = (statuses, complete) => {
+    let n = 0;
+    return openMenu({
+      CheckForFixes: () => freetpFix(),
+      StartLuaToolsFix: () => ({ success: true }),
+      GetApplyFixStatus: () => ({ success: true, state: statuses[Math.min(n++, statuses.length - 1)] }),
+      CompleteLuaToolsFixApply: () => complete || { success: true },
+    }).then(() => tile(S.freetpLabel).click());
+  };
+  await luaTools([{ status: "downloading", bytesRead: 1, totalBytes: 4 }]);
+  await settle(8);
+  const running = finished();
+  eq("progress: a running flow keeps its bar and shows no outcome yet",
+    running.outcome === null && running.bar && running.marks === 0 && !running.close, true);
+  overlay().querySelector(".lumen-fx-x").click();
+  await settle(4);
+
+  await luaTools([{ status: "downloading", bytesRead: 1, totalBytes: 4 }, { status: "done" }]);
+  await settle(60);
+  eq("finish: a LuaTools fix that completed ends ok, titled with its name, without a note",
+    ended(finished(), "ok") && finished().title === window.__lumenFixesFill(S.appliedOk, { fix: "FreeTP Online" })
+      && finished().text === S.appliedDetail && !finished().note, true);
+
+  await luaTools([{ status: "done" }], { success: false, error: "receipt not closed" });
+  await settle(60);
+  eq("finish: a fix whose receipt could not close ends failed with the reason",
+    ended(finished(), "fail") && finished().text === "receipt not closed", true);
+
+  await luaTools([{ status: "failed", error: "archive corrupt" }]);
+  await settle(60);
+  eq("finish: a failed download ends failed with its error",
+    ended(finished(), "fail") && finished().text === "archive corrupt", true);
+
+  await luaTools([{ status: "cancelled" }]);
+  await settle(60);
+  eq("finish: a cancelled download ends failed, saying it was cancelled",
+    ended(finished(), "fail") && finished().text === S.finishCancelled, true);
+
+  // ── A refused download offers a retry; each attempt ends with one mark ───
+  let applyStatus = 0;
+  await openMenu({
+    ResolveOnlineFix: () => ({ success: true, found: true, url: "https://mirror.example/fix.zip" }),
+    ApplyGameFix: () => ({ success: true }),
+    GetApplyFixStatus: () => { applyStatus++; return { success: true,
+      state: { status: "failed", errorCode: "authentication", error: "The source refused it" } }; },
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle(60);
+  const foot = () => document.querySelectorAll(".lumen-fx-foot .lumen-fx-btn");
+  eq("retry: a refused download ends failed with its message, Close and Try again",
+    ended(finished(), "fail") && finished().text === "The source refused it" && foot().length === 2, true);
+  foot().find((b) => !b.classList.contains("secondary")).click();
+  await settle(1);
+  const retrying = finished();
+  eq("retry: Try again brings back the running view, bar and no mark",
+    retrying.outcome === null && retrying.bar && retrying.marks === 0, true);
+  await settle(60);
+  eq("retry: the second refusal ends failed with exactly one mark",
+    ended(finished(), "fail") && applyStatus === 2 && calls("ApplyGameFix").length === 2, true);
 
   // ── FreeTP: closing the menu mid-download ────────────────────────────────
   let finishDownload = null;

@@ -11,8 +11,9 @@
 // game's own library_hero banner (as Steam's own detail pages do), then a
 // grid of fix tiles (icon + label + description). Steam-like execution —
 // muted icons, 1px borders, a single #1a9fff accent on hover with a 1px lift
-// and a soft shadow, no blur. A finished flow shows a green check or a red
-// mark in the outcome colour. Alerts/confirms reuse the Lumen modal styles.
+// and a soft shadow, no blur. A finished flow ends in one centred block: a
+// green check (or a red "!") that draws in once, a short title and what
+// happened. Alerts/confirms reuse the Lumen modal styles.
 //
 // Robustness (validated live on the Zorin VM):
 //   * appid  — read from the focused game's hero/logo asset URL
@@ -75,12 +76,19 @@
       '<circle class="lumen-lt-logo-brand lumen-lt-logo-edge" cx="12" cy="12" r="11.55" fill="none" stroke="url(#lumen-lt-logo-gradient)" stroke-width=".65"/></svg>',
     wrench: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M507 109a13 13 0 00-22-6l-74 74-59-10-10-59 74-74a13 13 0 00-6-22 128 128 0 00-164 152L19 359a64 64 0 0090 90l195-195A128 128 0 00507 109z"/></svg>',
     key: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M336 0a176 176 0 00-168 228L7 389a24 24 0 00-7 17v82a24 24 0 0024 24h82a24 24 0 0017-7l23-23a24 24 0 007-17v-29h29a24 24 0 0024-24v-29h29a24 24 0 0017-7l32-32A176 176 0 10336 0zm48 176a48 48 0 110-96 48 48 0 010 96z"/></svg>',
-    check: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M470 105a24 24 0 010 34L207 402a24 24 0 01-34 0L42 271a24 24 0 010-34l23-23a24 24 0 0134 0l91 91 223-223a24 24 0 0134 0z"/></svg>',
     discord: '<svg viewBox="0 0 640 512" width="100%" height="100%" fill="currentColor"><path d="M524 69A487 487 0 00404 32a339 339 0 00-17 34 455 455 0 00-135 0 339 339 0 00-17-34A487 487 0 00116 69C42 179 22 286 32 392a495 495 0 00150 75 361 361 0 0032-52 315 315 0 01-50-24l12-10a354 354 0 00304 0l12 10a318 318 0 01-51 24 358 358 0 0032 52 493 493 0 00151-75c12-123-20-229-100-323zM214 327c-29 0-53-27-53-59s23-59 53-59 54 27 53 59c0 32-24 59-53 59zm212 0c-29 0-53-27-53-59s23-59 53-59 54 27 53 59c0 32-24 59-53 59z"/></svg>',
     globe: '<svg viewBox="0 0 496 512" width="100%" height="100%" fill="currentColor"><path d="M248 8a248 248 0 100 496 248 248 0 000-496zm164 158h-65a312 312 0 00-28-78 193 193 0 0193 78zM248 56c19 0 45 35 56 96H192c11-61 37-96 56-96zM72 248a190 190 0 014-40h74a445 445 0 000 80H76a190 190 0 01-4-40zm32 98h65a312 312 0 0028 78 193 193 0 01-93-78zm65-180h-65a193 193 0 0193-78 312 312 0 00-28 78zm79 290c-19 0-45-35-56-96h112c-11 61-37 96-56 96zm66-144H183a401 401 0 010-80h130a401 401 0 010 80zm9 132a312 312 0 0028-78h65a193 193 0 01-93 78zm37-126a445 445 0 000-80h74a193 193 0 010 80z"/></svg>',
     search: '<svg viewBox="0 0 512 512" width="100%" height="100%" fill="currentColor"><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.7 457.4c12.3 12.3 12.3 32.3 0 44.6-12.3 12.3-32.3 12.3-44.6 0L331.4 375.7C297.3 400.9 254.9 416 208 416 93.1 416 0 322.9 0 208S93.1 0 208 0s208 93.1 208 208zM208 336a128 128 0 100-256 128 128 0 000 256z"/></svg>',
     layers: '<svg viewBox="0 0 576 512" width="100%" height="100%" fill="currentColor"><path d="M288 0L11 124a12 12 0 000 22l277 124 277-124a12 12 0 000-22zm224 220l-53-24-171 76L117 196l-53 24a12 12 0 000 22l224 100 224-100a12 12 0 000-22zm0 124l-53-24-171 76L117 320l-53 24a12 12 0 000 22l224 100 224-100a12 12 0 000-22z"/></svg>',
     trash: '<svg viewBox="0 0 448 512" width="100%" height="100%" fill="currentColor"><path d="M135 21l-13 27H32a16 16 0 000 32h384a16 16 0 000-32h-90l-13-27A32 32 0 00284 0H164a32 32 0 00-29 21zM416 128H32l21 339a48 48 0 0048 45h246a48 48 0 0048-45z"/></svg>',
+  };
+
+  // Outcome marks of a finished flow (fxFinish), stroked so they can draw in;
+  // pathLength="1" lets the CSS dash animation ignore the real path length.
+  var FX_MARKS = {
+    ok: '<svg viewBox="0 0 60 60" aria-hidden="true"><path pathLength="1" d="M19.5 30.5l7 7L41 23"/></svg>',
+    fail: '<svg viewBox="0 0 60 60" aria-hidden="true"><path pathLength="1" d="M30 17.5V33"/>' +
+      '<circle class="dot" cx="30" cy="41.5" r="2.25"/></svg>',
   };
 
   // ── PURE helpers (window-exposed for tools/test_fixes_menu.js) ──────────────
@@ -416,18 +424,31 @@
       ".lumen-fx-pbar{height:6px;border-radius:3px;background:#1a1d23;border:1px solid #3d4450;overflow:hidden;}",
       ".lumen-fx-pbar > i{display:block;height:100%;width:100%;background:linear-gradient(90deg,#1a9fff,#66c0f4);transform:scaleX(0);",
       "transform-origin:left center;transition:transform .25s cubic-bezier(.22,1,.36,1);}",
-      // finished flow (fxFinish): centred mark + full bar in the outcome colour
-      ".lumen-fx-status.ok,.lumen-fx-status.fail{display:flex;flex-direction:column;align-items:center;text-align:center;}",
-      ".lumen-fx-status.ok .lumen-fx-pbar,.lumen-fx-status.fail .lumen-fx-pbar{align-self:stretch;}",
-      ".lumen-fx-done{width:54px;height:54px;box-sizing:border-box;border-radius:50%;display:flex;align-items:center;",
-      "justify-content:center;margin-bottom:14px;font:800 26px 'Motiva Sans',Arial;",
-      "animation:lumen-fx-pop .2s cubic-bezier(.22,1,.36,1) both;}",
-      ".lumen-fx-done svg{width:24px;height:24px;}",
-      ".lumen-fx-status.ok .lumen-fx-done{color:#9bdc7c;background:rgba(92,156,62,.18);border:1px solid rgba(121,199,84,.5);}",
-      ".lumen-fx-status.fail .lumen-fx-done{color:#ec5c5c;background:rgba(236,92,92,.12);border:1px solid rgba(236,92,92,.45);}",
-      ".lumen-fx-status.ok .lumen-fx-pbar > i{background:#79c754;}",
-      ".lumen-fx-status.fail .lumen-fx-pbar > i{background:#ec5c5c;}",
-      "@keyframes lumen-fx-pop{from{opacity:0;transform:scale(.6);}}",
+      // finished flow (fxFinish): one centred block in the frozen body — the
+      // outcome mark, a short title, what happened, an optional note.
+      ".lumen-fx-status.ok,.lumen-fx-status.fail{display:flex;flex-direction:column;align-items:center;",
+      "text-align:center;width:100%;max-width:420px;margin:0 auto;padding:6px 0;}",
+      ".lumen-fx-mark{flex:0 0 auto;width:60px;height:60px;box-sizing:border-box;border-radius:50%;margin-bottom:16px;}",
+      ".lumen-fx-mark svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:3.5;",
+      "stroke-linecap:round;stroke-linejoin:round;}",
+      ".lumen-fx-mark .dot{fill:currentColor;stroke:none;}",
+      ".lumen-fx-status.ok .lumen-fx-mark{color:#9bdc7c;background:rgba(121,199,84,.12);border:1px solid rgba(121,199,84,.45);}",
+      ".lumen-fx-status.fail .lumen-fx-mark{color:#ec5c5c;background:rgba(236,92,92,.1);border:1px solid rgba(236,92,92,.42);}",
+      ".lumen-fx-rtitle{font-size:18px;font-weight:700;line-height:1.3;color:#fff;margin-bottom:6px;text-wrap:balance;}",
+      ".lumen-fx-status.ok .lumen-fx-msg,.lumen-fx-status.fail .lumen-fx-msg{font-size:13px;line-height:1.5;",
+      "color:#acb2b8;margin:0;text-wrap:balance;}",
+      ".lumen-fx-rnote{font-size:12px;line-height:1.45;color:#8f98a0;margin-top:12px;text-wrap:balance;}",
+      ".lumen-fx-status .lumen-fx-lo{align-self:stretch;margin-top:14px;}",
+      // The mark draws in once, answering the click that started the flow.
+      // Reduced motion gets the drawn state straight away (it is the default).
+      "@media (prefers-reduced-motion:no-preference){",
+      ".lumen-fx-mark path{stroke-dasharray:1;stroke-dashoffset:1;",
+      "animation:lumen-fx-draw .35s cubic-bezier(.65,0,.35,1) .1s forwards;}",
+      ".lumen-fx-mark .dot{animation:lumen-fx-dot .12s linear .42s both;}}",
+      "@keyframes lumen-fx-draw{to{stroke-dashoffset:0;}}",
+      "@keyframes lumen-fx-dot{from{opacity:0;}}",
+      "@media (prefers-reduced-motion:reduce){.lumen-fx-win{animation:none;}.lumen-fx-tile{transition:none;}",
+      ".lumen-fx-tile:hover,.lumen-fx-tile.active-focus{transform:none;}}",
       ".lumen-fx-spin{display:inline-block;width:26px;height:26px;box-sizing:border-box;",
       "border:3px solid rgba(255,255,255,.16);border-top-color:#1a9fff;border-radius:50%;",
       "animation:lumen-rot .7s linear infinite;}",
@@ -1230,7 +1251,7 @@
   // A flow that fails before showing progress still ends in the finished view.
   function fxShowFailure(win, text) {
     fxShowProgress(win, fxStrings().freetpFixLabel);
-    fxFinish(win, false, text);
+    fxFailProgress(win, text);
   }
 
   // Replace the footer with a single Close button (end of a flow).
@@ -1359,7 +1380,9 @@
       var official = (result && result.luaToolsFixes) || {};
       var candidate = fixesPickFreeTP(result);
       if (candidate && candidate.applied === true) {
-        return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLaunchDone); };
+        return function () {
+          fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, { title: S.launchSetTitle, text: S.freetpLaunchDone });
+        };
       }
       if (candidate && official.authConfigured === true) {
         return function () { fxApplyLuaTools(appid, candidate.id, candidate.title || S.freetpFixLabel, ctx, win); };
@@ -1367,7 +1390,9 @@
       return fxProbeLocalFix(appid, ctx).then(function (state) {
         if (state === "broken") return function () { fxShowFailure(win, S.freetpBrokenFix); };
         if (state !== "none") {
-          return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLocalDone); };
+          return function () {
+            fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, { title: S.launchSetTitle, text: S.freetpLocalDone });
+          };
         }
         downloading = true;
         var onPending = function () { done.say(S.freetpDownloading); };
@@ -1483,20 +1508,25 @@
           no_extractor_inno: S.installNeedsInno }[p && p.errorCode] || S.freetpInstallErr);
         return;
       }
-      fxApplyLaunchOnly(appid, ctx, win, S.freetpInstallBusy,
-        S.freetpInstallDone.replace("{added}", p.added || 0).replace("{replaced}", p.replaced || 0));
+      fxApplyLaunchOnly(appid, ctx, win, S.freetpInstallBusy, {
+        title: S.freetpInstallTitle,
+        text: fixesFill(S.freetpInstallDetail, { added: p.added || 0, replaced: p.replaced || 0 }),
+        note: p.replaced ? S.freetpInstallNoteReplaced : S.freetpInstallNote,
+      });
     }).catch(function () { done(); fxShowFailure(win, S.freetpInstallErr); });
   }
 
   // Set the launch options for the fix now in the game folder (overrides
-  // derived from the install dir), then finish with doneText or the failure.
-  function fxApplyLaunchOnly(appid, ctx, win, busyText, doneText) {
+  // derived from the install dir), then finish with the done view (see
+  // fxFinish) or the failure.
+  function fxApplyLaunchOnly(appid, ctx, win, busyText, doneView) {
     var S = fxStrings();
     fxShowProgress(win, S.freetpFixLabel);
     var msg = win.querySelector("#lumen-fx-pmsg");
     if (msg) msg.textContent = busyText;
     fxApplyOverrides(appid, ctx, win).then(function (ok) {
-      fxFinish(win, ok, ok ? doneText : fixesFill(S.failed, { error: S.launchApplyFailed }));
+      if (ok) fxFinish(win, true, doneView);
+      else fxFailProgress(win, S.launchApplyFailed);
     });
   }
 
@@ -1514,28 +1544,46 @@
     if (f) f.remove();
   }
 
-  // The loading view now shows before the start RPC resolves, so a start failure
-  // is reported in place (message + Close) instead of as a popup layered over a
-  // frozen "Applying…" screen — matching how fxPoll reports later failures.
+  // A failed flow, reported in place over the progress view (fxFinish) rather
+  // than as a popup layered over a frozen "Applying…" screen. text says what
+  // went wrong; the title already says the fix was not applied.
   function fxFailProgress(win, text) {
     var S = fxStrings();
-    fxFinish(win, false, fixesFill(S.failed, { error: text || S.unknownError }));
+    fxFinish(win, false, { title: S.finishFailTitle, text: text || S.unknownError });
   }
 
-  // End of an apply flow: a success/failure mark that reads at a glance (icon
-  // plus a full green/red bar), the final message, and the Close footer.
-  function fxFinish(win, ok, text) {
+  // End of an apply flow: the progress view becomes one centred block — the
+  // outcome mark, view.title, view.text (in #lumen-fx-pmsg), an optional
+  // view.note — and the Close footer. The bar goes: full or empty, it says
+  // nothing once the flow is over. A launch line still to paste (fxLaunchHint)
+  // means the fix is not active yet, so pasting it becomes the outcome.
+  function fxFinish(win, ok, view) {
+    var S = fxStrings();
     var msg = win.querySelector("#lumen-fx-pmsg");
     var st = msg && msg.parentNode;
-    if (msg) msg.textContent = text;
-    if (st && !st.querySelector(".lumen-fx-done")) {
+    if (st) {
+      if (st.querySelector(".lumen-fx-lo")) {
+        ok = false;
+        view = { title: S.launchHintTitle, text: S.launchHintBody };
+      }
+      var bar = st.querySelector(".lumen-fx-pbar");
+      if (bar) bar.remove();
       st.classList.add(ok ? "ok" : "fail");
       var mark = document.createElement("div");
-      mark.className = "lumen-fx-done";
-      mark.innerHTML = ok ? FX_ICONS.check : "<b>!</b>";
+      mark.className = "lumen-fx-mark";
+      mark.innerHTML = ok ? FX_MARKS.ok : FX_MARKS.fail;
+      var title = document.createElement("div");
+      title.className = "lumen-fx-rtitle";
+      title.textContent = view.title;
       st.insertBefore(mark, msg);
-      var bar = st.querySelector(".lumen-fx-pbar > i");
-      if (bar) bar.style.transform = "scaleX(1)";
+      st.insertBefore(title, msg);
+      msg.textContent = view.text || "";
+      if (view.note) {
+        var note = document.createElement("div");
+        note.className = "lumen-fx-rnote";
+        note.textContent = view.note;
+        st.appendChild(note);
+      }
     }
     fxFooterClose(win);
   }
@@ -1568,27 +1616,26 @@
             }).then(fxParse);
           }).then(function (completed) {
             if (officialFixId && !(completed && completed.success)) {
-              fxFinish(win, false, fixesFill(S.failed,
-                { error: (completed && completed.error) || S.launchApplyFailed }));
+              fxFailProgress(win, (completed && completed.error) || S.launchApplyFailed);
             } else {
-              fxFinish(win, true, fixesFill(S.appliedOk, { fix: fixType }));
+              fxFinish(win, true, { title: fixesFill(S.appliedOk, { fix: fixType }), text: S.appliedDetail });
             }
           }).catch(function () {
-            fxFinish(win, false, fixesFill(S.failed, { error: S.launchApplyFailed }));
+            fxFailProgress(win, S.launchApplyFailed);
           });
         } else if (st.status === "failed") {
           if (fixesAuthExpired(st)) {
             // The source refused the download. Report what it said and offer the
             // retry; nothing here is the user's to re-enter.
-            if (msg) msg.textContent = st.error || S.authViewTitle;
+            fxFailProgress(win, st.error || S.authViewTitle);
             fxFooterRetry(win, function () {
               fxApply(appid, url, fixType, ctx, win);
             });
             return;
           }
-          fxFinish(win, false, fixesFill(S.failed, { error: st.error || S.unknownError }));
+          fxFailProgress(win, st.error || S.unknownError);
         } else if (st.status === "cancelled") {
-          fxFinish(win, false, fixesFill(S.failed, { error: st.error || S.cancel }));
+          fxFailProgress(win, st.error || S.finishCancelled);
         } else {
           setTimeout(poll, 600);
         }
@@ -1618,21 +1665,13 @@
     }).catch(function () { return false; });
   }
 
-  // Fallback: render the launch-option line with a Copy button into the window.
+  // Fallback: the launch-option line with a Copy button, added to the progress
+  // view; fxFinish then titles it as the step left to enable the fix.
   function fxLaunchHint(win, opts) {
     var S = fxStrings();
-    var body = win.querySelector(".lumen-fx-body");
-    if (!body || body.querySelector(".lumen-fx-lo")) return;
-    var wrap = document.createElement("div");
-    wrap.className = "lumen-fx-status";
-    var msg = document.createElement("div");
-    msg.className = "lumen-fx-msg";
-    msg.style.fontWeight = "600";
-    msg.textContent = S.launchHintTitle;
-    var subEl = document.createElement("div");
-    subEl.className = "lumen-fx-sub";
-    subEl.style.margin = "6px 0 0";
-    subEl.textContent = S.launchHintBody;
+    var msg = win.querySelector("#lumen-fx-pmsg");
+    var st = msg && msg.parentNode;
+    if (!st || st.querySelector(".lumen-fx-lo")) return;
     var lo = document.createElement("div");
     lo.className = "lumen-fx-lo";
     var inp = document.createElement("input");
@@ -1642,7 +1681,7 @@
     inp.addEventListener("click", function () { this.select(); });
     var copy = document.createElement("a");
     copy.href = "#";
-    copy.className = "lumen-fx-btn";
+    copy.className = "lumen-fx-btn secondary";
     copy.textContent = S.launchHintCopy;
     copy.addEventListener("click", function (e) {
       e.preventDefault();
@@ -1652,10 +1691,7 @@
     });
     lo.appendChild(inp);
     lo.appendChild(copy);
-    wrap.appendChild(msg);
-    wrap.appendChild(subEl);
-    wrap.appendChild(lo);
-    body.appendChild(wrap);
+    st.appendChild(lo);
   }
 
   // Unfix — restore only files recorded by fix applications, drop the SpaceFix
