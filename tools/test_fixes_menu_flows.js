@@ -5,8 +5,10 @@
 // "Restored" over a failed revert, the busy note tells searching from
 // downloading, an install whose fix needs no override clears a stale one,
 // every apply flow ends in one finished view (ok or failed, one mark, no
-// progress bar), and a menu closed mid-download neither installs nor keeps
-// the downloaded fix.
+// progress bar), a menu closed mid-download neither installs nor keeps the
+// downloaded fix, and the Online Fix tile installs online-fix.me's torrent
+// download (Cancel stops it, a failed one falls back to the mirror) and only
+// sets launch options over an install recorded as online-fix.me's.
 // Run: node tools/test_fixes_menu_flows.js
 "use strict";
 const fs = require("fs");
@@ -579,6 +581,122 @@ async function confirmUnfix() {
   await settle(60);
   eq("retry: the second refusal ends failed with exactly one mark",
     ended(finished(), "fail") && applyStatus === 2 && calls("ApplyGameFix").length === 2, true);
+
+  // ── Online Fix · No login: online-fix.me's torrent, then the mirror ────────
+  const ofmePath = "/home/u/.local/share/Lumen/onlinefix_dl/322330/Fix Repair/fix.rar";
+  // The busy overlay's message (its Cancel button, when there is one, comes last).
+  const busyNote = () => document.querySelectorAll(".lumen-fx-spin")
+    .map((s) => s.parentNode.childNodes[1].textContent).join("|");
+  const busyCancel = () => {
+    const spin = document.querySelector(".lumen-fx-spin");
+    return spin && spin.parentNode.querySelector(".lumen-fx-btn");
+  };
+  let ofmePolls = 0;
+  const ofmeBusyAtPoll = [];
+  await openMenu({
+    LumenStartOnlineFix: () => ({ success: true }),
+    LumenOnlineFixStatus: () => {
+      ofmeBusyAtPoll.push(busyNote());
+      return ++ofmePolls < 3 ? { state: "downloading", bytes: 2048 } : { state: "done", path: ofmePath };
+    },
+    LumenInstallFixArchive: () => ({ success: true, added: 3, replaced: 0 }),
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle(60);
+  eq("online: online-fix.me's torrent download is polled, then installed from its path",
+    calls("LumenStartOnlineFix").length === 1 && calls("LumenOnlineFixStatus").length === 3
+      && calls("LumenInstallFixArchive").length === 1
+      && calls("LumenInstallFixArchive")[0].args.archivePath === ofmePath
+      && calls("ResolveOnlineFix").length === 0 && calls("ApplyGameFix").length === 0, true);
+  eq("online: the busy note says Downloading, then the bytes so far",
+    ofmeBusyAtPoll.join(" / "),
+    [S.onlineTorrentBusy, S.onlineTorrentBusy + " 2 KB", S.onlineTorrentBusy + " 2 KB"].join(" / "));
+  eq("finish: an installed online-fix.me fix ends ok, reporting the install",
+    ended(finished(), "ok") && finished().title === S.freetpInstallTitle
+      && finished().text === window.__lumenFixesFill(S.freetpInstallDetail, { added: 3, replaced: 0 }), true);
+
+  // Cancel stops the download for good: no mirror, no install, the tiles again.
+  await openMenu({
+    LumenStartOnlineFix: () => ({ success: true }),
+    LumenOnlineFixStatus: () => ({ state: "downloading", bytes: 4096 }),
+    LumenCancelOnlineFix: () => ({ success: true }),
+    ResolveOnlineFix: () => ({ success: true, found: true, url: "https://mirror.example/fix.zip" }),
+    ApplyGameFix: () => ({ success: true }),
+    LumenInstallFixArchive: () => ({ success: true, added: 1, replaced: 0 }),
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle(4);
+  const ofmeCancel = busyCancel();
+  eq("online: the torrent download offers Cancel while it runs",
+    !!ofmeCancel && ofmeCancel.textContent === S.cancel, true);
+  const statusAtCancel = calls("LumenOnlineFixStatus").length;
+  if (ofmeCancel) ofmeCancel.click();
+  await settle(20);
+  eq("online: Cancel stops the download and its polling, back to the tiles without the mirror",
+    statusAtCancel > 0 && calls("LumenOnlineFixStatus").length === statusAtCancel
+      && calls("LumenCancelOnlineFix").length === 1
+      && calls("LumenCancelOnlineFix")[0].args.appid === 322330
+      && calls("ResolveOnlineFix").length === 0 && calls("ApplyGameFix").length === 0
+      && calls("LumenInstallFixArchive").length === 0
+      && !busyCancel() && !!tile(S.fallbackOnlineLabel), true);
+
+  await openMenu({
+    LumenStartOnlineFix: () => ({ success: true }),
+    LumenOnlineFixStatus: () => ({ state: "failed" }),
+    ResolveOnlineFix: () => ({ success: true, found: true, url: "https://mirror.example/fix.zip" }),
+    ApplyGameFix: () => ({ success: true }),
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle(8);
+  eq("online: a torrent download that fails falls back to the mirror, with the fallback receipt",
+    calls("ResolveOnlineFix").length === 1 && calls("ApplyGameFix").length === 1
+      && calls("ApplyGameFix")[0].args.downloadUrl === "https://mirror.example/fix.zip"
+      && calls("ApplyGameFix")[0].args.receiptKind === window.__lumenFixesFallbackReceiptKind()
+      && calls("LumenInstallFixArchive").length === 0, true);
+  overlay().querySelector(".lumen-fx-x").click();
+  await settle(4);
+
+  await openMenu({ LumenStartOnlineFix: () => ({ success: false, reason: "no_aria2" }) });
+  tile(S.fallbackOnlineLabel).click();
+  await settle(20);
+  eq("online: without aria2 the mirror is tried, and its failure says aria2 is needed",
+    calls("ResolveOnlineFix").length === 1 && calls("LumenOnlineFixStatus").length === 0
+      && ended(finished(), "fail") && finished().text === S.onlineNone + " " + S.onlineNoAria2, true);
+
+  let ofmeStatus = 0;
+  await openMenu({
+    LumenStartOnlineFix: () => ({ success: true }),
+    LumenOnlineFixStatus: () => { ofmeStatus++; return { state: "downloading", bytes: 1 }; },
+    LumenInstallFixArchive: () => ({ success: true, added: 1, replaced: 0 }),
+    ResolveOnlineFix: () => ({ success: true, found: true, url: "https://mirror.example/fix.zip" }),
+    ApplyGameFix: () => ({ success: true }),
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle(4);
+  overlay().querySelector(".lumen-fx-x").click();
+  const ofmeAtClose = ofmeStatus;
+  await settle(20);
+  eq("online: a menu closed mid-download stops polling and installs nothing",
+    ofmeAtClose > 0 && ofmeStatus <= ofmeAtClose + 1 && calls("LumenInstallFixArchive").length === 0
+      && calls("ResolveOnlineFix").length === 0 && calls("ApplyGameFix").length === 0, true);
+
+  // Lumen's own install record says online-fix.me: Applied, and a click only
+  // sets the launch options again.
+  await openMenu({
+    LumenDetectLocalFix: () => ({ success: true, found: true, recorded: "onlinefix" }),
+    LumenStartOnlineFix: () => ({ success: true }),
+  });
+  const recordedTile = tile(S.fallbackOnlineLabel);
+  eq("online: an install recorded as online-fix.me's badges the tile Applied",
+    !!recordedTile && recordedTile.classList.contains("applied")
+      && (recordedTile.querySelector(".lumen-fx-badge") || {}).textContent === S.appliedBadge, true);
+  const launchAtOpen = calls("GetFixLaunchOptions").length;
+  if (recordedTile) recordedTile.click();
+  await settle(60);
+  eq("online: clicking the Applied tile only sets launch options, with no download",
+    calls("GetFixLaunchOptions").length > launchAtOpen && calls("LumenStartOnlineFix").length === 0
+      && calls("ResolveOnlineFix").length === 0 && ended(finished(), "ok")
+      && finished().title === S.launchSetTitle && finished().text === S.onlineLaunchDone, true);
 
   // ── FreeTP: closing the menu mid-download ────────────────────────────────
   let finishDownload = null;
