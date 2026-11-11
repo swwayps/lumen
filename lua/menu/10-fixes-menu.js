@@ -192,6 +192,16 @@
     return null;
   }
 
+  // PURE: what a click on the "Online Fix · No login" tile does — explain
+  // that the game must be installed first, refresh the launch options only
+  // (the receipt says the fix files are already in place), or fetch the fix
+  // and apply it.
+  function fixesOnlineTileAction(installed, applied) {
+    if (!installed) return "explain";
+    if (applied) return "launch";
+    return "resolve";
+  }
+
   // PURE: what the fix evidence (LumenDetectLocalFix) and the backend's
   // override derivation (GetFixLaunchOptions) say about a fix already in the
   // game folder. "none" = no fix evidence (a game-shipped DirectX DLL never
@@ -290,6 +300,7 @@
     window.__lumenFixesAppliedStates = fixesAppliedStates;
     window.__lumenFixesFallbackReceiptKind = fixesFallbackReceiptKind;
     window.__lumenFixesPickFreeTP = fixesPickFreeTP;
+    window.__lumenFixesOnlineTileAction = fixesOnlineTileAction;
     window.__lumenFixesFormatBytes = fixesFormatBytes;
     window.__lumenFixesLocalFixState = fixesLocalFixState;
     window.__lumenFixesRelayOk = fixesRelayOk;
@@ -1115,54 +1126,40 @@
     var freetpTile = freetpTileFor(freetpCandidate && freetpCandidate.applied === true ? "applied" : "none");
     grid.appendChild(freetpTile);
 
-    if (installed) {
-      // Badge only: opening the menu never writes launch options (Unfix or
-      // the user may have removed them on purpose); a click re-applies.
-      fxProbeLocalFix(appid, ctx).then(function (state) {
-        if (state !== "applied" && state !== "needsOptions") return;
-        var next = freetpTileFor(state);
-        if (freetpTile.parentNode) freetpTile.parentNode.replaceChild(next, freetpTile);
-        freetpTile = next;
-      }).catch(function () {});
-    }
-
-    // The unauthenticated mirror remains available as a clearly secondary
-    // fallback. It never replaces or outranks the official category selection.
-    var fallbackOnline = fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
-      { iconKey: "globe", off: true, applied: appliedStates.fallbackOnline,
-        badge: appliedStates.fallbackOnline ? S.appliedBadge
-          : (installed ? S.checkingBadge : S.unavailable) },
-      function () {});
-    grid.appendChild(fallbackOnline);
-    var replaceFallbackOnline = function (next) {
-      if (fallbackOnline.parentNode) fallbackOnline.parentNode.replaceChild(next, fallbackOnline);
-      fallbackOnline = next;
-    };
-    if (installed) {
-      call("ResolveOnlineFix", { appid: appid, gameName: gameName || "", contentScriptQuery: "" })
-        .then(fxParse).then(function (result) {
-          if (result && result.success && result.found && result.url) {
-            replaceFallbackOnline(fxTile(S.fallbackOnlineLabel,
-              isNative ? S.nativeWarnShort : S.fallbackOnlineDesc,
-              { iconKey: "globe", off: isNative, warn: isNative,
-                applied: appliedStates.fallbackOnline,
-                badge: appliedStates.fallbackOnline ? S.appliedBadge
-                  : (isNative ? S.unavailable : null) }, function () {
-                protonGate(function () {
-                  fxApply(appid, result.url, S.fallbackOnlineLabel, ctx, win,
-                    FX_FALLBACK_RECEIPT_KIND);
-                });
-              }));
-          } else {
-            replaceFallbackOnline(fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
-              { iconKey: "globe", off: true, applied: appliedStates.fallbackOnline,
-                badge: appliedStates.fallbackOnline ? S.appliedBadge : S.unavailable }, function () {}));
+    // "Online Fix · No login", click-driven: not installed explains the
+    // requirement, an applied receipt refreshes only the launch options (no
+    // re-download), anything else fetches the fix at click time
+    // (online-fix.me, then the mirror) — so opening the menu never waits on
+    // it. Secondary to the official category selection, as before.
+    var onlineTileFor = function (applied) {
+      return fxTile(S.fallbackOnlineLabel, isNative ? S.nativeWarnShort : S.fallbackOnlineDesc,
+        { iconKey: "globe", warn: isNative, applied: applied,
+          badge: applied ? S.appliedBadge : (installed ? null : S.unavailable) },
+        function () {
+          var action = fixesOnlineTileAction(installed, applied);
+          if (action === "explain") { fxAlert(S.notInstalled); return; }
+          if (action === "launch") {
+            fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.onlineLaunchDone);
+            return;
           }
-        }).catch(function () {
-          replaceFallbackOnline(fxTile(S.fallbackOnlineLabel, S.fallbackOnlineDesc,
-            { iconKey: "globe", off: true, applied: appliedStates.fallbackOnline,
-              badge: appliedStates.fallbackOnline ? S.appliedBadge : S.unavailable }, function () {}));
+          fxApplyOnlineSite(appid, gameName, ctx, win);
         });
+    };
+    var onlineTile = onlineTileFor(appliedStates.fallbackOnline);
+    grid.appendChild(onlineTile);
+
+    if (installed) {
+      // Badges only: opening the menu never writes launch options (Unfix or
+      // the user may have removed them on purpose); a click re-applies.
+      fxProbeLocalFix(appid, ctx).then(function (probe) {
+        var swap = function (old, next) {
+          if (old.parentNode) old.parentNode.replaceChild(next, old);
+          return next;
+        };
+        if (probe.recorded === "onlinefix") onlineTile = swap(onlineTile, onlineTileFor(true));
+        if (probe.state !== "applied" && probe.state !== "needsOptions") return;
+        freetpTile = swap(freetpTile, freetpTileFor(probe.state));
+      }).catch(function () {});
     }
 
     grid.appendChild(fxTile(S.aioLabel, S.aioDesc,
@@ -1196,17 +1193,27 @@
   }
 
   // Transient busy overlay inside the window (keeps the tiles intact underneath).
-  // Returns the function that closes it; its .say(text) changes the message.
-  function fxBusy(win, msg) {
+  // Returns the function that closes it; its .say(text) changes the message,
+  // and onCancel adds a Cancel button.
+  function fxBusy(win, msg, onCancel) {
     var b = document.createElement("div");
     b.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;" +
       "justify-content:center;gap:14px;background:rgba(35,38,45,.9);z-index:5;color:#dcdedf;" +
       "font-size:14px;text-align:center;padding:24px;";
     b.innerHTML = '<div class="lumen-fx-spin"></div><div></div>';
-    b.lastChild.textContent = msg;
+    var text = b.lastChild;
+    text.textContent = msg;
+    if (onCancel) {
+      var c = document.createElement("a");
+      c.href = "#";
+      c.className = "lumen-fx-btn secondary";
+      c.textContent = fxStrings().cancel;
+      c.addEventListener("click", function (e) { e.preventDefault(); onCancel(); });
+      b.appendChild(c);
+    }
     win.appendChild(b);
     var done = function () { try { b.remove(); } catch (e) {} };
-    done.say = function (text) { b.lastChild.textContent = text; };
+    done.say = function (t) { text.textContent = t; };
     return done;
   }
 
@@ -1347,9 +1354,9 @@
       if (candidate && official.authConfigured === true) {
         return function () { fxApplyLuaTools(appid, candidate.id, candidate.title || S.freetpFixLabel, ctx, win); };
       }
-      return fxProbeLocalFix(appid, ctx).then(function (state) {
-        if (state === "broken") return function () { fxShowFailure(win, S.freetpBrokenFix); };
-        if (state !== "none") {
+      return fxProbeLocalFix(appid, ctx).then(function (probe) {
+        if (probe.state === "broken") return function () { fxShowFailure(win, S.freetpBrokenFix); };
+        if (probe.state !== "none") {
           return function () { fxApplyLaunchOnly(appid, ctx, win, S.launchOnlyBusy, S.freetpLocalDone); };
         }
         downloading = true;
@@ -1393,19 +1400,22 @@
     });
   }
 
-  // The state (fixesLocalFixState) of a fix already in the game folder, gated
-  // on real fix evidence: the override derivation alone also fires on
-  // game-shipped DirectX redist DLLs (D3D12Core.dll).
+  // Resolves { state, recorded }: state (fixesLocalFixState) of a fix already
+  // in the game folder, gated on real fix evidence (the override derivation
+  // alone also fires on game-shipped DirectX redist DLLs, D3D12Core.dll), and
+  // recorded, the source ("freetp" | "onlinefix" | "archive") of Lumen's own
+  // install record.
   function fxProbeLocalFix(appid, ctx) {
     return call("LumenDetectLocalFix", {
       appid: appid, installPath: ctx.installPath || "", contentScriptQuery: "",
     }).then(fxParse).then(function (detected) {
-      if (!(detected && detected.success && detected.found)) return "none";
+      var recorded = detected && detected.recorded;
+      if (!(detected && detected.success && detected.found)) return { state: "none", recorded: recorded };
       return call("GetFixLaunchOptions", {
         appid: appid, compatToolName: "", currentLaunchOptions: "",
         installPath: ctx.installPath, contentScriptQuery: "",
       }).then(fxParse).then(function (launch) {
-        return fixesLocalFixState(detected, launch);
+        return { state: fixesLocalFixState(detected, launch), recorded: recorded };
       });
     });
   }
@@ -1451,6 +1461,73 @@
       wrap.appendChild(row);
     });
     body.appendChild(wrap);
+  }
+
+  // "Online Fix · No login", first choice: online-fix.me's own Steam fix (the
+  // Fix Repair archive from the game's public torrent, fetched in the
+  // background by aria2c), installed recorded so Unfix reverts it. Anything
+  // short of a downloaded file falls back to the mirror.
+  function fxApplyOnlineSite(appid, gameName, ctx, win) {
+    var S = fxStrings();
+    if (!ctx.installPath) { fxAlert(S.notInstalled); return; }
+    if (!ctx.runsUnderProton) { fxAlert(S.nativeWarn); return; }
+    var done = fxBusy(win, S.onlineLooking);
+    var note = "";
+    var stopped = false;
+    var fallback = function () {
+      done();
+      if (!stopped && win.isConnected) fxApplyMirrorOnline(appid, gameName, ctx, win, note);
+    };
+    call("LumenStartOnlineFix", { appid: appid, gameName: gameName || "", contentScriptQuery: "" })
+      .then(fxParse).then(function (s) {
+        if (!(s && s.success)) {
+          if (s && s.reason === "no_aria2") note = S.onlineNoAria2;
+          fallback();
+          return;
+        }
+        done();
+        done = fxBusy(win, S.onlineTorrentBusy, function () {
+          stopped = true;
+          done();
+          call("LumenCancelOnlineFix", { appid: appid, contentScriptQuery: "" }).catch(function () {});
+        });
+        var poll = function () {
+          if (stopped || !win.isConnected) return;
+          call("LumenOnlineFixStatus", { appid: appid, contentScriptQuery: "" })
+            .then(fxParse).then(function (st) {
+              if (stopped || !win.isConnected) return;
+              if (st && st.state === "downloading") {
+                done.say(S.onlineTorrentBusy + " " + fixesFormatBytes(st.bytes));
+                setTimeout(poll, 1000);
+                return;
+              }
+              if (!(st && st.state === "done")) { fallback(); return; }
+              done();
+              fxInstallArchive(win, appid, ctx, { name: S.fallbackOnlineLabel, path: st.path });
+            }).catch(fallback);
+        };
+        poll();
+      }).catch(fallback);
+  }
+
+  // Mirror route — resolve the archive by game name on the perondepot mirror,
+  // then the standard apply flow with the fallback receipt. Click-driven: the
+  // mirror is queried only when the user asks, so a slow or unreachable
+  // mirror can never stall opening the menu.
+  function fxApplyMirrorOnline(appid, gameName, ctx, win, note) {
+    var S = fxStrings();
+    var done = fxBusy(win, S.onlineLooking);
+    var fail = function (text) {
+      done();
+      if (win.isConnected) fxShowFailure(win, text + (note ? " " + note : ""));
+    };
+    call("ResolveOnlineFix", { appid: appid, gameName: gameName || "", contentScriptQuery: "" })
+      .then(fxParse).then(function (result) {
+        if (!(result && result.success && result.found && result.url)) { fail(S.onlineNone); return; }
+        done();
+        if (!win.isConnected) return;
+        fxApply(appid, result.url, S.fallbackOnlineLabel, ctx, win, FX_FALLBACK_RECEIPT_KIND);
+      }).catch(function () { fail(S.onlineErr); });
   }
 
   function fxInstallArchive(win, appid, ctx, archive) {
