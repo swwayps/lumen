@@ -680,6 +680,43 @@ async function confirmUnfix() {
     ofmeAtClose > 0 && ofmeStatus <= ofmeAtClose + 1 && calls("LumenInstallFixArchive").length === 0
       && calls("ResolveOnlineFix").length === 0 && calls("ApplyGameFix").length === 0, true);
 
+  // A status answer still in flight when the menu closes: the finished
+  // download stays for the next click, nothing is installed with no menu.
+  let finishStatus = null;
+  await openMenu({
+    LumenStartOnlineFix: () => ({ success: true }),
+    LumenOnlineFixStatus: () => new Promise((resolve) => { finishStatus = resolve; }),
+    LumenInstallFixArchive: () => ({ success: true, added: 1, replaced: 0 }),
+    GetFixLaunchOptions: () => ({ success: true, apply: true,
+      launchOptions: 'WINEDLLOVERRIDES="winmm=n,b" %command%' }),
+    __lumenSetLaunchOptions: () => ({ ok: true }),
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle();
+  overlay().querySelector(".lumen-fx-x").click();
+  const launchAtStatusClose = calls("GetFixLaunchOptions").length;
+  if (finishStatus) finishStatus({ state: "done", path: ofmePath });
+  await settle();
+  eq("online: a download answering done after the menu closed installs nothing",
+    calls("LumenOnlineFixStatus").length === 1 && calls("LumenInstallFixArchive").length === 0
+      && calls("GetFixLaunchOptions").length === launchAtStatusClose
+      && calls("__lumenSetLaunchOptions").length === 0
+      && calls("ResolveOnlineFix").length === 0 && calls("ApplyGameFix").length === 0, true);
+
+  let finishMirror = null;
+  await openMenu({
+    LumenStartOnlineFix: () => ({ success: false }),
+    ResolveOnlineFix: () => new Promise((resolve) => { finishMirror = resolve; }),
+    ApplyGameFix: () => ({ success: true }),
+  });
+  tile(S.fallbackOnlineLabel).click();
+  await settle();
+  overlay().querySelector(".lumen-fx-x").click();
+  if (finishMirror) finishMirror({ success: true, found: true, url: "https://mirror.example/fix.zip" });
+  await settle();
+  eq("online: a mirror found after the menu closed applies nothing",
+    calls("ResolveOnlineFix").length === 1 && calls("ApplyGameFix").length === 0, true);
+
   // Lumen's own install record says online-fix.me: Applied, and a click only
   // sets the launch options again.
   await openMenu({

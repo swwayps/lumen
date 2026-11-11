@@ -1538,7 +1538,7 @@
           if (stopped || !win.isConnected) return;
           call("LumenOnlineFixStatus", { appid: appid, contentScriptQuery: "" })
             .then(fxParse).then(function (st) {
-              if (stopped) return;
+              if (stopped || !win.isConnected) return;
               if (st && st.state === "downloading") {
                 done.say(S.onlineTorrentBusy + " " + fixesFormatBytes(st.bytes));
                 setTimeout(poll, 1000);
@@ -1560,11 +1560,15 @@
   function fxApplyMirrorOnline(appid, gameName, ctx, win, note) {
     var S = fxStrings();
     var done = fxBusy(win, S.onlineLooking);
-    var fail = function (text) { done(); fxShowFailure(win, text + (note ? " " + note : "")); };
+    var fail = function (text) {
+      done();
+      if (win.isConnected) fxShowFailure(win, text + (note ? " " + note : ""));
+    };
     call("ResolveOnlineFix", { appid: appid, gameName: gameName || "", contentScriptQuery: "" })
       .then(fxParse).then(function (result) {
         if (!(result && result.success && result.found && result.url)) { fail(S.onlineNone); return; }
         done();
+        if (!win.isConnected) return;
         fxApply(appid, result.url, S.fallbackOnlineLabel, ctx, win, FX_FALLBACK_RECEIPT_KIND);
       }).catch(function () { fail(S.onlineErr); });
   }
