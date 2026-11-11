@@ -207,9 +207,12 @@ require("fixesmenu").register(registry)
 
 -- The Fixes Menu's FreeTP Fix tile: freetp.lua finds and downloads the game's
 -- fix from freetp.org; fixinstall.lua installs a fix archive with a manifest
--- (so Unfix can revert it) and detects a fix already in the game folder.
+-- (so Unfix can revert it) and detects a fix already in the game folder. The
+-- Online Fix tile: onlinefixme.lua fetches online-fix.me's fix in the
+-- background for fixinstall.lua to install.
 require("freetp").register(registry)
 require("fixinstall").register(registry)
+require("onlinefixme").register(registry)
 
 -- The "slsteam-moon not loaded" warning (menu/13-sls-check.js): detect whether
 -- SLSsteam.so is actually injected into the running Steam client, and if not,

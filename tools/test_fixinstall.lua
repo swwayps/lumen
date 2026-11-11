@@ -302,6 +302,34 @@ do
     dec_inst.success == false and dec_inst.errorCode == "invalid_destination")
 end
 
+-- ── LumenDetectLocalFix reports the record's source (both bridge forms) ────
+do
+  local det_tmp = "/tmp/lumen_fixinstall_detect"
+  local game = det_tmp .. "/game"
+  os.execute("rm -rf -- " .. q(det_tmp) .. " && mkdir -p -- " .. q(det_tmp .. "/store/4312190")
+    .. " " .. q(game))
+  local reg = fi.register({}, { home = det_tmp, store_root = function() return det_tmp .. "/store" end })
+  local saved_su = package.loaded.steam_utils
+  package.loaded.steam_utils = { get_game_install_path_response = function()
+    return { success = true, installPath = game } end }
+  local function detect_both()
+    return json.decode(reg.LumenDetectLocalFix(4312190, "", game)),
+      json.decode(reg.LumenDetectLocalFix({ appid = 4312190, contentScriptQuery = "", installPath = game }))
+  end
+  write_file(det_tmp .. "/store/4312190/manifest.json", json.encode({
+    source = "onlinefix", installPath = game, added = {}, replaced = {} }))
+  local pos, tbl = detect_both()
+  check("detect: the record's source comes back as recorded (positional form)",
+    pos.success == true and pos.recorded == "onlinefix")
+  check("detect: ...and in the table form", tbl.success == true and tbl.recorded == "onlinefix")
+  os.remove(det_tmp .. "/store/4312190/manifest.json")
+  pos, tbl = detect_both()
+  check("detect: no record, no recorded source (both forms)",
+    pos.success == true and pos.recorded == nil and tbl.success == true and tbl.recorded == nil)
+  package.loaded.steam_utils = saved_su
+  os.execute("rm -rf -- " .. q(det_tmp))
+end
+
 -- ── real end-to-end (skips without a 7-zip binary) ─────────────────────────
 local bin = fi.find_7z()
 if not bin then
@@ -421,6 +449,34 @@ else
   check("e2e: a Lumen download whose install fails is deleted",
     own_fail.success == false and read_file(own_dl .. "/4312190-freetp-fix.zip") == nil)
 
+  -- online-fix.me's Fix Repair download is encrypted with the published
+  -- password (a 7z stands in for the .rar: 7-Zip opens it by signature).
+  -- Installed, it is recorded as online-fix.me's and its whole download
+  -- folder goes.
+  local ofme_dir = tmp .. "/.local/share/Lumen/onlinefix_dl/4312190"
+  local ofme_rar = ofme_dir .. "/Fix Repair/x.rar"
+  local ofme_7z = archive("ofme.7z", { ["ofme_fix.dll"] = "OFME" },
+    "-p" .. q(fi.ARCHIVE_PASSWORD) .. " -mhe=on")
+  os.execute("mkdir -p -- " .. q(ofme_dir .. "/Fix Repair") .. " && cp -- " .. q(ofme_7z)
+    .. " " .. q(ofme_rar))
+  write_file(ofme_dir .. "/fix.torrent", "d")
+  local ofme = fi.install(4312190, ofme_rar, game, deps)
+  check("e2e: an online-fix.me download installs, recorded as its source",
+    ofme.success == true and read_file(game .. "/ofme_fix.dll") == "OFME"
+      and manifest().source == "onlinefix")
+  check("e2e: ...and its download folder is deleted, the others stay",
+    os.execute("test -e " .. q(ofme_dir)) ~= true
+      and os.execute("test -d " .. q(tmp .. "/.local/share/Lumen/onlinefix_dl")) == true)
+  fi.revert(4312190, deps)
+
+  -- A folder of the same shape outside Lumen's own downloads is the user's.
+  local user_dir = tmp .. "/Downloads/onlinefix_dl/4312190"
+  os.execute("mkdir -p -- " .. q(user_dir) .. " && cp -- " .. q(zip) .. " " .. q(user_dir .. "/fix.zip"))
+  check("e2e: a user's onlinefix_dl folder is installed from as a plain archive and kept",
+    fi.install(4312190, user_dir .. "/fix.zip", game, deps).success == true
+      and manifest().source == "archive" and read_file(user_dir .. "/fix.zip") ~= nil)
+  fi.revert(4312190, deps)
+
   -- Every 7-Zip command gets stdin from /dev/null, whatever stdin this
   -- process has: the commands are captured, then run for real.
   local cmds = {}
@@ -513,6 +569,12 @@ else
   fi.revert(4312190, nested_deps)
   check("e2e: ...and the revert removes it there",
     read_file(nested .. "/G/.slssteam_fix_dlls") == nil)
+
+  local enc = archive("enc.7z", { ["enc_fix.dll"] = "ENC" }, "-p" .. q(fi.ARCHIVE_PASSWORD) .. " -mhe=on")
+  check("e2e: an online-fix.me style encrypted archive installs",
+    fi.install(4312190, enc, game, deps).success == true
+      and read_file(game .. "/enc_fix.dll") == "ENC")
+  fi.revert(4312190, deps)
 
   local wrong = archive("wrong.zip", { ["half_fix.dll"] = "HALF" }, "-tzip -p" .. q("some-password"))
   local wr = fi.install(4312190, wrong, game, deps)
