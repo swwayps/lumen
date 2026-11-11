@@ -735,6 +735,25 @@ async function confirmUnfix() {
       && calls("ResolveOnlineFix").length === 0 && ended(finished(), "ok")
       && finished().title === S.launchSetTitle && finished().text === S.onlineLaunchDone, true);
 
+  // A record without files (a failed extract leaves source=onlinefix behind):
+  // no Applied badge, and a click re-runs the install instead of the
+  // launch-options shortcut.
+  await openMenu({
+    LumenDetectLocalFix: () => ({ success: true, found: false, recorded: "onlinefix" }),
+    LumenStartOnlineFix: () => ({ success: false }),
+    ResolveOnlineFix: () => ({ success: true, found: false }),
+  });
+  await settle(8);
+  const staleTile = tile(S.fallbackOnlineLabel);
+  eq("online: a record without files does not badge the tile Applied",
+    !!staleTile && !staleTile.classList.contains("applied")
+      && (staleTile.querySelector(".lumen-fx-badge") || {}).textContent !== S.appliedBadge, true);
+  if (staleTile) staleTile.click();
+  await settle(8);
+  eq("online: a click on a stale record re-runs the install path, not launch-only",
+    calls("LumenStartOnlineFix").length === 1
+      && calls("__lumenSetLaunchOptions").length === 0, true);
+
   // ── FreeTP: closing the menu mid-download ────────────────────────────────
   let finishDownload = null;
   await openMenu({

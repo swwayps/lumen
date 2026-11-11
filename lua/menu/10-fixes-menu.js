@@ -1242,7 +1242,11 @@
           if (old.parentNode) old.parentNode.replaceChild(next, old);
           return next;
         };
-        if (probe.recorded === "onlinefix") onlineTile = swap(onlineTile, onlineTileFor(true));
+        // A record alone is not "Applied": install_archive writes the record
+        // before extracting, so a failed extract leaves source=onlinefix with
+        // no files (probe.state "none") — that must re-run the install, not
+        // the launch-options shortcut. Unfix clears such a record too.
+        if (probe.recorded === "onlinefix" && probe.state !== "none") onlineTile = swap(onlineTile, onlineTileFor(true));
         if (probe.state !== "applied" && probe.state !== "needsOptions") return;
         freetpTile = swap(freetpTile, freetpTileFor(probe.state));
       }).catch(function () {});
