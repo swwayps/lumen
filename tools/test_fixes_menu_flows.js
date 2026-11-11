@@ -766,6 +766,39 @@ async function confirmUnfix() {
     polls <= pollsAtClose + 1 && calls("LumenDiscardFreeTPDownload").length === 1
       && calls("LumenInstallFixArchive").length === 0, true);
 
+  // ── freshness subtitles: which source stamps the newer fix ──────────────
+  await openMenu({
+    LumenGetFixFreshness: () => ({ success: true, newer: "ofme",
+      ofme: { version: "1.1.29", dateText: "04.11.2026" },
+      freetp: { revision: "3", dateText: "03.12.2024" } }),
+  });
+  await settle(8);
+  eq("fresh: the RPC carries contentScriptQuery so the positional bridge keeps gameName in place",
+    calls("LumenGetFixFreshness").length === 1
+      && calls("LumenGetFixFreshness")[0].args.contentScriptQuery === "", true);
+  const freshOfmeEl = tile(S.fallbackOnlineLabel).querySelector(".lumen-fx-fresh");
+  const freshFtEl = tile(S.freetpLabel).querySelector(".lumen-fx-fresh");
+  eq("fresh: both tiles carry their source's version line",
+    !!freshOfmeEl && !!freshFtEl
+      && freshOfmeEl.textContent.includes("v1.1.29") && freshOfmeEl.textContent.includes("04.11.2026")
+      && freshFtEl.textContent.includes("v3") && freshFtEl.textContent.includes("03.12.2024"), true);
+  eq("fresh: only the newer source gets the pill",
+    !!freshOfmeEl.querySelector(".pill") && !freshFtEl.querySelector(".pill"), true);
+
+  await openMenu({ LumenGetFixFreshness: () => ({ success: true, newer: "unknown",
+    freetp: { revision: "3", dateText: "03.12.2024" } }) });
+  await settle(8);
+  eq("fresh: a missing side draws nothing, and no pill without a verdict",
+    !tile(S.fallbackOnlineLabel).querySelector(".lumen-fx-fresh")
+      && !!tile(S.freetpLabel).querySelector(".lumen-fx-fresh")
+      && !tile(S.freetpLabel).querySelector(".lumen-fx-fresh .pill"), true);
+
+  await openMenu({ LumenGetFixFreshness: () => ({ success: false }) });
+  await settle(8);
+  eq("fresh: a failed lookup leaves the tiles alone",
+    !tile(S.fallbackOnlineLabel).querySelector(".lumen-fx-fresh")
+      && !tile(S.freetpLabel).querySelector(".lumen-fx-fresh"), true);
+
   if (failures) { console.error("\n" + failures + " failed"); process.exit(1); }
   console.log("\nall ok");
 })().catch((e) => { console.error("FAIL " + (e && e.stack || e)); process.exit(1); });

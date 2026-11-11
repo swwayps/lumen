@@ -270,6 +270,25 @@ if (typeof onlineAction !== "function") {
   eq("online: nullish input explains", onlineAction(null, null), "explain");
 }
 
+// ── freshness line composition ──────────────────────────────────────────────
+{
+  const freshLine = win.__lumenFixesFreshLine;
+  if (typeof freshLine !== "function") {
+    eq("fresh: helper exported", typeof freshLine, "function");
+  } else {
+    eq("fresh: version and date composed",
+      freshLine("online-fix.me", { version: "1.1.29", dateText: "04.11.2026" }),
+      "online-fix.me · v1.1.29 · 04.11.2026");
+    eq("fresh: a fix revision reads as the version",
+      freshLine("FreeTP fix", { revision: "3", dateText: "03.12.2024" }),
+      "FreeTP fix · v3 · 03.12.2024");
+    eq("fresh: a date alone still draws a line",
+      freshLine("FreeTP fix", { dateText: "03.12.2024" }), "FreeTP fix · 03.12.2024");
+    eq("fresh: an empty side draws nothing", freshLine("x", {}), "");
+    eq("fresh: a nullish side draws nothing", freshLine("x", null), "");
+  }
+}
+
 // ── archive picker row formatting ───────────────────────────────────────────
 if (typeof formatBytes !== "function") {
   console.error("FAIL byte formatter is not exposed");

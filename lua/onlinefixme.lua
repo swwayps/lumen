@@ -66,6 +66,36 @@ function ofme.pick_fix_index(listing)
   return nil
 end
 
+-- Months as the uploads server's nginx autoindex prints them.
+local AUTOINDEX_MONTHS = { Jan = 1, Feb = 2, Mar = 3, Apr = 4, May = 5, Jun = 6,
+  Jul = 7, Aug = 8, Sep = 9, Oct = 10, Nov = 11, Dec = 12 }
+
+-- parse_torrent_listing(html) -> { name, version?, epoch? } for the folder's
+-- .torrent, or nil. The uploads server is an nginx autoindex — one line per
+-- file: '<a href="CRACK.v1.1.29-OFME.torrent">…</a>  04-Nov-2026 15:04  37K'.
+-- The name carries the game build the fix targets, the stamp the upload
+-- moment (server-local, read as local time: the freshness compare only asks
+-- for day granularity). PURE.
+function ofme.parse_torrent_listing(html)
+  if type(html) ~= "string" then return nil end
+  for line in (html .. "\n"):gmatch("([^\r\n]*)\r?\n") do
+    local name = line:match('href="([^"]+%.torrent)"')
+    if name then
+      local base = name:match("([^/]+)$") or name
+      local res = { name = base,
+        version = base:match("%.v([%d%.]+)%-OFME%.torrent$")
+          or base:match("%.v([%d%.]+)%.torrent$") }
+      local d, mon, y, hh, mm = line:match("(%d+)%-(%a+)%-(%d+)%s+(%d+):(%d+)")
+      if d and AUTOINDEX_MONTHS[mon] then
+        res.epoch = os.time({ year = tonumber(y), month = AUTOINDEX_MONTHS[mon],
+          day = tonumber(d), hour = tonumber(hh), min = tonumber(mm), sec = 0 })
+      end
+      return res
+    end
+  end
+  return nil
+end
+
 local function default_deps(deps)
   deps = deps or {}
   deps.execute = deps.execute or os.execute

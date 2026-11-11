@@ -211,6 +211,18 @@
     return "resolve";
   }
 
+  // The freshness line under a source tile: "online-fix.me · v1.1.29 ·
+  // 04.11.2026". Either fact alone still says something; an empty side says
+  // nothing and draws no line. PURE (unit-tested in test_fixes_menu.js).
+  function fixesFreshLine(label, side) {
+    if (!side) return "";
+    var bits = [];
+    var ver = side.version || side.revision;
+    if (ver) bits.push("v" + ver);
+    if (side.dateText) bits.push(side.dateText);
+    return bits.length ? label + " · " + bits.join(" · ") : "";
+  }
+
   // PURE: what the fix evidence (LumenDetectLocalFix) and the backend's
   // override derivation (GetFixLaunchOptions) say about a fix already in the
   // game folder. "none" = no fix evidence (a game-shipped DirectX DLL never
@@ -310,6 +322,7 @@
     window.__lumenFixesFallbackReceiptKind = fixesFallbackReceiptKind;
     window.__lumenFixesPickFreeTP = fixesPickFreeTP;
     window.__lumenFixesOnlineTileAction = fixesOnlineTileAction;
+    window.__lumenFixesFreshLine = fixesFreshLine;
     window.__lumenFixesFormatBytes = fixesFormatBytes;
     window.__lumenFixesLocalFixState = fixesLocalFixState;
     window.__lumenFixesRelayOk = fixesRelayOk;
@@ -378,6 +391,10 @@
       ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .ic{width:17px;height:17px}",
       ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .tl{font-size:12.5px}",
       ".lumen-fx-grid>.lumen-fx-tile:not(.featured) .ds{font-size:10.5px;line-height:1.28;}",
+      // Freshness subtitles: quieter than the description, the "newer" pill
+      // the only accent (the applied badge's green).
+      ".lumen-fx-fresh{margin-top:3px;font:10px 'Motiva Sans',Arial,Helvetica,sans-serif;opacity:.62;letter-spacing:.2px;}",
+      ".lumen-fx-fresh .pill{font-style:normal;color:#8fd48f;border:1px solid currentColor;border-radius:3px;padding:0 3px;margin-left:4px;font-size:9px;}",
       // Gamepad focus mirrors hover exactly: the pointer and the D-pad should
       // describe the same state, including the danger tile's red icon and the
       // featured tile's logo cross-fade.
@@ -1186,6 +1203,36 @@
     };
     var onlineTile = onlineTileFor(appliedStates.fallbackOnline);
     grid.appendChild(onlineTile);
+
+    // Freshness subtitles: which source stamps the newer fix (fixfresh.lua —
+    // online-fix.me's torrent date vs freetp.org's page-update marker). Pure
+    // decoration: a failure draws nothing, the backend caches per appid, and
+    // the mark() calls read the tile VARIABLES when the answer lands, so a
+    // badge swap that already happened is not undone. The reverse order (a
+    // cached answer beating the local probe) can drop a line until the next
+    // open — cosmetic only, and the next open re-adds it.
+    if (!isNative && gameName) {
+      call("LumenGetFixFreshness", { appid: appid, gameName: gameName, contentScriptQuery: "" })
+        .then(fxParse).then(function (fresh) {
+          if (!fresh || !fresh.success || !grid.isConnected) return;
+          var mark = function (tile, label, side, won) {
+            var text = fixesFreshLine(label, side);
+            if (!tile || !text) return;
+            var el = document.createElement("div");
+            el.className = "lumen-fx-fresh";
+            el.textContent = text;
+            if (won) {
+              var pill = document.createElement("i");
+              pill.className = "pill";
+              pill.textContent = S.freshNewer;
+              el.appendChild(pill);
+            }
+            tile.appendChild(el);
+          };
+          mark(freetpTile, S.freshFreetpLabel, fresh.freetp, fresh.newer === "freetp");
+          mark(onlineTile, S.freshOfmeLabel, fresh.ofme, fresh.newer === "ofme");
+        }).catch(function () {});
+    }
 
     if (installed) {
       // Badges only: opening the menu never writes launch options (Unfix or

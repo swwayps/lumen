@@ -214,6 +214,11 @@ require("freetp").register(registry)
 require("fixinstall").register(registry)
 require("onlinefixme").register(registry)
 
+-- The Fixes Menu's "which source is newer" tile subtitles (menu/10-fixes-menu.js):
+-- fixfresh.lua dates online-fix.me's torrent and freetp.org's page-update
+-- marker and compares them; cached per appid so menu re-opens are free.
+require("fixfresh").register(registry)
+
 -- The "slsteam-moon not loaded" warning (menu/13-sls-check.js): detect whether
 -- SLSsteam.so is actually injected into the running Steam client, and if not,
 -- offer an auto-fix that re-installs the latest slsteam-moon, repairs the

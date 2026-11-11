@@ -182,6 +182,10 @@ function freetp.resolve(game_name, get, clock)
   if ok_a and type(page) == "table" and page.status == 200
       and type(page.body) == "string" then
     res.files = freetp.parse_article_files(page.body)
+    -- Freshness decoration (fixfresh.lua): the page's "last update" marker
+    -- rides along — the article was fetched anyway, so it costs nothing.
+    local upd = freetp.parse_page_updated(page.body)
+    if upd then res.updated, res.updatedNote = upd.epoch, upd.note end
   else
     res.errorCode = "page_failed"
   end
@@ -207,6 +211,34 @@ function freetp.parse_article_files(html)
     end
   end
   return out
+end
+
+-- parse_page_updated(html) -> { text, note?, epoch? } of the game page's
+-- "last update" marker ('<span class="game-card__update-track">
+-- <span>3-12-2024, 18:38</span> <b>новый клиент и патч</b>'), or nil. The date
+-- is numeric (d-m-yyyy), so no Russian month table is needed. PURE.
+function freetp.parse_page_updated(html)
+  if type(html) ~= "string" then return nil end
+  local text, note = html:match('game%-card__update%-track">%s*<span>([^<]+)</span>%s*<b>([^<]*)</b>')
+  if not text then return nil end
+  local res = { text = text, note = note }
+  local d, m, y, hh, mm = text:match("(%d+)%-(%d+)%-(%d+),%s*(%d+):(%d+)")
+  if d then
+    res.epoch = os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d),
+      hour = tonumber(hh) or 12, min = tonumber(mm) or 0, sec = 0 })
+  end
+  return res
+end
+
+-- fix_revision(label) -> the fix revision a getfile label carries
+-- ("…Multiplayer Fix Online-v3" -> "3", "…Fix-Online-v1.5" -> "1.5"), or
+-- nil. It numbers the FIX, not the game build: a repack's "_v2243" or an
+-- update's "-v2220-2243" must never read as one. PURE.
+function freetp.fix_revision(label)
+  if type(label) ~= "string" then return nil end
+  local v = label:match("[Oo]nline[ _%-]v([%d%.]+)") or label:match("[Ff]ix[ _%-]v([%d%.]+)")
+  -- "…Online-v2.exe" captures "2.": trailing dots are punctuation, not version.
+  return v and (v:gsub("%.+$", "")) or nil
 end
 
 -- File signature per installable extension, checked on the downloaded body.

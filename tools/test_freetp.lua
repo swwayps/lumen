@@ -538,5 +538,35 @@ do
     res == nil and polls == math.ceil(ft.POLL_BUDGET / ft.POLL_INTERVAL) + 1)
 end
 
+-- ── parse_page_updated / fix_revision (freshness decoration) ───────────────
+local UPD_BLOCK = '<div class="game-card__update game-page__update">'
+  .. ' <span class="game-card__update-track"> <span>3-12-2024, 18:38</span>'
+  .. ' <b>новый клиент и патч</b> </span> </div>'
+local upd = ft.parse_page_updated(UPD_BLOCK)
+check("updated: marker parsed with note", upd ~= nil and upd.text == "3-12-2024, 18:38"
+  and upd.note == "новый клиент и патч")
+check("updated: epoch is the stated day",
+  upd ~= nil and os.date("%Y-%m-%d", upd.epoch) == "2024-12-03")
+check("updated: no marker -> nil", ft.parse_page_updated("<p>none</p>") == nil
+  and ft.parse_page_updated(nil) == nil)
+
+check("revision: fix label's Online-v3 -> 3",
+  ft.fix_revision("Скачать Left_4_Dead_2_Multiplayer Fix Online-v3") == "3")
+check("revision: dotted revision", ft.fix_revision("How to Fish-Multiplayer-Fix-Online-v1.5") == "1.5")
+check("revision: an extension's dot is not part of the version",
+  ft.fix_revision("Скачать CRACK Simulator Multiplayer Fix Online-v2.exe") == "2")
+check("revision: repack/update versions are not fix revisions",
+  ft.fix_revision("Скачать Left_4_Dead_2_Repack_by_Pioneer_v2243 v03.12.2024.torrent") == nil
+  and ft.fix_revision("Скачать Left_4_Dead_2_Update-v2220-2243.exe") == nil)
+check("revision: non-string -> nil", ft.fix_revision(nil) == nil)
+
+check("resolve: a page without the marker carries no updated field",
+  r.updated == nil and r.updatedNote == nil)
+local r_upd = ft.resolve("CRACK", search_then_page(CRACK_PAGE_HTML .. UPD_BLOCK))
+check("resolve: the page's update marker rides along at no extra cost",
+  r_upd.errorCode == nil and r_upd.updated ~= nil
+  and os.date("%Y-%m-%d", r_upd.updated) == "2024-12-03"
+  and r_upd.updatedNote == "новый клиент и патч")
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 if fail > 0 then os.exit(1) end

@@ -128,5 +128,24 @@ check("status: non-zero exit -> failed",
 check("status: aria2c gone without an exit code -> failed",
   of.status(7, (fake({ files = { ["/dl/7/target"] = T } }))).state == "failed")
 
+-- ── parse_torrent_listing (freshness decoration) ───────────────────────────
+local AUTOINDEX_HTML = [==[<a href="../">../</a>
+<a href="CRACK.v1.1.29-OFME.torrent">CRACK.v1.1.29-OFME.torrent</a>                         04-Nov-2026 15:04     37K
+]==]
+local tl = of.parse_torrent_listing(AUTOINDEX_HTML)
+check("listing: name + dotted version from the .torrent line",
+  tl ~= nil and tl.name == "CRACK.v1.1.29-OFME.torrent" and tl.version == "1.1.29")
+check("listing: upload stamp read as local epoch",
+  tl ~= nil and os.date("%Y-%m-%d", tl.epoch) == "2026-11-04")
+local tl2 = of.parse_torrent_listing(
+  '<a href="Lethal.Company.v81-OFME.torrent">x</a>  08-Nov-2026 02:30     12K')
+check("listing: integer version, single-line page",
+  tl2 ~= nil and tl2.version == "81" and os.date("%Y-%m-%d", tl2.epoch) == "2026-11-08")
+local tl3 = of.parse_torrent_listing('<a href="Some.Game.torrent">x</a>  bad-date')
+check("listing: no version and no stamp still returns the name",
+  tl3 ~= nil and tl3.name == "Some.Game.torrent" and tl3.version == nil and tl3.epoch == nil)
+check("listing: no .torrent -> nil", of.parse_torrent_listing("<p>empty</p>") == nil
+  and of.parse_torrent_listing(nil) == nil)
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 if fail > 0 then os.exit(1) end
