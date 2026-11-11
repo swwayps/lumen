@@ -22,6 +22,9 @@ fixinstall.MAX_ARCHIVES_LISTED = 12
 fixinstall.MAX_SETUPS_PROBED = 8
 -- Extraction is synchronous too: a multi-GB repack would stall every RPC.
 fixinstall.MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+-- online-fix.me encrypts its archives with this published password; 7-Zip
+-- ignores it for archives that are not encrypted.
+fixinstall.ARCHIVE_PASSWORD = "online-fix.me"
 
 local json = require("json")
 
@@ -514,7 +517,8 @@ local function install_archive(appid, archive_path, install_path_hint, deps)
   -- would stall the single-threaded RPC loop; with no stdin it fails at once.
   local function list_7z(b)
     return fixinstall.safe_entries(fixinstall.parse_7z_listing(read_pipe(shq(b)
-      .. " l -ba -slt -- " .. shq(archive_path) .. " </dev/null 2>/dev/null")))
+      .. " l -ba -slt -p" .. shq(fixinstall.ARCHIVE_PASSWORD) .. " -- " .. shq(archive_path)
+      .. " </dev/null 2>/dev/null")))
   end
   local entries
   if is_inno then
@@ -579,10 +583,15 @@ local function install_archive(appid, archive_path, install_path_hint, deps)
     end
   end
 
+  local lumen = home .. "/.local/share/Lumen/"
+  local source = archive_path:find(lumen .. "freetp_dl/", 1, true) == 1 and "freetp"
+    or archive_path:find(lumen .. "onlinefix_dl/", 1, true) == 1 and "onlinefix"
+    or "archive"
   -- Recorded BEFORE extraction: a half-finished extract stays revertible.
   if not write_manifest(root, json.encode({
     installedAt = os.time(),
     archive = archive_path:match("([^/]+)$") or archive_path,
+    source = source,
     installPath = install_dir,
     added = added,
     replaced = replaced,
@@ -606,8 +615,8 @@ local function install_archive(appid, archive_path, install_path_hint, deps)
       os.execute("mv -f -- " .. shq(stage .. "/app/" .. e.path) .. " " .. shq(dst))
     end
     os.execute("rm -rf -- " .. shq(stage))
-  elseif execute(shq(bin) .. " x -y -o" .. shq(install_dir) .. " -- "
-      .. shq(archive_path) .. " </dev/null >/dev/null 2>&1") ~= true then
+  elseif execute(shq(bin) .. " x -y -p" .. shq(fixinstall.ARCHIVE_PASSWORD) .. " -o"
+      .. shq(install_dir) .. " -- " .. shq(archive_path) .. " </dev/null >/dev/null 2>&1") ~= true then
     res.errorCode = "extract_failed"
     return res
   end
@@ -628,9 +637,10 @@ end
 -- install(appid, archive_path, install_path_hint, deps)
 --   -> { success, added, replaced } or { success=false, errorCode }
 -- The install dir is always re-derived from Steam's own manifests; the
--- frontend's hint must agree with it or the call is refused. A file Lumen
--- downloaded itself (download_dir) is deleted afterwards, installed or not:
--- Un-fix works from the manifest, and a failed one is downloaded again.
+-- frontend's hint must agree with it or the call is refused. What Lumen
+-- downloaded itself (a download_dir file, an online-fix.me download folder)
+-- is deleted afterwards, installed or not: Un-fix works from the manifest,
+-- and a failed one is downloaded again.
 function fixinstall.install(appid, archive_path, install_path_hint, deps)
   deps = deps or {}
   local res = install_archive(appid, archive_path, install_path_hint, deps)
@@ -638,6 +648,11 @@ function fixinstall.install(appid, archive_path, install_path_hint, deps)
   if fixinstall.under_home(path, home)
       and path:find(fixinstall.download_dir(home) .. "/", 1, true) == 1 then
     os.execute("rm -f -- " .. shq(path))
+  end
+  local od = path:match("^(.-/onlinefix_dl/%d+)/")
+  if od and od:find(home .. "/.local/share/Lumen/onlinefix_dl/", 1, true) == 1
+      and fixinstall.under_home(od, home) then
+    os.execute("rm -rf -- " .. shq(od))
   end
   return res
 end
@@ -693,6 +708,8 @@ function fixinstall.register(registry, deps)
     local ok, det = pcall(fixinstall.detect_local, dir)
     res.found = ok and type(det) == "table" and det.found == true
     res.broken = res.found and det.broken == true
+    local m = read_manifest((deps and deps.store_root or store_root)() .. "/" .. appid)
+    res.recorded = m and m.source or nil
     return json.encode(res)
   end
   registry.LumenListFixArchives = function()
