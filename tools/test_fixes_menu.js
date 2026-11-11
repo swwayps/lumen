@@ -61,6 +61,7 @@ const luaToolsIcon = win.__lumenFixesLuaToolsIcon;
 const appliedStates = win.__lumenFixesAppliedStates;
 const fallbackReceiptKind = win.__lumenFixesFallbackReceiptKind;
 const pickFreeTP = win.__lumenFixesPickFreeTP;
+const onlineAction = win.__lumenFixesOnlineTileAction;
 const formatBytes = win.__lumenFixesFormatBytes;
 const localFixState = win.__lumenFixesLocalFixState;
 const relayOk = win.__lumenFixesRelayOk;
@@ -256,6 +257,17 @@ if (typeof pickFreeTP !== "function") {
   }), null);
   eq("freetp: catalogue unavailable -> null", pickFreeTP({}), null);
   eq("freetp: nullish payload -> null", pickFreeTP(null), null);
+}
+
+// ── Online Fix tile click action ─────────────────────────────────────────────
+if (typeof onlineAction !== "function") {
+  console.error("FAIL Online Fix tile action helper is not exposed");
+  failures++;
+} else {
+  eq("online: not installed explains the requirement", onlineAction(false, false), "explain");
+  eq("online: applied receipt short-circuits to launch options", onlineAction(true, true), "launch");
+  eq("online: fresh install resolves from the mirror", onlineAction(true, false), "resolve");
+  eq("online: nullish input explains", onlineAction(null, null), "explain");
 }
 
 // ── archive picker row formatting ───────────────────────────────────────────
